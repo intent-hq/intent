@@ -2500,14 +2500,20 @@ stateDiagram-v2
   `<root>/<workspaceId>` folder (the checkout, its submodules, nested clones and linked
   worktrees such as `.dev/*`, bare repositories; symlinks are not followed, and
   `node_modules` and `CACHEDIR.TAG` cache directories are skipped) and refuses on:
-  uncommitted or untracked changes; a commit reachable from `HEAD` or any local branch
-  that no remote-tracking ref reaches; a stash; a linked worktree outside the folder; or
-  a repository it cannot evaluate. A changed submodule entry is not itself a change: the
+  uncommitted or untracked changes (ignored files do not count and are deleted); a commit
+  reachable from `HEAD` or any local ref — branches, tags, a remote agent's
+  `refs/intent/...` work refs — that no remote-tracking ref reaches, including in a
+  deinitialized submodule's repository under `.git/modules`; a stash; a linked worktree
+  outside the folder; or a repository it cannot evaluate. It also refuses while the
+  workspace has a remote agent, whose machine pushes work refs into this folder. A changed submodule entry is not itself a change: the
   submodule's own checkout is scanned, and a staged gitlink must name a commit the
   submodule's remotes reach. A merged PR the daemon already knows covering a repository's
   `HEAD` (the automatic archive's **Merged PRs** evidence) lifts the commits `HEAD`
-  reaches, never commits only another branch reaches. A refused manual retire is
-  `-32602 { code: "invalid-params" }` and nothing changes.
+  reaches, never commits only another ref reaches. The check runs again under the
+  archive fence once the workspace's scripts are stopped and its terminals are killed,
+  right before the folder goes. A refused manual retire is
+  `-32602 { code: "invalid-params" }` and the folder is kept; a workspace that was
+  `Active` stays `Archived` when work appeared after the archive teardown.
 - Retire is refused with `-32602 { code: "retire-unsupported", checkoutMode? }`, and
   nothing changes, when the folder is not one the daemon owns: `skipIsolation` workspaces
   (the folder is the user's repository), plain-folder workspaces (the folder is the
@@ -2595,7 +2601,8 @@ old folder is restored.
 - A standalone `cow` / `direct` workspace's repository went with its folder, so the new
   folder is a plain clone of the daemon's repository cache for `repositoryOwner` /
   `repositoryName` (`<root>/.repo-cache/<owner>/<name>`), with `origin` set to the cache's
-  upstream; the new branch name is unique against the cache's branches. Without that cache
+  upstream. The new branch is never the old name, which the remote still holds: it is
+  `<previous>-2` (or the next free suffix in the cache). Without that cache
   the revive is refused with `-32602 { code: "invalid-params" }` and the workspace stays
   `Retired`.
 - Delta: `changes: { archived: false, status: "Active", archivedAt: null, retiredAt: null,
