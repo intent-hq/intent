@@ -2782,7 +2782,10 @@ interface HiddenSkill {
    1. `harness-predates-breakdown`: the session's `harnessVersion` is older than 3.10 (versions compare numerically per part, so 3.9 is older).
       The daemon never computes a breakdown for these sessions, even after a respawn.
    2. `not-recorded`: a 3.10 or later session with no stored breakdown, for example a
-      spawn that failed before the prompt was assembled.
+      spawn that failed before the prompt was assembled. Any rewrite of the stored
+      `systemPrompt` that does not compute a breakdown (for example a respawn by a
+      daemon older than this field) clears the stored breakdown, so a stale one is
+      never served.
 2. **Recorded with the prompt.** The daemon stores the breakdown when it stores the
    session's system prompt, and replaces it each time it rewrites that prompt (a
    respawn or model switch). It always describes the stored `systemPrompt` and the
@@ -2792,7 +2795,8 @@ interface HiddenSkill {
    JavaScript string length). The `toolDescription` sections add up to
    `toolDescriptionChars`. `provider` sections are not part of either sum: they name
    content that the provider loads itself, such as "Repo rules: loaded natively by
-   claude-code", with the file's size in `chars`.
+   claude-code", with the file's size in `chars`. They carry an `owner` and may
+   carry a `controlHint` like any other section.
 4. **Owner.** `intent` marks text Intent writes (doctrine, the ws.* reference, the
    remote machine list). `user` marks text that comes from the user's own files or
    settings (repo rules, skills, the specialist prompt).

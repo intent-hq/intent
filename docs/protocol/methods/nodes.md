@@ -405,10 +405,22 @@ reports.
 *(Experimental, additive, docs lead implementation.)*
 `client.hello.server.capabilities.remoteMachineModels: 1` means the backend
 implements `remoteMachines.models`. The backend advertises it only together
-with `remoteMachines: 1`. It is owner-only, with the same classification as the
-other backend methods. Agents reach it through the MCP binding
-`ws.agent.machineModels(nodeId?, { provider?, model? })`, which maps its
-arguments one to one onto the params.
+with `remoteMachines: 1`. On the wire it is owner-only, with the same
+classification as the other backend methods. Agents reach it through the MCP
+binding `ws.agent.machineModels(nodeId?, { provider?, model? })`, which maps its
+arguments one to one onto the params:
+
+- **Authority.** The binding calls the backend's service in process, not over a
+  wire connection, so it does not apply the owner check. Every agent the backend
+  runs may call it, whoever drives the workspace. This is the same audience that
+  already sees the exposed machines in the tool descriptions, and the result
+  carries no more than that list plus full model lists.
+- **Availability.** A backend that does not advertise `remoteMachineModels: 1`
+  has no binding: `ws.agent.machineModels` is absent from the help text and the
+  capability map, and a call fails as any unknown `ws.*` method does.
+- **Param name.** `nodeId` matches `placement.nodeId`, the name agents already
+  pass when they place a remote agent. It is the same value as `RemoteMachine.id`
+  and the `machineId` param of `remoteMachines.refresh` and `remove`.
 
 | Method | Params | Result |
 | --- | --- | --- |

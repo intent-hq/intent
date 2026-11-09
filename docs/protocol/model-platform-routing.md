@@ -434,9 +434,14 @@ added or removed and agents with the same settings share a cacheable prompt. The
 tell the agent to confirm the machine, provider and model with
 `ws.agent.machineModels(nodeId?, { provider?, model? })`, backed by
 [`remoteMachines.models`](./methods/nodes.md#machine-model-lookup), before it
-places a remote agent. The full placement how-to moves to `ws.help("agent")`,
-with a one-line pointer left in the prompt. `model-unavailable` still lists each
-machine's models. Sessions on older harness versions keep the text above.
+places a remote agent. The identity list keeps the cap of 8 machines, in name
+order; machines that do not fit are summarized as a count with a pointer to
+`ws.agent.machineModels`. The full placement how-to moves to `ws.help("agent")`,
+with a one-line pointer left in the prompt. In these sessions `ws.help("agent")`
+shows the same identity-only list and the how-to, but no state, sign-in status or
+models: live facts come only from `ws.agent.machineModels`. `model-unavailable`
+still lists each machine's models. Sessions on older harness versions keep the
+text above, including its `ws.help("agent")` content.
 
 ## Verification boundary
 
