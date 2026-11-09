@@ -254,7 +254,8 @@ The toolchain carries `llvm-tools-preview`, and `~/.cargo/bin` holds pinned
 `cargo-nextest`, `cargo-llvm-cov` and `cargo-shear` (`CARGO_*_VERSION` and
 `_SHA256` `ARG`s, the builds `taiki-e/install-action` picks). That action
 downloads on every run even when a tool is present, so intentd's `check` and
-coverage jobs install through its `.github/actions/cargo-tools`, which calls it
+coverage jobs install through its cargo-tools composite action
+([intentd#3191](https://github.com/intent-hq/intentd/pull/3191)), which calls it
 only for tools the runner lacks: these slots use the baked versions, burst
 runners the latest. Bump a pin by taking the asset `digest` from
 `gh api repos/<repo>/releases/tags/<tag>`.
