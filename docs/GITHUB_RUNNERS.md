@@ -20,7 +20,7 @@ input uses it to test one host.
 
 | Pool | Label | Serves jobs asking for | Bursts to | Per slot |
 |---|---|---|---|---|
-| heavy | `intent-cache` | `gh-linux-8x` | `warp-ubuntu-2404-x64-8x` | 8 CPUs = 4 whole cores; 36 GB on intent-cache, 30 GB on intent-ci1 to intent-ci5, 32 GB in the three-heavy EPYC layout, 12 GB in the 64 GB layout |
+| heavy | `intent-cache` | `gh-linux-8x` | `warp-ubuntu-2404-x64-8x` | 8 CPUs = 4 whole cores; 36 GB on intent-cache, 30 GB on every intent-ci host, 32 GB in the three-heavy EPYC layout, 12 GB in the 64 GB layout |
 | bigmem | `intent-cache` + `intent-cache-bigmem` | `gh-linux-16x` when no xl slot is free | `warp-ubuntu-2404-x64-16x` | heavy slots with 30 GB or more |
 | xl | `intent-cache-xl` | `gh-linux-16x` | `warp-ubuntu-2404-x64-16x` | 16 CPUs = 8 whole cores (one CCD), 52 GB |
 | small | `intent-cache-small` | nothing routed (free `ubuntu-*` jobs run on GitHub) | — | no slots on any host |
@@ -31,8 +31,8 @@ wins contention by cgroup weight rather than a reserved core (see Pinned CPUs
 and limits). There is no small pool: the repositories are public, so jobs that
 fit in 1 CPU run free on GitHub's standard `ubuntu-24.04` runners and
 self-hosting them saved nothing; `runner-route` never routes them to a slot.
-On intent-ci1 to intent-ci5 (same layout; `test_runners.py` keeps the files
-identical but the name) the xl slot owns cores 0-7
+On every intent-ci host (same layout; `test_runners.py` keeps each
+`hosts/intent-ci*.env` identical to intent-ci1 but the name) the xl slot owns cores 0-7
 (CPUs 0-7,16-23, 52 GB) and the two heavy slots split CCD 1: cores 8-11
 (8-11,24-27) and 12-15 (12-15,28-31), 30 GB each. Every core is pinned; about
 13 GB stays with the system and Docker. Two other EPYC layouts are kept as
@@ -407,8 +407,10 @@ runner-only host, leaving a core or two unpinned is optional.
    runs only there) and smaller ones not; `--plan` refuses a smaller slot
    with it. Check it with
    `RUNNERS_CONFIG=<file> infra/runners/supervisor.sh --plan`; the installer
-   checks the CPUs and memory on the host itself (step 5). Add a test case
-   in `test_runners.py` if it is a new layout, and land it with a row in the
+   checks the CPUs and memory on the host itself (step 5). A copy of
+   intent-ci1 named `hosts/intent-ci<N>.env` needs no test edits:
+   `test_runners.py` finds it and checks it as a twin. Add a test case there
+   for a new layout (under another file name), and land it with a row in the
    fleet table above.
 4. **Place the credential** at `/etc/github-runners/credentials` (see
    Credential). Each host may use the same App or token; slots on every host
@@ -443,8 +445,11 @@ runner-only host, leaving a core or two unpinned is optional.
    every host's slots (add `-f xl=true` to include the xl pool).
 7. **Route jobs to it** by raising `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS`
    / `CI_LINUX_BIGMEM_SLOTS` to the fleet's total slots per pool (see the
-   variables above), in every repository that defines them (see Retire a
-   runner host, step 1).
+   variables above). `infra/runners/fleet_slots.py` prints the totals from the
+   committed configs (bigmem counts the heavy slots labeled
+   `intent-cache-bigmem`); with `--apply` it also sets the three variables in
+   every repository of `RUNNER_GROUP_REPOS` (intent, intentd, cloudlands-fe)
+   with `gh`. Run it from `main` once the host's config has landed.
 
 ## Retire a runner host
 
@@ -454,9 +459,10 @@ under the same name):
 1. **Stop routing to it.** Lower `CI_LINUX_HEAVY_SLOTS`, `CI_LINUX_XL_SLOTS`
    and `CI_LINUX_BIGMEM_SLOTS` by the host's slots in each pool (a bigmem slot
    counts in both the heavy and the bigmem variable), so the other hosts are
-   not overcommitted. A repository variable overrides the organization one,
-   so set it wherever it is defined (`gh variable list --repo intent-hq/<repo>`
-   for `intent`, `intentd` and `cloudlands-fe`):
+   not overcommitted: `infra/runners/fleet_slots.py --without <host> --apply`
+   sets all three in `intent`, `intentd` and `cloudlands-fe`. A repository
+   variable overrides the organization one, so set it wherever it is defined
+   (`gh variable list --repo intent-hq/<repo>`); by hand:
    `gh variable set CI_LINUX_HEAVY_SLOTS --repo intent-hq/<repo> --body <n>`.
    For the organization default add `--org intent-hq --visibility all`:
    `gh` otherwise makes it private, hiding it from these public repositories.
@@ -476,7 +482,8 @@ under the same name):
    provider reclaims it, rotate the credential as well (see Credential).
 3. **Only then remove its config.** Merge the PR that deletes
    `infra/runners/hosts/<host>.env`, its row in the fleet table, any mention
-   in the pool table and its cases in `test_runners.py` only after
+   in the pool table and its cases in `test_runners.py` (none for an
+   intent-ci twin) only after
    `--retire` prints `drained`. Until then the box still takes jobs, and the
    PR's own checks can land on it and fail against its old layout (PR #8293:
    "Isolation and paths" failed on `intent-ci3-heavy-1` until the drain).
