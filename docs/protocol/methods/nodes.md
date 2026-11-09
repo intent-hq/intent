@@ -269,17 +269,10 @@ Landing sequence within phase 1:
    `workspace.cowIsolation` keeps only its workspace checkout role, and an
    omitted `isolation` never resolves to `"cow"`. A backend sub-agent of a
    remote agent always takes the shared worktree path of
-   [backend sub-agents](#backend-sub-agents-of-remote-agents). Old live sandboxes
-   are not resumed or migrated; their files, branches and store rows are not
-   deleted or reused. Recovery notice:
-   - **Source.** A retained sandbox is a persisted sandbox row whose status is not
-     `merged` or `discarded` and whose path still exists.
-   - **Log.** On every boot the daemon logs one warning per retained sandbox,
-     naming the agent id, path and branch.
-   - **Instructions.** Every turn of a live owning agent carries a short notice
-     naming the retained path and branch and saying that the agent now works in
-     the workspace checkout, until that path no longer exists. A deleted or
-     retired owner gets the log warning only.
+   [backend sub-agents](#backend-sub-agents-of-remote-agents). No live per-agent
+   sandboxes exist to carry over, so there is no resume, migration or recovery
+   notice: the removal drops the sandbox store rows and session sandbox fields,
+   and never touches files on disk.
 3. After component removal and automated pin advancement, remove obsolete
    canonical method/event entries. Existing `sandbox:cow:*` entries stay until then.
 4. Implement backend nodes/hubs and the local node, prove local/remote merge and

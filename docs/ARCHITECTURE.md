@@ -220,8 +220,9 @@ local parity and the replacement frontend follow independently; until the local
 node ships, agents that are not placed remotely share the workspace checkout.
 Each merge requires human authorization. Keep workspace
 `checkoutMode: cow`, reflink primitives and repo-cache coverage throughout. Remove
-per-agent isolation selection and merge/discard routes without aliases or live
-sandbox migration; old sandbox files remain untouched for explicit recovery.
+per-agent isolation selection and merge/discard routes without aliases. No live
+sandboxes exist, so the removal drops the sandbox store rows and session sandbox
+fields without a recovery path and never touches files on disk.
 
 ## Workspace checkouts & agent sandboxes (CoW)
 
