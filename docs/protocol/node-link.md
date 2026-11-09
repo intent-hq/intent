@@ -3371,12 +3371,17 @@ Both frame bodies and `FilePullPiece` are closed: unknown or mistyped members ar
    bytes or 100000 entries, and the machine replies `file-pull-too-large`
    without keeping it. With 4 live snapshots for that agent it replies
    `file-pull-busy`. The reply's `piece` carries the new `transferId`, `kind`,
-   `size` and `sha256`.
+   `size` and `sha256`. `transferId` is absent exactly when `offset` is 0; any
+   other combination replies `file-pull-mismatch`. The file is opened without
+   following a final symlink and its real path is checked again, as the binding
+   describes.
 4. **Later pieces.** Every later piece names the `transferId` and the same
    `path`, and reads the same snapshot. The machine keys a snapshot by
    `(agentId, path, transferId)`; any other combination replies
    `file-pull-transfer-expired`. It removes the snapshot after its last piece,
-   when the agent's checkout is removed, or after 10 minutes without a piece.
+   when the agent's checkout is removed, or after 2 minutes without a piece, so
+   a failed or abandoned pull frees its slot soon after the 60-second piece
+   timeout.
 5. **Caller binding.** The backend passes the machine's `transferId` through to
    the caller unchanged and records which caller opened it; it forwards a later
    piece only from that caller, for the same source and `path`, and answers
@@ -3410,7 +3415,7 @@ Reply error codes (each `error` starts with one):
 | `file-pull-not-found` | Nothing at the path, or neither a regular file nor a directory |
 | `file-pull-too-large` | The snapshot passed 209715200 bytes or 100000 entries |
 | `file-pull-busy` | The agent already has 4 live snapshots |
-| `file-pull-mismatch` | The offset is at or past the end of a non-empty snapshot |
+| `file-pull-mismatch` | The offset is at or past the end of a non-empty snapshot, or `transferId` is present at offset 0 or absent after it |
 | `file-pull-transfer-expired` | No live snapshot for that `agentId`, `path` and `transferId` |
 
 ### Saved scripts (nodeProtocol 8)

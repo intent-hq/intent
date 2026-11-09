@@ -276,9 +276,10 @@ services directly and are unchanged.
 > with `-32602` `attachment-exceeds-cap: <size> bytes; limit 209715200` (exactly
 > 209715200 bytes still copies) and leaves no destination directory and no part
 > file behind. An attachment whose file was deleted from the store fails with the
-> existing "continue without this file" error, which comes before the cap check. Uploads still accept up to
-> 1 GiB (`file.attachmentUpload.begin`), so an agent cannot copy an attachment
-> between the two limits; the user can still open it in the app.
+> existing "continue without this file" error, which comes before the cap check.
+> Uploads still accept up to 1 GiB (`file.attachmentUpload.begin`), so an agent
+> cannot copy an attachment between the two limits; the user can still open it in
+> the app.
 
 > **`file.attachmentUpload.*` — staged chunked attachment upload (v6.16;
 > [monorepo#2262](https://github.com/intent-hq/monorepo/issues/2262)).** The
@@ -896,7 +897,9 @@ before anything is read or written:
 2. a path that resolves outside its checkout;
 3. a path with a component named `.git` at any depth, compared ASCII
    case-insensitively (macOS volumes are case-insensitive), so no pull reads git
-   config or writes a git hook.
+   config or writes a git hook;
+4. a destination whose first component is `.intent` (same comparison), so no
+   pull replaces the ignore-all marker or writes into part files and attachments.
 
 A symlink whose target stays inside the checkout, and not in `.git`, is allowed.
 A missing source, or one that is neither a regular file nor a directory, fails
@@ -907,7 +910,10 @@ itself, fails with `file-pull-destination-conflict`.
 checkout and names it with a `transferId`, so later pieces read fixed bytes even
 if the checkout changes (a growing log copies as it was at the start):
 
-- **File.** A copy of the file, opened once after the confinement check.
+- **File.** A copy of the file. It is opened without following a final symlink
+  (a symlink is resolved and its target opened the same way), and the opened
+  file's real path is checked against the checkout again, so a swap between the
+  check and the open cannot read outside it.
 - **Folder.** One pax-format tar archive. It holds only regular files (type `0`),
   directories (type `5`) and pax extended headers (type `x`, setting only `path`
   and `size`), with entry paths relative to `path`. Modes are `0644`, or `0755`
@@ -920,14 +926,18 @@ Packing stops as soon as the archive passes 209715200 bytes (200 MiB) or 100000
 entries, and the pull fails with `file-pull-too-large`. A source keeps at most 4
 live snapshots per source agent; a fifth pull fails with `file-pull-busy`. A
 snapshot is removed after its last piece is served, when the source's checkout is
-removed, or after 10 minutes without a piece; a later piece then fails with
-`file-pull-transfer-expired`.
+removed, or after 2 minutes without a piece (well above the 60-second piece
+timeout, so a failed or abandoned pull frees its slot quickly); a later piece then
+fails with `file-pull-transfer-expired`. When a pull fails on the backend, the
+backend drops any snapshot it made itself for a local source at once.
 
 **Transfer.** The caller's side drives a loop of ranged reads, as
 `ws.file.getAttachment` does with `file.attachmentData`: pieces of at most 4 MiB
 (4194304 bytes) by `offset`/`length`, each starting where the copy so far ends.
 Every piece carries `kind`, the snapshot's `size` and its `transferId`; the piece
-at offset 0 also carries the lowercase-hex `sha256` of the whole snapshot. A
+at offset 0 also carries the lowercase-hex `sha256` of the whole snapshot.
+`transferId` is absent from a request exactly when `offset` is 0; any other
+combination fails with `file-pull-mismatch`. A
 `transferId` answers only the caller that opened it, for the same source agent
 and `path`; any other request naming it fails with `file-pull-transfer-expired`.
 An `offset` at or past `size` (other than 0 for an empty snapshot) fails with
@@ -938,7 +948,8 @@ An `offset` at or past `size` (other than 0 for an empty snapshot) fails with
 its checkout's git-ignored `.intent/pulls/`, so it never reaches a commit and two
 pulls never collide. At the end it checks the size and `sha256`, then renames a
 file into place, or unpacks an archive (rejecting any entry type, name or mode the
-snapshot rules above do not allow, with `file-pull-mismatch`) into a folder there
+snapshot rules above do not allow, with `file-pull-mismatch`, and stopping with
+`file-pull-too-large` past 100000 entries) into a folder there
 and moves it into place. Every written entry is confined again: its resolved
 parent must be inside `to` and the checkout, and an existing parent that is a
 symlink fails with `file-pull-outside-checkout`. An existing symlink at an entry's
@@ -979,11 +990,11 @@ agents can branch on it:
 | Code | Meaning |
 | --- | --- |
 | `file-pull-unknown-agent` | No agent with that id in the caller's workspace |
-| `file-pull-outside-checkout` | A source or destination path escapes its checkout or names `.git` |
+| `file-pull-outside-checkout` | A source or destination path escapes its checkout or names `.git`, or the destination is in `.intent/` |
 | `file-pull-not-found` | Nothing at the source path, or neither a regular file nor a directory |
 | `file-pull-too-large` | Over 209715200 bytes or 100000 entries; the message names the size and the limit |
 | `file-pull-busy` | The source agent already has 4 live snapshots; retry later |
-| `file-pull-mismatch` | The copy's size or `sha256` differs, a piece did not start where the copy ended, an offset was past the end, or an archive entry was not allowed |
+| `file-pull-mismatch` | The copy's size or `sha256` differs, a piece did not start where the copy ended, an offset was past the end, `transferId` did not match `offset`, or an archive entry was not allowed |
 | `file-pull-destination-conflict` | A file onto a folder, a folder onto a file, or a path onto itself |
 | `file-pull-transfer-expired` | No live snapshot with that `transferId` for this caller, source and path; retry the pull |
 | `file-pull-source-unavailable` | The source's checkout is gone, or its machine is offline, did not resume, or did not answer within 60 s; retry later |

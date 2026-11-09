@@ -519,8 +519,9 @@ interface PullDataArgs {
 // the same shape as checkoutReadReply.piece
 ```
 
-A `length` outside 1 to 4194304, an `offset` that is not a non-negative integer,
-or a later piece without `transferId`, fails with `-32602`. The backend answers a
+A `length` outside 1 to 4194304, or an `offset` that is not a non-negative
+integer, fails with `-32602`; a `transferId` present at offset 0 or absent after
+it fails with `file-pull-mismatch`. The backend answers a
 `transferId` only for the agent that opened it, with the same `fromAgentId` and
 `path` ([caller binding](./node-link.md#checkout-files-nodeprotocol-16)). The
 machine refuses a first piece whose `size` is over 209715200 bytes with
