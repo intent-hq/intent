@@ -2200,8 +2200,13 @@ agents that share the checkout are stopped first, see
    agent has no checkout, or it is not running and the machine no longer knows
    its workspace (after a machine restart). An agent that was not running
    already pushed when it exited.
-4. Remove the agent's checkout under
-   `<data_dir>/executor/<credentialId>/agents/<agentId>/`.
+4. Remove the agent's checkout and its record. A new agent's checkout lives
+   in a short work dir without spaces,
+   `~/.intentd/w/<8 hex of the credential>/<12 hex of the agent>/work`
+   (`INTENTD_EXECUTOR_WORK_DIR` replaces `~/.intentd/w`; the whole agent id
+   names it when the short name is taken), named by the record
+   `<data_dir>/executor/<credentialId>/agents/<agentId>/home`. An agent
+   recorded before the work dir keeps its checkout in that record directory.
 5. Send `stopAck` with `outcome` (`stopped` or `not-running`, as for a plain
    stop) and `finalPush`.
 
@@ -2296,7 +2301,8 @@ carries no `leaseAgents`, and the machine sweeps nothing.
 
 **Inactive credentials.** A revoked credential never binds again, so the
 machine cleans up after it itself. It removes the
-`<data_dir>/executor/<credentialId>/` directory (journal and checkouts) of
+`<data_dir>/executor/<credentialId>/` directory (journal and agent records),
+and the work-dir checkouts its records name, of
 every credential that is no longer active on the machine (revoked or unknown):
 at `executor.revoke`, once the binding's agents are stopped; at each bind; and
 at startup. It never touches the directories of another active credential,
