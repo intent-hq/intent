@@ -192,6 +192,12 @@ its machine, listed in `machineRuns` on their rows ([§5.8](./scripts.md#scripts
 It is advertised only together with `remoteMachines: 1`. Clients show remote-script
 affordances only when it is exactly `1`; it grants no caller authority.
 
+**Remote machine models (additive, experimental).** Exact integer
+`server.capabilities.remoteMachineModels: 1` means the backend implements
+[`remoteMachines.models`](./nodes.md#machine-model-lookup). It is advertised only
+together with `remoteMachines: 1`. Clients and the agent binding
+call it only when it is exactly `1`; it grants no caller authority.
+
 **Workspace discussions (additive extension).**
 Exactly integer `server.capabilities.discussionConversations: 1` advertises the
 [§5.55 contract](./multiplayer.md#555-workspace-discussions): conversation and

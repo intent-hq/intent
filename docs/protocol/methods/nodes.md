@@ -400,6 +400,56 @@ row stays until removed.
 connections only and emitted on add, remove, state changes and new capability
 reports.
 
+##### Machine model lookup
+
+*(Experimental, additive, docs lead implementation.)*
+`client.hello.server.capabilities.remoteMachineModels: 1` means the backend
+implements `remoteMachines.models`. The backend advertises it only together
+with `remoteMachines: 1`. It is owner-only, with the same classification as the
+other backend methods. Agents reach it through the MCP binding
+`ws.agent.machineModels(nodeId?, { provider?, model? })`, which maps its
+arguments one to one onto the params.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| remoteMachines.models | nodeId?, provider?, model? (each a non-empty string, exact match) | `{ machines: MachineModels[] }`; reads the cached reports only (no connect, no refresh); an unknown `nodeId` fails `-32602` `machine-unknown` |
+
+```ts
+interface MachineModels {
+  nodeId: string;                   // RemoteMachine.id
+  name: string;
+  platform?: { os: "linux" | "macos"; arch: "x86_64" | "aarch64" };
+  state: "connected" | "disconnected" | "unreachable" | "revoked" | "update-required";
+  lastConnectedAt?: string;
+  observedAt?: string;              // when the report below was taken; absent before the first report
+  runningAgents: number;
+  providers: {
+    id: string;
+    status: "signed-in" | "signed-out" | "unknown" | "auth-failed" | "cli-missing" | "prerequisite-missing";
+    models: string[];               // the full list from the report, never capped
+    modelsStale: boolean;
+  }[];
+  disabledProviders?: string[];
+}
+```
+
+1. **Rows.** One row per machine in `remoteMachines.list`, in name order.
+   [Cloud machines](#cloud-machines-e2b) are left out, as they are from
+   `remoteMachines.list`. A machine with no report yet has `providers: []`.
+2. **Filters.** `nodeId` keeps that machine only. `provider` keeps that
+   provider's entry only and drops machines that do not report it. `model` keeps
+   the providers whose `models` contain it and drops machines with none; a kept
+   entry still carries its full `models` list. Filters combine with AND.
+3. **Provider fields** are the report's `providers` entries
+   ([capabilities report](../node-link.md#capabilities-report)) without
+   `visible`. Like that report, they list only providers enabled on the machine;
+   `disabledProviders` names the others.
+4. **Never exposed:** routes (`hosts`, `port`, `tcAddress`), fingerprints,
+   credentials, `nodeProtocol`, `capacity` and other backends.
+5. **Staleness.** A report can be up to 1 hour old before placement refreshes it.
+   Callers that need the live state call `remoteMachines.refresh` first; admission
+   rechecks everything at launch whatever this method returned.
+
 ##### Expose flow
 
 1. On an owner machine that is connected and is not the current backend, the

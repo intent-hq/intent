@@ -26,6 +26,20 @@ A store migration drops the sandbox rows; no files on disk are touched. The docu
 surface is **499 / 441 / 58** (dispatchable / router / fast path), two router methods
 fewer than the catalog before this removal.
 
+Also within 16.0 (additive field, method and capability; presence-detected or
+capability-gated, so no version bump): **prompt breakdown and machine model lookup**.
+`agent.getSession` adds `promptBreakdown`
+([prompt breakdown](./methods/agents.md#prompt-breakdown)): the sections of the
+session's stored system prompt and tool description, with owner, size, estimated
+tokens, control hints and hidden skills, or `{ available: false, reason }` for
+sessions before harness 3.10. It is a getSession-only field on the Rust
+`AgentSession`, not on `AgentLite` rows. The experimental
+[machine model lookup](./methods/nodes.md#machine-model-lookup) adds the owner-only
+router method `remoteMachines.models`, gated by `remoteMachineModels: 1` (advertised
+only with `remoteMachines: 1`), taking the documented surface to **500 / 442 / 58**
+(dispatchable / router / fast path). Harness 3.10 prompts list exposed machines by
+stable identity only ([exposed machines](./model-platform-routing.md#exposed-machines)).
+
 **Version 15.5 — Agent Plugins (additive methods).** [§5.57](./methods/plugins.md)
 adds five administrator-only router methods, `plugin.list`, `plugin.install`,
 `plugin.update`, `plugin.uninstall` and `plugin.toggle`, for app-wide

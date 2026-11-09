@@ -426,6 +426,18 @@ budget; anything cut is summarized with a count and a pointer to
 at each help request and tool-list refresh, includes `observedAt`, and never
 exposes routes, fingerprints, credentials or other backends.
 
+**Harness 3.10 and later (experimental).** For sessions stamped with harness 3.10
+or later, the system prompt and tool descriptions list each exposed machine by
+stable identity only: name, `nodeId` and platform. They carry no state, last-seen
+time, sign-in status or model list, so the text changes only when a machine is
+added or removed and agents with the same settings share a cacheable prompt. They
+tell the agent to confirm the machine, provider and model with
+`ws.agent.machineModels(nodeId?, { provider?, model? })`, backed by
+[`remoteMachines.models`](./methods/nodes.md#machine-model-lookup), before it
+places a remote agent. The full placement how-to moves to `ws.help("agent")`,
+with a one-line pointer left in the prompt. `model-unavailable` still lists each
+machine's models. Sessions on older harness versions keep the text above.
+
 ## Verification boundary
 
 [Prepared cases](./fixtures/nodes/platform-routing.json) and

@@ -48,6 +48,10 @@ const PREPARED_SECRET_BINDINGS = [
   '  ws.secret.forget(name) → { ok, forgotten }',
 ].join('\n');
 
+// Prepared experimental machine model lookup (docs lead the intentd change).
+const PREPARED_MACHINE_MODELS_BINDING =
+  '  ws.agent.machineModels(nodeId?, { provider?, model? }?) → { machines }';
+
 // Docs-first contract: only this canonical proposal may mention these helpers
 // before they ship. Once help declares one, its real signature takes precedence.
 export const PREPARED_BINDINGS = new Map([
@@ -70,6 +74,8 @@ export const PREPARED_BINDINGS = new Map([
   ['docs/protocol/methods/secrets.md', PREPARED_SECRET_BINDINGS],
   ['docs/protocol/methods/settings.md', PREPARED_SECRET_BINDINGS],
   ['docs/protocol/07-agent-streaming.md', PREPARED_SECRET_BINDINGS],
+  ['docs/protocol/methods/nodes.md', PREPARED_MACHINE_MODELS_BINDING],
+  ['docs/protocol/model-platform-routing.md', PREPARED_MACHINE_MODELS_BINDING],
   ['docs/protocol/methods/scripts.md', [
     '  ws.script.listPage({ archive?, limit?, cursor? }?) → { view, scripts, nextCursor? }',
     '  ws.script.get(scriptId) → script',

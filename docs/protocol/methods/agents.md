@@ -2729,6 +2729,87 @@ at least one message is served while any exists. Three fields describe the cut:
 Heavy block bodies follow the slim projection's previews and flags; read a whole block with
 `agent.getMessageBlock`. Daemon-internal callers keep the full log.
 
+#### Prompt breakdown
+
+*(Additive, docs lead implementation; harness 3.10 and later.)* `agent.getSession` adds a
+top-level `promptBreakdown` field: what Intent put into the agent's context, by section.
+It is served on `agent.getSession` only. `agent.get`, `agent.list` rows and the agent
+collection channel never carry it. Clients older than this field ignore it.
+
+```ts
+type PromptBreakdown = PromptBreakdownUnavailable | PromptBreakdownAvailable;
+
+interface PromptBreakdownUnavailable {
+  available: false;
+  reason: "harness-predates-breakdown" | "not-recorded";
+}
+
+interface PromptBreakdownAvailable {
+  available: true;
+  harnessVersion: string;          // equals the session's harnessVersion
+  recordedAt: string;              // UTC RFC 3339
+  systemPromptChars: number;
+  toolDescriptionChars: number;    // the workspace_api tool description sent to this session
+  totalChars: number;              // systemPromptChars + toolDescriptionChars
+  estTokens: number;               // ceil(totalChars / 4)
+  sections: PromptSection[];
+  hiddenSkills: HiddenSkill[];
+}
+
+interface PromptSection {
+  id: string;                      // stable slug, e.g. "repo-rules", "ws-reference", "skills"
+  label: string;                   // display text
+  owner: "intent" | "user";
+  location: "systemPrompt" | "toolDescription" | "provider";
+  chars: number;
+  estTokens: number;               // ceil(chars / 4)
+  controlHint?: {
+    kind: "edit-repo-rules" | "change-specialist" | "agent-features" | "mcp-settings";
+    text: string;                  // e.g. "Edit AGENTS.md"
+  };
+}
+
+interface HiddenSkill {
+  name: string;
+  reason: "compatibility" | "mcp-server-missing" | "mcp-server-disabled";
+  detail: string;                  // e.g. "needs mcp__memory__"
+  fix: string;                     // e.g. "Add the memory MCP server in Intent's MCP settings"
+}
+```
+
+1. **Always present** on `agent.getSession`, so a client never has to infer "not
+   available" from an absent field:
+   1. `harness-predates-breakdown`: the session's `harnessVersion` is older than 3.10 (versions compare numerically per part, so 3.9 is older).
+      The daemon never computes a breakdown for these sessions, even after a respawn.
+   2. `not-recorded`: a 3.10 or later session with no stored breakdown, for example a
+      spawn that failed before the prompt was assembled.
+2. **Recorded with the prompt.** The daemon stores the breakdown when it stores the
+   session's system prompt, and replaces it each time it rewrites that prompt (a
+   respawn or model switch). It always describes the stored `systemPrompt` and the
+   tool description of the same spawn. `recordedAt` is that write time.
+3. **Sums.** The `chars` of the `systemPrompt` sections add up to `systemPromptChars`,
+   which equals the length of the stored `systemPrompt` in UTF-16 code units (the
+   JavaScript string length). The `toolDescription` sections add up to
+   `toolDescriptionChars`. `provider` sections are not part of either sum: they name
+   content that the provider loads itself, such as "Repo rules: loaded natively by
+   claude-code", with the file's size in `chars`.
+4. **Owner.** `intent` marks text Intent writes (doctrine, the ws.* reference, the
+   remote machine list). `user` marks text that comes from the user's own files or
+   settings (repo rules, skills, the specialist prompt).
+5. **Estimates.** `estTokens` is `ceil(chars / 4)`. It is an estimate for display, not
+   a provider token count. Use `contextUsage` for measured usage.
+6. **Control hints** appear only where a real control exists. `kind` is stable for
+   clients that link to the control; `text` is display text.
+7. **Hidden skills** lists the skills the daemon left out of this session's skills list,
+   in name order, with the reason and the fix. It is empty when none were hidden.
+   `compatibility`: the skill's `compatibility` frontmatter names none of the agent's
+   environments. `mcp-server-missing`: the skill uses tools of an MCP server that is
+   not in Intent's MCP settings. `mcp-server-disabled`: that server is in the settings
+   but disabled. A hidden skill adds no section chars.
+8. **Size.** The field is bounded by the number of prompt sections and hidden skills
+   (tens of rows). It counts toward the [bounded session read](#bounded-session-read)
+   budget like any other session field.
+
 **`agent.memoryUsage` details.**
 
 per-agent memory attribution from the same descendant-tree sweep behind `system.status`'s `childMemoryBytes` / `agentMemoryBytes` (§5.7) and `agent.diagnostics`' `subtreeMemoryBytes` (above): one row per spawned agent whose root pid was alive in the sweep, each descendant's RSS credited to its nearest registered agent root, so a client can name WHICH agent (and which process under it) holds the memory rather than only how much the tree holds.
