@@ -366,6 +366,7 @@ contract.
 Shape: `{ state, isDraft, hasConflicts, isBehind, ancestry?, branchUpdateRequired?, mergeable?, checks: { total, passed, failed, pending, skipped, items: [{ name, status, required, url? }], failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed?, changesRequested, latestReviews? }, threads: { unresolved?, resolutionRequired? }, mergeStateStatus?, mergeBlockedReason?, isInMergeQueue?, mergeQueue?, mergeQueueEjection?, checksNotStarted?, rulesKnown }`.
 `state` is the 4-value lifecycle word;
 `mergeable` is the forge's tri-state (omitted while still computing);
+the monitor's diff compares the last known `mergeable` and `mergeStateStatus` (a value other than `UNKNOWN`), because GitHub reports both unknown while it recomputes: a transition to unknown is silent, and a value that becomes known again reports `mergeable: a → b` / `merge state: A → B` only when it differs from the last known one, even after an unrelated wake was delivered during the blip (only a value never known before reports against `unknown`); while either reads unknown, the derived `hasConflicts` / `mergeBlockedReason` keep their last known verdict for the diff, so `merge conflicts resolved` / `merge is no longer blocked` never report from a recomputing read and settling back at the last known verdict is silent (the appearing direction always reports); the rendered checklist still shows the read as unknown;
 `threads.unresolved` is the unresolved review-thread count and is **presence-detected** under the same additive convention as `mergeable`: the key is **omitted** (never `null`) when the per-thread resolution state was unreadable — the GraphQL threads read failed and the REST comments fallback carries no resolution state — instead of inflating to "every thread unresolved" or defaulting to zero, while `0` is the ordinary known count when every thread is resolved;
 consumers treat absence as *unknown*, not *clear* (the monitor's ready promotion never fires on an absent count while `resolutionRequired` is `true`, the rendered checklist row reads `unresolved threads: unknown (thread resolution state unreadable)`, and the monitor's diff compares the last known count: a known→absent transition is silent, a recovery reports a `thread(s) …: n → m unresolved` delta only when the count differs from the last known one, and only a count never known before reports as the neutral `review threads readable again: n unresolved`);
 each `checks.items[]` entry reports `status ∈ { passed, failed, pending, skipped }` and its own `required` flag, with `failingRequired` / `pendingRequired` naming the required checks that are failing/still running;
@@ -457,7 +458,10 @@ it recomputes after the base moves, so a known→unknown transition is silent an
 a value that becomes known again reports only when it differs from the last known
 one. A value never known before still reports as `forge branch-update requirement
 available: …` ([intent-hq/intent#8843](https://github.com/intent-hq/intent/pull/8843) took
-two empty wakes per blip).
+two empty wakes per blip). A re-registration by the same owner keeps the last known
+values (branch-update verdict, thread count, mergeability) when its fresh read lands
+mid-blip; an adoption of an orphaned monitor does not, because the adopter was never
+told them.
 
 **Revision identity and reads.** GitHub supplies the live base tip through
 `baseRef { target { oid } }`, added to the existing folded PR observation beside
