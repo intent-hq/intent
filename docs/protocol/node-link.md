@@ -1806,7 +1806,7 @@ Revoking a credential closes its live `/node/*` connections with `1008`
 `hello.protocol` is a range instead of one number:
 
 ```ts
-interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 through 16
+interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 through 17
 ```
 
 The machine picks the highest version in both ranges and returns it as
@@ -1923,6 +1923,14 @@ read files out of an agent's checkout, so they need a new version. A daemon that
 implements it offers `{ min: 7, max: 16 }` on both sides, so protocol 7 to 15
 peers still bind. On a link below 16 the backend sends no `checkoutRead`, and a
 pull from an agent on that machine fails with `file-pull-unsupported`.
+
+**nodeProtocol 17** is protocol 16 plus [sub-agent fetch through the backend](#sub-agent-fetch-through-the-backend-nodeprotocol-17):
+`launch.forgeFetch`, the forge remote on `/node/git`, the forge ACCEPT payload
+and the `node-git-push-refused` CLOSE code. They change the destination of a
+sub-agent's git traffic; an older machine would run the sub-agent's git with no
+rewrite, so they need a new version, not an optional field. A daemon that implements it offers `{ min: 7, max: 17 }` on
+both sides, so protocol 7 to 16 peers still bind. On a link below 17 the backend
+sends no `forgeFetch` and a sub-agent starts as before.
 
 ### Frames
 
@@ -2484,7 +2492,7 @@ helper (git's `connect` helper protocol) through a local socket named in
 | Kind | Direction | Payload |
 | --- | --- | --- |
 | `1` OPEN | machine → backend | JSON `{ service, url }`: `git-upload-pack` or `git-receive-pack` for one agent remote |
-| `2` ACCEPT | backend → machine | None: the service is running |
+| `2` ACCEPT | backend → machine | None: the service is running; on protocol 17 a [forge](#sub-agent-fetch-through-the-backend-nodeprotocol-17) ACCEPT may carry JSON `{ warning? }` |
 | `3` DATA | both | Protocol bytes, at most 64 KiB |
 | `4` EOF | machine → backend | None: the client sent everything |
 | `5` CLOSE | both | The backend's carries JSON `{ error? }` |
@@ -3281,10 +3289,13 @@ interface ForgeLaunch {          // closed: unknown or mistyped members are node
    receives `forge` on a link below 15 rejects the frame (`node-link-protocol`).
 9. **Sub-agents.** A sub-agent gets no `forge` member and no credential
    helper, and its work goes back through its `head` and `wip` refs as before.
-   Its own checkout has no `origin`. A sub-agent that
+   On a link below 17 its own checkout has no `origin`. A sub-agent that
    [shares](#shared-checkout) a top-level agent's checkout (`checkoutOf`) sees
    that checkout's `origin` and upstream, and its commits move the parent's
    `intent/<agentId>` branch. It still has `GH_TOKEN`, so `gh` reads work.
+   On protocol 17 its `git fetch origin` goes through the backend and its
+   `git push` is refused
+   ([sub-agent fetch](#sub-agent-fetch-through-the-backend-nodeprotocol-17)).
    **The token is not read-only.** A sub-agent can push or write with `gh` if it
    tries; its instructions tell it to read only, but nothing enforces this.
 10. **Never written.** A value travels only in `forgeToken`. It never appears in
@@ -3418,6 +3429,185 @@ Reply error codes (each `error` starts with one):
 | `file-pull-busy` | The agent already has 4 live snapshots |
 | `file-pull-mismatch` | The offset is at or past the end of a non-empty snapshot, or `transferId` is present at offset 0 or absent after it |
 | `file-pull-transfer-expired` | No live snapshot for that `agentId`, `path` and `transferId` |
+
+### Sub-agent fetch through the backend (nodeProtocol 17)
+
+On a protocol 17 link a remote or sandbox sub-agent can `git fetch` the
+workspace's GitHub repository. Its fetch goes through the
+[`/node/git`](#agent-refs-over-git) channel to the backend, which refreshes
+from GitHub with its own credentials. The sub-agent gets no credential helper,
+and git routes its `git push` to the same channel, which refuses it. Top-level
+agents are unchanged ([forge token](#forge-token-on-the-machine-nodeprotocol-15)).
+
+```mermaid
+sequenceDiagram
+  participant S as Sub-agent git
+  participant M as Machine intentd
+  participant B as Backend
+  participant G as GitHub
+  S->>M: git fetch origin (rewritten to the forge remote)
+  M->>B: OPEN upload-pack, forge remote
+  B->>G: git fetch (coalesced, 30 s timeout)
+  G-->>B: refs and objects
+  B->>M: ACCEPT (warning when the refresh failed)
+  B-->>M: upload-pack: refs/heads and refs/tags as on GitHub
+  M-->>S: the same bytes
+  S->>M: git push origin
+  M->>B: OPEN receive-pack, forge remote
+  B->>M: CLOSE node-git-push-refused
+  M-->>S: error: sub-agents hand work back through intent1; ask your parent to push
+```
+
+```ts
+interface LaunchCommand {
+  // ...as in launch above
+  forgeFetch?: ForgeFetchLaunch; // protocol 17, sub-agents only
+}
+interface ForgeFetchLaunch {     // closed: unknown or mistyped members are node-link-protocol
+  remoteUrl: string;             // "https://github.com/<owner>/<repo>.git"
+}
+```
+
+1. **When sent.** The backend sends `launch.forgeFetch` when `isSubAgent` is
+   `true`, the link is at protocol 17, and the workspace checkout's `origin`
+   is a GitHub repository (normalized to the HTTPS `remoteUrl`, as for
+   `launch.forge`). This covers a sub-agent with its own checkout and one that
+   [shares](#shared-checkout) a checkout (`checkoutOf`), on the parent's
+   machine, another machine or a new sandbox. It does not depend on the forge
+   token or on `exposeGitCredentialToChildren`, because the sub-agent receives
+   no credential. A launch with both `forge` and `forgeFetch`, or with
+   `forgeFetch` and `isSubAgent: false`, fails with `node-checkout-failed`. A
+   `remoteUrl` that does not have the form above fails the launch the same
+   way. A machine that receives `forgeFetch` on a link below 17 rejects the
+   frame (`node-link-protocol`).
+2. **Forge remote.** Each sub-agent has one more remote on the `/node/git`
+   connection, with the same messages, limits and session cap:
+
+   ```text
+   intent://ws/<workspaceId>/agents/<agentId>/forge
+   ```
+
+   The URL has no suffix; a URL that continues after `forge` is
+   `node-git-invalid`. The backend authorizes the OPEN as the agent's
+   superproject OPEN (the agent on that lease, the binding current). It also
+   requires that the agent is a sub-agent (it has a parent, runs in the
+   background, or shares a checkout) and that the workspace `origin` still
+   normalizes to a GitHub repository; else `node-git-denied`. The backend
+   refreshes from that repository. A forge OPEN on a link below 17 is `node-git-invalid`.
+   A forge session counts against the cap of 8 from its OPEN, refresh
+   included. The machine opens at most 2 forge sessions at a time and holds
+   the others until one ends, so pushes of `head` and `wip` keep room. A
+   session held for more than **30 s** fails with `node-git-busy`.
+3. **Rewrite on the machine.** With `forgeFetch` the machine starts the
+   sub-agent's provider with:
+   1. `url.<forge remote>.insteadOf` for exactly two values: `remoteUrl`
+      and `git@github.com:<owner>/<repo>.git`. The machine appends them to any
+      `GIT_CONFIG_PARAMETERS` already in the environment (for example from a
+      [profile](#provider-credentials-profile-environment)), never to git
+      configuration. Git matches `insteadOf` by prefix, so a URL that only
+      starts with one of these values (for example `…/<repo>.git2`) is also
+      rewritten and then fails as `node-git-invalid` (rule 2). Other URLs,
+      including `https://github.com/<owner>/<repo>` without `.git`,
+      `ssh://` URLs and other letter case, are not rewritten. The rewrite
+      applies to fetch and to push;
+   2. the `git-remote-intent` helper directory first on `PATH`;
+   3. `INTENT_NODE_GIT_SOCKET` naming a socket of that agent's own. The
+      machine accepts only that agent's forge remote on it. A URL that is not a
+      well-formed forge remote is `node-git-invalid`, and the forge remote of
+      another agent is `node-git-denied`, so the sub-agent cannot open an
+      agent remote.
+
+   The provider process and the processes it starts get this wiring. The
+   sub-agent's `host.exec` calls, saved scripts and MCP children do not; their
+   git talks to GitHub directly, as before. No other agent in a shared
+   checkout sees the rewrite.
+4. **Origin on the machine.** When the sub-agent's checkout has no
+   `remote.origin.url` (its own checkout, or a shared one whose owner started
+   without `origin`), the machine sets, with `git config --worktree`,
+   `remote.origin.url` = `remoteUrl` and
+   `remote.origin.fetch` = `+refs/heads/*:refs/remotes/origin/*`, with no
+   upstream branch. In a shared checkout the owner sees this `origin` too; its
+   git uses it without the rewrite and with no credential helper. An existing
+   `origin` is never changed. The machine adds no credential helper; the
+   sub-agent still gets `GH_TOKEN` when the machine holds a token (rule 9 of
+   the [forge token](#forge-token-on-the-machine-nodeprotocol-15)).
+5. **Refresh.** Before it answers a forge upload-pack OPEN with ACCEPT, the
+   backend fetches `remoteUrl` from GitHub into the workspace repository, with
+   the token it resolves for its own git operations. The token reaches git
+   only in that process's environment, read by a github.com credential
+   helper given on its command line; the token itself is never on a command
+   line or in configuration. This does not depend on
+   `exposeGitCredentialToChildren`, which gates only what agents get. With
+   no token the fetch is anonymous: it works
+   for a public repository, and for a private one it fails into rule 6. It runs
+   `git fetch --prune --no-tags` with the refspecs
+   `+refs/heads/*:refs/namespaces/intent-forge/refs/heads/*` and
+   `+refs/tags/*:refs/namespaces/intent-forge/refs/tags/*`, with no global
+   or system configuration and no hooks. After a successful fetch it also
+   stores the default branch from `git ls-remote --symref <remoteUrl> HEAD`
+   as the symref `refs/namespaces/intent-forge/HEAD`. These private refs
+   (the git namespace `intent-forge`) belong to the backend; it never changes the
+   user's `refs/remotes/origin/*`, tags or branches. OPENs that arrive close
+   together share one fetch, per workspace repository: an OPEN that arrives
+   while a fetch runs waits for it, and one that arrives within **5 s** after
+   the end of a successful fetch uses its result. A failed fetch is not
+   reused; the next OPEN fetches again. A fetch is stopped after **30 s**. The
+   helper on the machine waits at least **60 s** for the ACCEPT.
+6. **Fallback.** When the fetch fails or times out, the backend serves the
+   refs it fetched last, and the ACCEPT carries a warning (rule 8). Before the
+   first successful fetch it copies the workspace repository's
+   `refs/remotes/origin/*`, `refs/remotes/origin/HEAD` and tags into the
+   namespace and serves them. The OPEN fails only when neither exists
+   (`node-git-unavailable`).
+7. **Ref mapping.** The forge upload-pack runs in the `intent-forge`
+   namespace (`GIT_NAMESPACE`), so it advertises
+   `refs/namespaces/intent-forge/refs/heads/<branch>` as
+   `refs/heads/<branch>`, `…/refs/tags/<tag>` as `refs/tags/<tag>`, and
+   `HEAD` as a symref to the branch that `refs/namespaces/intent-forge/HEAD`
+   names, with no `HEAD` when that ref is missing. It hides every other ref,
+   agent refs included, and
+   serves only history reachable from the advertised tips. So the
+   sub-agent's `origin/<branch>` names the commit `<branch>` had on GitHub at
+   the last successful refresh, and `git pull` and
+   `git rebase origin/<branch>` work.
+8. **ACCEPT payload.** On protocol 17 a forge ACCEPT may carry JSON
+   `{ warning?: "forge-refresh-failed" }`. The helper prints
+   `warning: could not refresh from GitHub; showing the last fetched refs` to
+   the sub-agent's stderr and continues. Every other ACCEPT stays empty; the
+   machine treats a non-empty ACCEPT on any other remote, or on a link below
+   17, as `node-git-invalid`: it sends CLOSE, ends the session, and the helper
+   exits non-zero.
+9. **Push refused.** The backend answers a forge receive-pack OPEN with CLOSE
+   `{ error: "node-git-push-refused" }` before any ref or object moves. The
+   helper prints `error: sub-agents hand work back through intent1; ask your
+   parent to push` and exits non-zero, so `git push` fails. The sub-agent's own
+   hand-back refs (`head`, `wip`) are the only refs it can move; the machine
+   pushes them on the agent remote, which the rewrite never matches, as
+   before.
+10. **Known gaps.**
+    1. The rewrite covers only the two URLs of rule 3 and only the provider's
+       processes. A sub-agent with `GH_TOKEN` can still write with `gh` or push
+       to another URL; its instructions tell it not to (rule 9 of the
+       [forge token](#forge-token-on-the-machine-nodeprotocol-15)).
+    2. Submodules are not rewritten. A fetch that recurses into submodules
+       reaches their URLs directly, with no credential helper, so a private
+       submodule fails.
+    3. In a shared checkout the remote-tracking refs are common to all its
+       agents, and the refspec is forced. A fetch served from stale refs
+       (rule 6) can move an `origin/<branch>` back that the owner updated
+       directly from GitHub. The owner's next fetch corrects it.
+    4. When the user changes the workspace `origin` to another GitHub
+       repository, a running sub-agent's next fetch gets the new
+       repository's refs under its old URL, until it is launched again.
+11. **Older peers.** On a link below 17 the backend sends no `forgeFetch`, and
+    a sub-agent starts as before: no `origin` in its own checkout, and
+    a sharing sub-agent sees the owner's `origin` with no credential helper.
+
+Reply error codes on `/node/git` CLOSE:
+
+| Code | Meaning |
+| --- | --- |
+| `node-git-push-refused` | A push on a forge remote; sub-agents hand work back through their agent refs |
 
 ### Saved scripts (nodeProtocol 8)
 
