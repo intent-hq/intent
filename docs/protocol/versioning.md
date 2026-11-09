@@ -1170,6 +1170,19 @@ same workspace into the caller's, confined to both checkouts, in pieces of at mo
 `file-pull-unsupported`. `ws.file.getAttachment` gains the same 200 MiB cap,
 local and remote (`attachment-exceeds-cap`). The surface counts are unchanged.
 
+**Sub-agent fetch through the backend — nodeProtocol 17 (link-only; no method-catalog change, so no version bump).**
+A sub-agent's `launch` gains `forgeFetch` (`remoteUrl`). The machine rewrites two
+forms of the workspace's GitHub URL, for that sub-agent only, to its new forge remote on
+`/node/git`. The backend refreshes from GitHub into private
+`refs/namespaces/intent-forge/*` refs before it serves that upload-pack (coalesced, 30 s timeout,
+last fetched refs with a warning on failure). It serves them as `refs/heads/*`
+and `refs/tags/*` and refuses receive-pack with
+the new CLOSE code `node-git-push-refused`
+([link contract](./node-link.md#sub-agent-fetch-through-the-backend-nodeprotocol-17)).
+Sub-agents still get `GH_TOKEN`. Daemons offer `{ min: 7, max: 17 }`; on a lower
+link sub-agents start as before. No method, event, setting or result member
+changes, so the surface counts are unchanged.
+
 **Command-default change (breaking).**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain

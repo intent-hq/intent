@@ -872,8 +872,14 @@ gates it.
   of a workspace push to the same branch; a second writer pulls or rebases
   after a non-fast-forward reject, and the backend's worktree is not updated.
 - **A sub-agent** has no credential helper, and hands its work back through
-  its refs as before. Its own checkout has no `origin`; one that shares a
-  top-level agent's checkout sees that checkout's `origin` and upstream. It is told to use `gh` for reads only. This
+  its refs as before. On a link below 17 its own checkout has no `origin`; one that shares a
+  top-level agent's checkout sees that checkout's `origin` and upstream. On a
+  nodeProtocol 17 link its `git fetch origin` goes through the backend, which
+  refreshes from GitHub first, so `origin/<branch>` matches GitHub at the last
+  successful refresh; its
+  `git push` to the workspace repository is refused
+  ([sub-agent fetch](../node-link.md#sub-agent-fetch-through-the-backend-nodeprotocol-17)).
+  It is told to use `gh` for reads only. This
   is a convention only: the token is not read-only, and nothing stops a
   sub-agent that pushes or writes with it.
 - The token is the backend's full token. The model can read it from the
