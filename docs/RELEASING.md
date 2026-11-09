@@ -1165,7 +1165,7 @@ of a run's jobs on that platform must fit the merge-queue timeout.
 Rust compiler caching uses the self-hosted sccache WebDAV cache
 ([runbook](SCCACHE_SERVER.md)) when the organization Actions variable
 `INTENT_SCCACHE_ENDPOINT` (an `https://` URL) is set.
-`packages/intentd/scripts/setup-sccache.py` (the only copy; monorepo workflows
+`packages/intentd/scripts/setup-sccache.py` (the monorepo keeps no copy; its workflows
 run it from the intentd checkout) installs checksum-verified sccache directly (no Rust cache actions remain), then
 uses the `INTENT_SCCACHE_TOKEN` secret and the optional `INTENT_SCCACHE_MODE`
 variable (`READ_WRITE` by default, or `READ_ONLY`), overwriting any

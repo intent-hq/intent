@@ -280,7 +280,7 @@ jobs:
           fi
           corepack enable
 
-      # intentd's script is the only copy (an intentd caller runs its own PR
+      # The monorepo keeps no copy of this script (an intentd caller runs its PR
       # head's), so a download outage compiles uncached instead of ejecting
       # the PR; scripts/test_setup_sccache.py pins that contract.
       - name: Configure the self-hosted compiler cache
