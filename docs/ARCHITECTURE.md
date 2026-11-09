@@ -125,7 +125,8 @@ The [node contract](protocol/methods/nodes.md), [private node link](protocol/nod
 and [checkpoint format](protocol/node-checkpoints.md) define the approved target;
 they are **not implemented at the current pins**. Phase 1 includes static remote
 nodes, the in-process local node, hub durability/recovery and full per-agent CoW
-retirement. Current sandbox behavior is recorded separately below until removal.
+retirement. Per-agent CoW retirement does not wait for the local node. Current
+sandbox behavior is recorded separately below until removal.
 
 Head owns durable orchestration: SQLite, transcripts, permissions, placement,
 leases, prompts, hub refs, notes/tasks, event delivery and explicit publication.
@@ -213,9 +214,11 @@ head filesystem paths. Cloud adapters, images, Windows qualification, local Mac
 microVMs, freeze/fork, automatic sitter upgrades and credential administration
 are outside phase 1.
 
-Retirement order is additive docs → backend node/hub support and local parity →
-replacement frontend → backend per-agent CoW deletion → canonical catalog cleanup
-after automatic pins. Each merge requires human authorization. Keep workspace
+Retirement order is additive docs → backend per-agent CoW deletion and frontend
+cleanup → canonical catalog cleanup after automatic pins. Backend node/hub support,
+local parity and the replacement frontend follow independently; until the local
+node ships, agents that are not placed remotely share the workspace checkout.
+Each merge requires human authorization. Keep workspace
 `checkoutMode: cow`, reflink primitives and repo-cache coverage throughout. Remove
 per-agent isolation selection and merge/discard routes without aliases or live
 sandbox migration; old sandbox files remain untouched for explicit recovery.
@@ -223,8 +226,8 @@ sandbox migration; old sandbox files remain untouched for explicit recovery.
 ## Workspace checkouts & agent sandboxes (CoW)
 
 This section describes **current pinned behavior**. The per-agent sandbox portion
-is retired only after the replacement gates above; workspace CoW checkout creation
-is retained. In particular, the legacy shared fallback below is not allowed for
+is retired by the next backend removal (it does not wait for the local node);
+workspace CoW checkout creation is retained. In particular, the legacy shared fallback below is not allowed for
 future explicit isolated node placement.
 
 Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a

@@ -20,7 +20,8 @@ grant no authority. Additive implementation allocates the next available minor
 protocol version against main; this document does not reserve the abandoned
 microVM proposal's 10.10 number. CoW API removal requires a separate major bump
 and advertises `agentIsolation: 2` only when retirement is complete. That value
-requires both node flags. No version/flag is advertised by this docs change.
+does not depend on the node flags: retirement does not wait for the local node.
+No version/flag is advertised by this docs change.
 
 Clients gate existing complete placement and hub controls on those flags.
 The [widened platform contract](../model-platform-routing.md) additionally requires
@@ -257,16 +258,24 @@ failure closes the private connection before dispatch.
 
 Landing sequence within phase 1:
 
-1. Land additive documentation; implement backend nodes/hubs and local replacement.
-2. Prove local/remote merge and recovery parity, and ship replacement FE callers.
-3. Remove per-agent CoW runtime, prompts, defaults, schemas, settings controls and
-   routes. Reject explicit `isolation: "cow"` before side effects; removed
+1. Land additive documentation.
+2. Remove per-agent CoW runtime, prompts, defaults, schemas, settings controls and
+   routes. This step does not wait for the in-process local node or its
+   isolated-checkout parity; until that node ships, agents that are not placed
+   on a remote machine share the workspace checkout. Reject explicit
+   `isolation: "cow"` before side effects; removed
    `sandbox.cow.merge`/`sandbox.cow.discard` return normal `-32601`. Old persisted
    CoW preferences are ignored with a retirement notice, never converted into a
-   new placement. Old live sandboxes are not resumed or migrated; expose a recovery
-   notice naming retained files without auto-deleting or reusing them.
-4. After component removal and automated pin advancement, remove obsolete
+   new placement: `workspace.cowIsolation` keeps only its workspace checkout role.
+   A backend sub-agent of a remote agent always works in the shared workspace
+   checkout. Old live sandboxes are not resumed or migrated; their files and
+   branches are not auto-deleted or reused. The recovery notice is the daemon log
+   (one warning per retained sandbox at boot) and the owning agent's next-turn
+   instructions, which name the retained path and branch.
+3. After component removal and automated pin advancement, remove obsolete
    canonical method/event entries. Existing `sandbox:cow:*` entries stay until then.
+4. Implement backend nodes/hubs and the local node, prove local/remote merge and
+   recovery parity, and ship replacement FE callers.
 
 Keep workspace `checkoutMode: "cow"`, repo-cache hydration and clonefile/FICLONE
 tests. An isolated local node checkout uses reflink when available, otherwise a
