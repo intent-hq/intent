@@ -708,8 +708,12 @@ terms as a turn. The auggie route has no profiles and does not fail over.
 - **Retry.** A quota failure marks the reference out of quota and runs the same prompt
   on the next candidate. A reply marks the reference working. Every other failure,
   and every `{ available: false }` result, is returned at once, as before.
-- **Budget.** All attempts share the call's one `timeoutMs`. When it runs out, or no
-  untried candidate remains, the call fails with the last quota error, as before.
+- **Budget.** All attempts share the call's one `timeoutMs`. The first attempt keeps
+  today's setup budgets; a backup's whole attempt, setup included, ends at the
+  deadline. After a quota failure, no backup starts when less than 5 seconds remain.
+  The call then fails with the last quota error, as before. It also fails with that
+  error when no untried candidate remains, or when a backup times out or can no longer
+  be resolved.
 - **Nothing persisted.** The call stays stateless: no setting, agent or transcript row
   changes, and no event is emitted for a switch. The result shape is unchanged.
 
