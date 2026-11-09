@@ -272,7 +272,7 @@ of an existing agent; it does not grant collaborator access to `agent.delete` or
 retirement of another agent. See [§5.5 Direct user retirement](./agents.md#direct-user-retirement).
 
 **Remote machine administration:** `executor.mint`, `executor.list`,
-`executor.revoke`, the five `remoteMachines.*` methods and the three
+`executor.revoke`, the six `remoteMachines.*` methods and the three
 `remoteLinkTraffic.*` methods
 ([§5.50](./nodes.md#daemon-to-daemon-remote-machines)) join the
 owner-only refused remainder. They are on neither the collaborator nor the
