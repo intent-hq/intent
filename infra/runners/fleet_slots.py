@@ -11,7 +11,8 @@ prints each pool's total slots as key=value lines:
 
 --without HOST leaves a host out (retire step 1: lower the variables before
 its config is removed). --apply also sets the three variables in every
-repository of RUNNER_GROUP_REPOS with gh. See docs/GITHUB_RUNNERS.md.
+repository of RUNNER_GROUP_REPOS with gh. --hosts prints the host names
+instead, one per line (rollout.sh's fleet). See docs/GITHUB_RUNNERS.md.
 """
 from pathlib import Path
 import argparse
@@ -41,6 +42,7 @@ def main(argv=None, root=HERE):
                         help='leave out a host (RUNNER_NAME_PREFIX); repeatable')
     parser.add_argument('--apply', action='store_true',
                         help='set the CI_LINUX_*_SLOTS variables in every RUNNER_GROUP_REPOS repository with gh')
+    parser.add_argument('--hosts', action='store_true', help='print the host names, one per line, and exit')
     args = parser.parse_args(argv)
     fleet = hosts(root)
     known = sorted(fleet)
@@ -48,6 +50,9 @@ def main(argv=None, root=HERE):
         if host not in known:
             raise SystemExit(f"fleet_slots: error: unknown runner host '{host}'; expected one of: {', '.join(known)}")
         fleet.pop(host, None)
+    if args.hosts:
+        print('\n'.join(fleet), flush=True)
+        return 0
     # runners.env holds supervisor.sh's defaults (test_intent_cache_config_matches_the_defaults).
     env = read_env(root / 'runners.env')
     result = totals(fleet, env['HEAVY_LABELS'])

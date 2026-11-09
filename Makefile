@@ -182,7 +182,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: check-app-ui-targets check-app-guide-sources check-agent-feature-toggles check-keybindings-doc check-transfer-methods check-protocol-status-labels check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in pin-includes release-status rpc
+.PHONY: check-app-ui-targets check-app-guide-sources check-agent-feature-toggles check-keybindings-doc check-transfer-methods check-protocol-status-labels check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in pin-includes release-status runner-rollout rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -401,6 +401,11 @@ pin-includes: ## Check that the intent-hq/intent main pin of COMPONENT=intentd|c
 # Where to look.
 release-status: ## Print the release train: latest tags, channel versions, fe daemon pin, release PRs with CI and merge-queue state, merge queue head, unshipped commits, last auto-cut decision, last auto-pin run, @intent-hq/web npm dist-tag drift, runner overrides (STATUS_JSON=1 for JSON; NO_LOGS=1 skips the slow run-log fetch)
 	@STATUS_JSON="$(STATUS_JSON)" scripts/release-status.sh $(if $(NO_LOGS),--no-logs,)
+
+# Roll this checkout's infra/runners out to the self-hosted runner fleet, host
+# by host (needs root SSH to them). See docs/GITHUB_RUNNERS.md → Install or update.
+runner-rollout: ## Copy infra/runners to each runner host, install, check the image and restart idle slots, stopping at the first failure (HOSTS="intent-ci1 intent-ci2" for some; default every host)
+	@infra/runners/rollout.sh $(HOSTS)
 
 # Build-artifact GC (cargo-sweep). Rust target/ dirs grow without bound as
 # deps and toolchains churn; `sweep` prunes artifacts older than SWEEP_DAYS

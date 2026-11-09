@@ -2102,6 +2102,154 @@ esac
                     for path in [HERE / 'runners.env', *sorted(HOSTS.glob('*.env'))]]
         self.assertEqual(len(prefixes), len(set(prefixes)), 'every host has its own name prefix')
 
+# ssh: logs the destination, options and remote command (and, for a piped tar
+# stream, its member names); STUB_SSH_FAIL="HOST:TEXT" fails the call to HOST
+# whose command contains TEXT, as a host error or an SSH timeout would.
+SSH_STUB = r'''#!/usr/bin/env -S python3 -I
+import io, json, os, sys, tarfile
+args, opts, dest = sys.argv[1:], [], None
+while args and args[0].startswith('-'):
+    opts.append(args.pop(0))
+    if opts[-1] == '-o': opts.append(args.pop(0))
+dest = args.pop(0)
+command = ' '.join(args)
+members = None
+if 'tar -x' in command:
+    members = tarfile.open(fileobj=io.BytesIO(sys.stdin.buffer.read())).getnames()
+with open(os.environ['STUB_LOG'], 'a') as f:
+    f.write(json.dumps({'cmd': 'ssh', 'dest': dest, 'opts': opts, 'command': command, 'members': members}) + '\n')
+host, _, text = os.environ.get('STUB_SSH_FAIL', '').partition(':')
+if dest.endswith('@' + host) and text in command: sys.exit(255)
+'''
+
+# docker for --restart-idle and --check-image: containers from STUB_CONTAINERS
+# ({name: {"image": id, "logs": text}}), intent-gh-runner:current is image "new".
+ROLLOUT_DOCKER_STUB = r'''#!/usr/bin/env -S python3 -I
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ['STUB_LOG'], 'a') as f:
+    f.write(json.dumps({'cmd': 'docker', 'argv': args}) + '\n')
+containers = json.load(open(os.environ['STUB_CONTAINERS'])) if os.environ.get('STUB_CONTAINERS') else {}
+if args[0] == 'ps':
+    print('\n'.join(containers))
+elif args[:2] == ['image', 'inspect']:
+    if os.environ.get('STUB_NO_IMAGE'): sys.exit(1)
+    print('sha256:new')
+elif args[0] == 'inspect':
+    print(containers[args[-1]]['image'])
+elif args[0] == 'logs':
+    print(containers[args[-1]]['logs'])
+elif args[0] == 'run':
+    sys.exit(int(os.environ.get('STUB_RUN_RC', '0')))
+'''
+
+
+class Rollout(Stubbed):
+    def setUp(self):
+        super().setUp()
+        write_exe(self.bin / 'ssh', SSH_STUB)
+        write_exe(self.bin / 'docker', ROLLOUT_DOCKER_STUB)
+        write_exe(self.bin / 'systemctl', LOG_STUB)
+        self.fleet = ['intent-cache'] + [p.stem for p in sorted(HOSTS.glob('*.env'))
+                                         if read_env(p).get('RUNNER_NAME_PREFIX') == p.stem]
+
+    def rollout(self, *args, **env):
+        result = subprocess.run(['bash', str(HERE / 'rollout.sh'), *args], capture_output=True, text=True,
+                                stdin=subprocess.DEVNULL, env={**self.env, **env})
+        return result.returncode, result.stdout, result.stderr
+
+    def steps(self):
+        out = []
+        for call in self.calls('ssh'):
+            self.assertIn('ConnectionAttempts=3', call['opts'], 'every ssh retries the connection')
+            host = call['dest'].removeprefix('root@')
+            if call['members'] is not None:
+                self.assertIn('runners/install.sh', call['members'])
+                self.assertIn('runners/rollout.sh', call['members'])
+                self.assertFalse(any('__pycache__' in m for m in call['members']))
+                out.append((host, 'copy'))
+            elif '--check-image' in call['command']:
+                out.append((host, 'check'))
+            elif '--restart-idle' in call['command']:
+                out.append((host, 'restart'))
+            else:
+                config = f' --config /root/infra/runners/hosts/{host}.env' if host != 'intent-cache' else ''
+                self.assertEqual(call['command'], '/root/infra/runners/install.sh' + config)
+                out.append((host, 'install'))
+        return out
+
+    def test_rollout_runs_every_step_on_each_fleet_host(self):
+        self.assertEqual(len(self.fleet), 6, 'intent-cache and intent-ci1..5')
+        rc, out, err = self.rollout()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.steps(), [(h, s) for h in self.fleet for s in ('copy', 'install', 'check', 'restart')])
+
+    def test_rollout_takes_a_host_list_in_its_order(self):
+        rc, out, err = self.rollout('intent-ci3', 'intent-cache')
+        self.assertEqual(rc, 0, err)
+        self.assertEqual([h for h, s in self.steps() if s == 'copy'], ['intent-ci3', 'intent-cache'])
+        self.assertEqual(len(self.steps()), 8)
+
+    def test_rollout_rejects_an_unknown_host_before_touching_any(self):
+        rc, out, err = self.rollout('intent-ci1', 'intent-ci9')
+        self.assertNotEqual(rc, 0)
+        self.assertIn("unknown runner host 'intent-ci9'", err)
+        self.assertIn(', '.join(sorted(self.fleet)), err)
+        self.assertEqual(self.calls('ssh'), [])
+
+    def test_rollout_stops_at_the_first_failure(self):
+        for text, step in (('install.sh', 'install'), ('--check-image', 'check'), ('tar -x', 'copy')):
+            with self.subTest(step=step):
+                self.log.write_text('')
+                rc, out, err = self.rollout('intent-ci1', 'intent-ci2', 'intent-ci3', STUB_SSH_FAIL=f'intent-ci2:{text}')
+                self.assertNotEqual(rc, 0)
+                steps = self.steps()
+                self.assertEqual(steps[-1], ('intent-ci2', step), 'nothing runs after the failed step')
+                self.assertEqual(steps[:4], [('intent-ci1', s) for s in ('copy', 'install', 'check', 'restart')])
+                self.assertNotIn('intent-ci3', [h for h, _ in steps])
+                self.assertIn('intent-ci2', err)
+                self.assertIn('rollout.sh intent-ci2 intent-ci3', err, 'the error gives the command to resume')
+
+    def test_restart_idle_restarts_only_idle_slots_on_an_old_image(self):
+        containers = self.dir / 'containers.json'
+        containers.write_text(json.dumps({
+            'gh-runner-heavy-1': {'image': 'sha256:new', 'logs': 'Listening for Jobs'},
+            'gh-runner-heavy-2': {'image': 'sha256:old', 'logs': 'Connected to GitHub\nListening for Jobs'},
+            'gh-runner-xl-1': {'image': 'sha256:old', 'logs': 'Listening for Jobs\nRunning job: check'},
+            'sccache': {'image': 'sha256:old', 'logs': ''},
+        }))
+        rc, out, err = self.rollout('--restart-idle', STUB_CONTAINERS=str(containers))
+        self.assertEqual(rc, 0, err)
+        self.assertEqual([c['argv'] for c in self.calls('systemctl')],
+                         [['restart', '--no-block', 'github-runner@heavy-2']])
+        self.assertIn('xl-1', out, 'a busy slot is reported as left to its next job')
+        self.log.write_text('')
+        rc, out, err = self.rollout('--restart-idle', STUB_CONTAINERS=str(containers), STUB_NO_IMAGE='1')
+        self.assertNotEqual(rc, 0, 'no current image: nothing to restart onto')
+        self.assertEqual(self.calls('systemctl'), [])
+
+    def test_check_image_runs_the_baked_tools_of_the_dockerfile(self):
+        dockerfile = (HERE / 'Dockerfile').read_text()
+        pythons = re.findall(r'^ARG PYTHON_\d+_\d+_VERSION=(\S+)', dockerfile, re.M)
+        nodes = re.findall(r'^ARG NODE_VERSION=(\S+)', dockerfile, re.M) + re.findall(
+            r'(\d+\.\d+\.\d+)=', re.search(r'^ARG NODE_TOOLCACHE="([^"]*)"', dockerfile, re.M).group(1))
+        self.assertGreaterEqual(len(pythons), 2)
+        self.assertGreaterEqual(len(nodes), 3)
+        rc, out, err = self.rollout('--check-image')
+        self.assertEqual(rc, 0, err)
+        [run] = [c['argv'] for c in self.calls('docker') if c['argv'][0] == 'run']
+        self.assertIn('--rm', run)
+        self.assertIn('intent-gh-runner:current', run)
+        self.assertIn(f"PYTHONS={' '.join(pythons)}", run)
+        self.assertIn(f"NODES={' '.join(nodes)}", run)
+        script = run[-1]
+        for tool in ('cargo nextest', 'cargo llvm-cov', 'cargo shear', 'llvm-tools'):
+            self.assertIn(tool, script)
+        rc, out, err = self.rollout('--check-image', STUB_RUN_RC='1')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('image check failed', err)
+
+
 class _Outcome:
     """A test or subtest reported by a worker, as the parent's result prints it."""
     def __init__(self, description):
