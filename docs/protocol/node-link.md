@@ -2704,7 +2704,12 @@ pin in order (parents first):
    the agent checkout's for a top-level pin, the parent submodule's worktree
    for a nested one (git reads a submodule's `active` from the repository
    that contains it). It never sets a submodule URL and never contacts the
-   forge.
+   forge;
+4. sets `submodule.<name>.fetchRecurseSubmodules=false` in the same worktree
+   config, also for a pin an earlier launch already populated. The submodule
+   has no remote, so git's on-demand recursion would otherwise make every
+   `git fetch` whose new commits move the gitlink exit 1. The per-module key
+   wins over a `.gitmodules` value.
 
 `git submodule status` in the machine checkout then matches the backend
 worktree. A fetch or check that fails ends the launch with
