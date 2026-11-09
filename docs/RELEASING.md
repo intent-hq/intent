@@ -613,8 +613,9 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   the new sidecar, and its merge push then chains into a cut. In-flight guardrail: when
   `intent-hq/intentd` has a semver tag newer than the published alpha manifest and
   the tag is younger than 90 minutes (an intentd release build is running and a pin
-  bump is imminent), the cut defers instead of shipping a stale-sidecar alpha; the
-  age bound stops a failed intentd build from deferring fe cuts forever, and the
+  bump is imminent), the cut defers instead of shipping a stale-sidecar alpha; a
+  finished, unsuccessful `v-release.yml` run for the tag ends the deferral at once,
+  the age bound covers an unreadable run, and the
   check fails open on any lookup error (missing `INTENTD_READ_PAT`, unreachable
   manifest, unreadable tags) so an unreadable intentd never blocks fe releases.
   BE-dependency freshness guardrail (intent-hq/monorepo#2985): the intentd-first
@@ -623,10 +624,19 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   work. Before merging, the cut resolves the pin from `intentd.version` on fe
   main and compares `v<pin>...main` on `intent-hq/intentd`: when intentd main has
   no commits after the pinned tag (the expected common case, one cheap API
-  comparison) the cut proceeds unrestricted; when intentd main is ahead and the
-  cut would ship fe commits merged after that tag was cut, it defers — those
-  commits may depend on intentd work in no published sidecar, and the next
-  intentd alpha's pin-bump push or a later cron tick re-evaluates readiness.
+  comparison) the cut proceeds unrestricted. When intentd main is ahead and the
+  cut would ship fe commits merged after that tag was cut, time overlap alone is
+  not treated as a dependency (both repos merge all day, so it held fe alphas for
+  hours on 2026-11-09). cloudlands-fe's `intentd-skew-evidence.mjs` helper defers only on
+  evidence: a fresh fe commit or its PR body names an intentd PR that is merged,
+  missing from the pinned tag, and changes runtime files (Markdown, docs, tests
+  and CI do not count); or a fresh fe commit adds a quoted, non-test use of an
+  intentd method or event (`method_catalog.txt` / `event_types.json` goldens)
+  that the pin lacks. The
+  defer notice names the fe and intentd PRs, and the next intentd alpha's
+  pin-bump push or a later cron tick re-evaluates readiness. Unreadable evidence
+  keeps the deferral. An fe change that reads a new field of an existing method
+  is caught only when its PR names the companion intentd PR.
   A confirmed release-plz no-op also exempts this freshness deferral
   (intent-hq/intent#6045): the latest
   `release-plz.yml` main-push run must succeed for the **exact current intentd
@@ -644,8 +654,8 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   PRs, holds, CI, review, or throttle guards. `workflow_dispatch` retains its
   explicit freshness override. Automation commits (the sidecar pin-bump itself,
   `chore(release):` merges) remain exempt, and the original pin, tag, comparison,
-  and frontend-commit lookups still fail open — only reads of the new no-op
-  proof fail closed for the exemption. Public intentd workflow and job reads
+  and frontend-commit lookups still fail open — only reads of the no-op proof
+  and the dependency evidence fail closed for their exemptions. Public intentd reads
   use the existing token permissions; no new secret is needed.
 - Stable: dispatch `release-stable.yml` with the `version` input. The same beta-first
   guard applies: the workflow checks the current beta channel version (the `beta`
