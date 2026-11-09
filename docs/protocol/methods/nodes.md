@@ -265,9 +265,9 @@ Landing sequence within phase 1:
    on a remote machine share the workspace checkout. Reject explicit
    `isolation: "cow"` before side effects; removed
    `sandbox.cow.merge`/`sandbox.cow.discard` return normal `-32601`. Old persisted
-   CoW preferences are never converted into a new placement:
-   `workspace.cowIsolation` keeps only its workspace checkout role, and an
-   omitted `isolation` never resolves to `"cow"`. A backend sub-agent of a
+   CoW preferences are never converted into a new placement, and an omitted
+   `isolation` never resolves to `"cow"`. Protocol 17 later retired the
+   `workspace.cowIsolation` setting itself (§5.12). A backend sub-agent of a
    remote agent always takes the shared worktree path of
    [backend sub-agents](#backend-sub-agents-of-remote-agents). No live per-agent
    sandboxes exist to carry over, so there is no resume, migration or recovery

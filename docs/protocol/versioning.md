@@ -8,8 +8,20 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `16.0` — per-agent CoW sandbox retirement, on top of 15.5's Agent Plugins, 15.4's bounded object reads, 15.3's plain-folder workspaces, 15.2's retired workspaces and 15.1's discussions, guest roles, scoped repository pages and GitLab child Git policy (intentd advertises all four at protocol 15.2); 15.4 is not a shipped-version claim.
+**Documented version:** `17.0` — CoW isolation setting retirement, on top of 16.0's per-agent CoW sandbox retirement and 15.5's Agent Plugins, 15.4's bounded object reads, 15.3's plain-folder workspaces, 15.2's retired workspaces and 15.1's discussions, guest roles, scoped repository pages and GitLab child Git policy (intentd advertises all four at protocol 15.2); 15.4 is not a shipped-version claim.
 Every extension retains its independent support gate.
+
+**Version 17.0 — CoW isolation setting retirement (breaking).**
+Copy-on-write is now used only to hydrate checkouts from the repo cache.
+`workspace.create` from a local repository always provisions a linked worktree
+(`checkoutMode: "worktree"`). The `workspace.cowIsolation` setting is retired: it leaves
+the settings catalog, `settings.get` / `settings.reset` reject it with `-32602`,
+`settings.update` ignores it without failing, and the daemon strips it from `config.toml`
+and deletes its stored row at boot. `workspace.duplicate` now returns `-32601 Method not
+found`. `Workspace.cowSupported` and the `cowSupported` key of `system.capabilities` are
+removed. Cache-hydrated `cow` / `direct` checkouts and existing `cow` workspaces are
+unchanged. No store migration. The documented surface is **499 / 441 / 58**
+(dispatchable / router / fast path), one router method fewer.
 
 **Version 16.0 — per-agent CoW sandbox retirement (breaking).**
 Removes per-agent copy-on-write sandboxes ([nodes.md landing step 2](./methods/nodes.md#errors-and-retirement-gates)).
@@ -19,8 +31,8 @@ Removes per-agent copy-on-write sandboxes ([nodes.md landing step 2](./methods/n
 are no-ops. The `sandbox:cow:created` and `sandbox:cow:merged`
 events are no longer emitted, and `AgentSession` / `AgentLite` drop `sandbox_id`,
 `sandbox_path` and `sandbox_branch`. `workspace.cowIsolation` keeps only its workspace
-checkout role; `checkoutMode: "cow"`, repo-cache hydration and `cowSupported` are
-unchanged. `client.hello` advertises `agentIsolation: 2`. Transfer bundles keep an empty
+checkout role (retired in 17.0); `checkoutMode: "cow"`, repo-cache hydration and
+`cowSupported` are unchanged. `client.hello` advertises `agentIsolation: 2`. Transfer bundles keep an empty
 `refs.sandboxes` for older importers, and imports of older bundles ignore sandbox data.
 A store migration drops the sandbox rows; no files on disk are touched. The documented
 surface is **499 / 441 / 58** (dispatchable / router / fast path), two router methods

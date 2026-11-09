@@ -227,40 +227,20 @@ fields without a recovery path and never touches files on disk.
 ## Workspace checkouts (CoW)
 
 This section describes **current pinned behavior**. Per-agent sandboxes were
-removed in protocol 16; workspace CoW checkout creation is retained.
+removed in protocol 16. Protocol 17 retired the `workspace.cowIsolation` setting,
+`workspace.duplicate` and the `cowSupported` capability, so copy-on-write is used only
+to hydrate checkouts from the repo cache.
 
-Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`). Architectural split of responsibilities:
+Wire contract: PROTOCOL.md §5.1 (`checkoutMode`). Architectural split of responsibilities:
 
-- **Provisioning (`workspace.create`).** `intent-services`
-  owns the decision matrix — `workspace.cowIsolation` off ⇒ linked worktree
-  (`intent_git::worktree::provision_worktree`); on ⇒ CoW reflink probe from the
-  repository directory into the workspace dir (`intent_git::cow_probe(&repo_dir,
-  &ws_dir)`), then a standalone clone of the whole repository directory
-  (`intent_git::cow_checkout::provision_cow_checkout`). When the probe reports
-  Unsupported (or errors) — e.g. the repository lives on a different volume than
-  the workspaces root, since reflinks cannot cross filesystems — provisioning
-  logs a warning and falls back to the linked-worktree path (the setting is a
-  preference, not a guarantee; the separate root→root probe backing the
-  `cowSupported` aggregate is advisory only). Both paths run under the
-  per-repository worktree lock. The setting is consulted **only** at
-  provisioning time; the persisted `checkoutMode` is immutable per workspace.
-- **Duplication (`workspace.duplicate`).** Applies that matrix only for
-  shared-checkout (worktree-mode) sources. A **standalone** source — the source's
-  own `checkoutMode` is `cow` or `direct` — always duplicates as a standalone
-  checkout, cloned from the source's own checkout rather than from its
-  `repositoryPath`: CoW probe ⇒ `cow` clone, Unsupported/probe error ⇒ a plain
-  local clone of the source checkout persisted as `direct`
-  (`intent_git::cow_checkout::provision_local_clone_checkout`, which carries
-  committed state only and resolves `origin` so no relative or self-referencing
-  URL survives into the duplicate — the CoW path copies `.git/config` verbatim
-  instead). `workspace.cowIsolation` is **ignored** for such sources
-  (parity with cache-hydrated create), and the duplicate persists
-  `repository_path` = its **own** checkout so it is fully self-contained. A linked
-  worktree rooted in a sibling workspace's checkout is never provisioned: the
-  source's deletion detaches that directory and would orphan the duplicate, and
-  deleting the duplicate would mutate the source (intent-hq/monorepo#1560). If
-  provisioning fails, the inherited `repository_path` is cleared for standalone
-  sources so no checkout-less row references the source's directory.
+- **Provisioning (`workspace.create`).** `intent-services` provisions a create from a
+  local repository as a linked worktree (`intent_git::worktree::provision_worktree`)
+  under the per-repository worktree lock. A create that arrives with a `githubUrl` and
+  no `clonePath` hydrates a standalone checkout from the repo cache instead (below):
+  a CoW reflink probe from the cache into the workspace dir (`intent_git::cow_probe`)
+  picks a CoW clone (`cow`) or a plain local clone (`direct`). The persisted
+  `checkoutMode` is immutable per workspace; rows created as `cow` copies of a local
+  repository before protocol 17 keep working.
 - **Unified provisioning progress.** `intent-services::create_progress` owns the
   per-create progress reporter armed by a `workspace.create { progressId }` (PROTOCOL
   §5.1/§6.5): it echoes the client-minted id on every `git:clone:progress`/`git:clone:done`
@@ -307,15 +287,6 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`). Architectural
   env-backed credential helper, never argv; the helper config propagates to submodule
   child fetches during cache clone/refresh via `GIT_CONFIG_PARAMETERS`, the token only
   via the inherited env var.
-- **Capability surface.** The root→root probe is cached per workspaces root by the
-  shared aggregate cache (`workspace_aggregates`) and delivered two ways: as the
-  `Workspace.cowSupported` enrichment on the `workspace.list`/`workspace.get` read
-  paths (PROTOCOL §5.1), and workspace-independently via the `system.capabilities`
-  router method (protocol 2.3) — `{ cowSupported?: boolean }`, present when the
-  probe ran, omitted otherwise. The FE gates the `workspace.cowIsolation` settings
-  toggle on the capability RPC, so the toggle works with no workspace loaded;
-  workspace payload consumers (e.g. isolation-mode resolution) still read the
-  per-workspace aggregate.
 - **Deletion.** `workspace.delete` first closes data-producer admission for the
   target workspace, waits for already admitted operations, and stops its runtime
   writers. Store cleanup removes one session at a time and sweeps histories and
@@ -1289,13 +1260,11 @@ prefer the highest rung that fits:
    never hydrates or decodes transcript bodies (#958).
 2. **Cached with invalidation.** Compute off the hot path and serve from a
    shared cache with explicit invalidation or a TTL. Embodiments: the
-   `workspace_aggregates` cache (`intent-services/src/workspace_aggregates.rs`
-   — lifetime-cached CoW probe, single-flight, per-call budget), the
    `agent.list` projection cache (`agent_list_cache.rs` — event-driven
    invalidation on transcript writes, epoch-guarded against stale in-flight
    loads), and the disk-usage cache (`disk_usage.rs` — ~60 s TTL,
    stale-while-revalidate: an expired entry is served immediately while a
-   single-flight background walk refreshes it).
+   single-flight background walk, guarded by `single_flight.rs`, refreshes it).
 3. **On-demand RPC.** If a field cannot be made cheap, it does not belong on
    a list payload: give it its own method the client calls when it actually
    needs the value. Embodiment: `diffSummary` was removed from workspace
@@ -1306,8 +1275,8 @@ Two corollaries:
 
 - **Degrade by omission, never by blocking.** When a cached aggregate is
   cold or over budget, the read omits the optional field and lets a detached
-  task backfill the cache for the next poll (`cowSupported`'s 1.5 s budget,
-  disk usage's first-poll omission) — a hot RPC never waits out a probe or a
+  task backfill the cache for the next poll (disk usage's
+  first-poll omission) — a hot RPC never waits out a probe or a
   filesystem walk.
 - **Window before materializing.** Pagination selects and decodes only the
   requested page inside SQLite (`get_agent_messages_page`; the preview

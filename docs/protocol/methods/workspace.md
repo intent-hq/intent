@@ -262,8 +262,8 @@ required because the clone no longer shares `repositoryPath`, leaving owner/name
 `crossWorkspace.*` sibling link. Otherwise (no `origin`, a non-GitHub or different
 `origin`, a row without GitHub identity, or a base ref — named or the default branch —
 that resolves locally but has no `refs/remotes/origin/<ref>`, which a clone would lack)
-the params carry `repositoryPath` and Apply provisions a linked worktree (or a CoW copy
-under `workspace.cowIsolation`); the local-only base ref case adds a preview warning
+the params carry `repositoryPath` and Apply provisions a linked worktree; the
+local-only base ref case adds a preview warning
 naming the ref. Unpushed local work is never carried into a cache-hydrated clone.
 
 The result is the existing `workspace-create` proposal resource with
@@ -477,80 +477,25 @@ same rename: `skipIsolation` is the canonical param (deprecated alias `skipWorkt
 and the persisted column keeps its historical `skip_worktree` name
 (`Workspace.skipWorktree`) — the rename is wire-level only, no migration.
 
-**CoW checkout provisioning (`workspace.create`, new in intentd).** The
-`workspace.cowIsolation` setting (§5.12, boolean, default `false`) selects the checkout
-mode, persisted on the returned `Workspace` as `checkoutMode`
-(`"worktree" | "cow" | "direct"`; omitted whenever provisioning was skipped per the
-conditions above — see the cache-hydration and new-repository notes below for the
-`"direct"` producers). Off ⇒ the
-linked-worktree behavior above (`checkoutMode: "worktree"`). On ⇒ the daemon first
-probes CoW support from the repository directory to `<root>/<workspaceId>`: when
-supported, the checkout is a **standalone copy-on-write clone** of the whole repository
-directory (OS reflink primitives — macOS `clonefile(2)` whole-tree fast path with best-effort
-walk fallback, Linux `ioctl(FICLONE)`) instead of a linked worktree, carrying deps/build artifacts
-(`node_modules`, `target`, …) into the checkout for free; inside the clone the workspace
-`branch` is created + checked out from the same `baseRef` resolution order as above,
-tracked files are hard-reset to that base, untracked files are preserved, and the row
-persists `checkoutMode: "cow"`. When the probe reports Unsupported (or errors) — e.g.
-the repository lives on a different volume than the workspaces root, since reflinks
-cannot cross filesystems — the create **falls back to the linked-worktree path**
-(`checkoutMode: "worktree"`, normal worktree provisioning) with a logged warning
-instead of failing: `workspace.cowIsolation` is a preference, not a guarantee. Because
-a CoW checkout is a standalone clone, `workspace.delete`'s git-metadata phase skips the
-worktree-registration prune and the source-repo branch-delete guard (the workspace
-branch lives only inside the clone); the checkout is still renamed to a trash path and
-removed in the background as usual.
+**Checkout modes (`workspace.create`).** The returned `Workspace` persists the
+checkout mode as `checkoutMode` (`"worktree" | "cow" | "direct"`; omitted whenever
+provisioning was skipped per the conditions above). A create from a local repository
+(`repositoryPath`) always provisions the linked worktree above
+(`checkoutMode: "worktree"`). Only the cache-hydration and new-repository paths below
+produce `"cow"` or `"direct"`. Because a `cow` or `direct` checkout is a standalone
+clone, `workspace.delete`'s git-metadata phase skips the worktree-registration prune and
+the source-repo branch-delete guard (the workspace branch lives only inside the clone);
+the checkout is still renamed to a trash path and removed in the background as usual.
 
-**Duplication (`workspace.duplicate`).** Duplicating a local workspace off a local git
-repository provisions a fresh checkout for the copy at `<root>/<newId>/<repo-slug>` on a
-branch named for the new id (uniquified against the source repo's local and
-remote-tracking branches). The decision depends on whether the **source** checkout is
-standalone:
+Protocol 17.0 retired the `workspace.cowIsolation` setting, which made a local-repository
+create a copy-on-write copy of the repository directory, and removed
+`workspace.duplicate` (now `-32601 Method not found`). The daemon strips
+`workspace.cowIsolation` from `config.toml` at boot, deletes its stored setting row and
+ignores it in `settings.update`, so an older app that still writes it gets no error.
+Workspaces created earlier with `checkoutMode: "cow"` keep working unchanged.
 
-- **Standalone source** (the source's own `checkoutMode` is `"cow"` or `"direct"`, which
-  includes every cache-hydrated workspace and an `isNewRepo` `direct` workspace): the
-  duplicate is **always standalone too, and never a linked worktree**. The clone source
-  is the source's **own checkout** (`worktreePath`, or `repositoryPath` when the
-  repository itself is the checkout), not the source's `repositoryPath`. A CoW probe from
-  that checkout to `<root>/<newId>` decides the mode: supported ⇒ CoW clone
-  (`checkoutMode: "cow"`); Unsupported ⇒ a **plain local `git clone`** of the source
-  checkout (`checkoutMode: "direct"`), and the same local-clone fallback is taken — with a
-  logged warning — on a probe error or when a CoW clone still reports Unsupported despite a
-  passing probe. A source checkout whose `.git` is a gitfile skips the probe and goes
-  straight to the local clone (also warned). `workspace.cowIsolation`
-  is **ignored** for standalone sources (parity with cache-hydrated create). Like a
-  hydrated create, the checkout *is* the repository: the duplicate persists
-  `repositoryPath` = its **own** checkout path, so nothing in the row references the source
-  workspace's directory. The `direct` local-clone path additionally **resolves `origin`**
-  (a CoW clone is a byte copy and keeps the source's `.git/config` verbatim): a network URL
-  and an absolute local path carry over as-is, a relative local path is absolutized against
-  the source repository so it still names the same upstream, and the remote is **removed**
-  when the source has no `origin` or when `origin` resolves to the source checkout itself.
-  The local-clone fallback carries **committed state only** —
-  uncommitted/untracked work in the source is not copied. Rationale
-  ([intent-hq/monorepo#1560](https://github.com/intent-hq/monorepo/issues/1560)): a linked
-  worktree rooted in a sibling workspace's checkout is orphaned when that workspace is
-  deleted (the checkout dir is detached), and deleting the duplicate would mutate the
-  source's checkout.
-- **Shared-checkout source** (no `checkoutMode` — a worktree-mode or shared workspace):
-  the **same decision matrix as `workspace.create`** applies against the source's
-  `repositoryPath` — `workspace.cowIsolation` off ⇒ linked worktree
-  (`checkoutMode: "worktree"`); on ⇒ CoW probe from the repository directory to
-  `<root>/<newId>` — supported ⇒ standalone CoW clone (`checkoutMode: "cow"`),
-  Unsupported/probe error ⇒ fall back to a linked worktree with a logged warning.
-
-Provisioning is skipped for remote / skip-isolation sources and when the resolved source
-directory is not a local git repository. An ordinary provisioning failure is logged and
-swallowed (FE parity — "continue without worktree"): the row persists without
-`worktreePath`/`checkoutMode`. For a standalone source the inherited `repositoryPath` is
-also **cleared** in that case, so a checkout-less duplicate never points at the source
-workspace's directory.
-
-**`checkoutMode` is immutable.** `workspace.cowIsolation` is consulted **only** at
-provisioning time (`workspace.create` / `workspace.duplicate`); the resulting
-`checkoutMode` is persisted on the row and never changes for the life of the workspace.
-Toggling the setting later affects only subsequently created workspaces — existing
-checkouts are not converted.
+**`checkoutMode` is immutable.** It is set at provisioning time and never changes for
+the life of the workspace.
 
 **Cache-hydrated creation (`workspace.create`, new in intentd —
 [intent-hq/intentd#944](https://github.com/intent-hq/intentd/pull/944)).** When
@@ -789,8 +734,7 @@ The setup stage additionally publishes the **setup lifecycle events** (§6.5, ad
 be attempted, and exactly one `workspace:setup:completed` fires per logical create on
 every terminal path of the setup stage — script ran to exit (`ranScript: true` +
 `exitCode`), spawn/pre-spawn failure (`ranScript: false`), no effective script,
-`skipIsolation`/no worktree, and `workspace.duplicate` (immediate
-`completed { ranScript: false }`). Idempotent replays publish nothing (same as
+and `skipIsolation`/no worktree. Idempotent replays publish nothing (same as
 `workspace:created`). The daemon's own file watcher keys off the completion: a created
 workspace's watcher registration (file watcher, git-metadata watcher,
 skills/specialists) is **deferred** until `workspace:setup:completed` is observed for
@@ -1417,7 +1361,7 @@ string enum — `"Active" | "Inactive" | "Archived" | "Retired" | "Deleted"` (sr
 the wire and as the stored DB word (matching the `PullRequestStatus` precedent). Optional
 `Workspace` fields (`statusMessage`, `statusImageAssetId`, `label`, `autoArchiveDisabled`, `plainFolder`, `baseRef`, `prUrl`, `prNumber`,
 `prStatus`, `activePullRequest`, `pullRequests`, `pullRequestsTotal` (list rows only, see
-**List-row slimming** below), `contextLinks`, `archivedAt`, `retiredAt`, `cowSupported`,
+**List-row slimming** below), `contextLinks`, `archivedAt`, `retiredAt`,
 `checkoutMode`, repository/worktree fields, …) are
 **omitted when absent**
 (`skip_serializing_if`) rather than emitted as `null`, so clients see only populated keys.
@@ -1438,8 +1382,7 @@ the pre-side-effect invariant above) rejects `-32602` on: more than
 (`contextLinks[i].field`). Write-once at create: `workspace.update` does not accept the
 field, and the daemon never mutates it after insert. An empty list (and every workspace
 created without the param) persists as absent, so the wire shape **omits** the field
-(never `null` / `[]`); `workspace.duplicate` deliberately does not copy the source's
-links (they describe the original creation context).
+(never `null` / `[]`).
 
 **PR-aware create (pr-kind `contextLinks`, new in intentd,
 [intent-hq/intentd#1606](https://github.com/intent-hq/intentd/pull/1606)).** When the
@@ -1502,24 +1445,11 @@ or empty string folds to a clear, and the delta carries the `null` clear signal)
 `workspace:updated { changes }` delta (§6.5) preserves the distinction, and the field is
 omitted from `Workspace` payloads until an agent sets one.
 
-**`cowSupported` / `checkoutMode` (new in intentd).** `cowSupported` is a BE-derived
-machine-capability flag: a cached CoW-reflink probe of the **workspaces root**
-filesystem (the probe creates a missing root rather than omitting), filled by the
-aggregate-enrichment step on the `workspace.list` / `workspace.get` read paths —
-`true` / `false` for a supported/unsupported filesystem, omitted when the probe cannot
-run or exceeds the per-call budget (write-path responses such as `workspace.create` /
-`update` / `archive` build the row without this enrichment, so clients read it off the
-list/get poll). It reports the machine's capability independent of how the specific
-workspace was provisioned; the FE gates the `workspace.cowIsolation` opt-in toggle
-(§5.12) on it. **Caveat — root-scoped, not repo-scoped:** provisioning probes from the
-*repository directory* into the workspaces root (§5.1), so a repository on a different
-filesystem than the workspaces root (reflinks cannot cross filesystems) can still land
-`workspace.create` on the worktree-fallback path (`checkoutMode: "worktree"`, §5.1)
-even when `cowSupported` is `true`; `cowSupported` is a toggle-gating advisory, not a
-per-repository guarantee.
-`checkoutMode` (`"worktree" | "cow" | "direct"`, lowercase on the wire) records how
-`workspace.create` provisioned this workspace's checkout (§5.1): `"worktree"` a linked
-worktree, `"cow"` a standalone copy-on-write clone, `"direct"` a standalone plain local
+**`checkoutMode` (new in intentd).** `checkoutMode` (`"worktree" | "cow" | "direct"`,
+lowercase on the wire) records how `workspace.create` provisioned this workspace's checkout
+(§5.1): `"worktree"` a linked worktree, `"cow"` a standalone copy-on-write clone of the
+repo cache (or, for a workspace created before protocol 17.0, of a local repository),
+`"direct"` a standalone plain local
 clone (the cache-hydration fallback when CoW is unsupported) or an `isNewRepo`
 initialization working in the repository folder itself. It is omitted for rows
 without a daemon-provisioned checkout (skip-isolation, remote, caller-supplied
@@ -1539,9 +1469,8 @@ of the workspace's oldest claimed tab, else the connected client that most recen
 else the first-connected eligible client). The pin is a persisted row column written by
 `workspace.setBrowserClient`: a general `workspace.update` never touches it, and the
 `workspace:updated { changes }` delta the setter emits carries `browserClientId` as the
-committed string or an explicit `null` for a clear (§6.5). The pin is **daemon-local**: a
-`workspace.duplicate` copy starts unpinned, and although the transfer export carries the
-column, `workspace.import.commit` nulls it — a `clientId` names a client of the source
+committed string or an explicit `null` for a clear (§6.5). The pin is **daemon-local**: although the
+transfer export carries the column, `workspace.import.commit` nulls it — a `clientId` names a client of the source
 daemon (the `client` table never transfers), so an imported workspace starts unpinned too.
 Reading the pin **together with** the live resolution is `workspace.getBrowserClient`; the
 candidates a picker offers are `client.list` (§5.17). The virtual Chief workspace cannot be
@@ -2954,13 +2883,11 @@ not relax the client guard against accidental non-git creates.
   `-32602 { code: "retire-unsupported", plainFolder: true }` and the message
   `workspace.retire is not available in plain-folder workspaces`; nothing changes. The
   automatic purge skips plain-folder workspaces.
-- `workspace.duplicate` is refused with the plain-folder error below.
 
 **Plain-folder error.** An operation that needs git or a forge, called for a plain-folder
 workspace, fails with `-32602 { code: "plain-folder-unsupported", operation }` and the
 message `<operation> is not available in plain-folder workspaces`; nothing changes.
-`operation` names the refused method or binding. It applies to `workspace.duplicate` and
-to the agent MCP bindings `ws.git.*`, `ws.pr.*`, `ws.mr.*` and
+`operation` names the refused method or binding. It applies to the agent MCP bindings `ws.git.*`, `ws.pr.*`, `ws.mr.*` and
 `ws.workspace.proposeSibling`, which are also left out of the `workspace_api` tool
 description and `ws.help` output in these workspaces.
 
