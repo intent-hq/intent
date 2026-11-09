@@ -269,13 +269,13 @@ jobs:
           INTENT_SCCACHE_ENDPOINT: ${{ vars.INTENT_SCCACHE_ENDPOINT }}
           INTENT_SCCACHE_TOKEN: ${{ secrets.INTENT_SCCACHE_TOKEN }}
           INTENT_SCCACHE_MODE: ${{ vars.INTENT_SCCACHE_MODE }}
-        run: python3 scripts/setup-sccache.py
+        run: python3 packages/intentd/scripts/setup-sccache.py
       - name: Build intentd
         working-directory: packages/intentd
         env:
           CARGO_TERM_PROGRESS_WHEN: never
         run: |
-          # setup-sccache.py compiles uncached when the server cannot start;
+          # setup-sccache.py compiles uncached when sccache is unavailable;
           # this smoke measures the cache, so that is a failure here.
           if [ -z "${RUSTC_WRAPPER:-}" ]; then
             echo "::error::The compiler cache is not configured (see the setup step's warning)."

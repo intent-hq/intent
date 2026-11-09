@@ -280,6 +280,9 @@ jobs:
           fi
           corepack enable
 
+      # The monorepo keeps no copy of this script (an intentd caller runs its PR
+      # head's), so a download outage compiles uncached instead of ejecting
+      # the PR; scripts/test_setup_sccache.py pins that contract.
       - name: Configure the self-hosted compiler cache
         if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'
         shell: bash
@@ -287,7 +290,7 @@ jobs:
           INTENT_SCCACHE_ENDPOINT: ${{ vars.INTENT_SCCACHE_ENDPOINT }}
           INTENT_SCCACHE_TOKEN: ${{ secrets.INTENT_SCCACHE_TOKEN }}
           INTENT_SCCACHE_MODE: ${{ vars.INTENT_SCCACHE_MODE }}
-        run: python3 scripts/setup-sccache.py
+        run: python3 packages/intentd/scripts/setup-sccache.py
       - name: Install the selected renderer dependencies
         if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'
         working-directory: packages/cloudlands-fe

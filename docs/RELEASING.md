@@ -1164,14 +1164,18 @@ of a run's jobs on that platform must fit the merge-queue timeout.
 
 Rust compiler caching uses the self-hosted sccache WebDAV cache
 ([runbook](SCCACHE_SERVER.md)) when the organization Actions variable
-`INTENT_SCCACHE_ENDPOINT` (an `https://` URL) is set. `scripts/setup-sccache.py`
-installs checksum-verified sccache directly (no Rust cache actions remain), then
+`INTENT_SCCACHE_ENDPOINT` (an `https://` URL) is set.
+`packages/intentd/scripts/setup-sccache.py` (the monorepo keeps no copy; its workflows
+run it from the intentd checkout) installs checksum-verified sccache directly (no Rust cache actions remain), then
 uses the `INTENT_SCCACHE_TOKEN` secret and the optional `INTENT_SCCACHE_MODE`
 variable (`READ_WRITE` by default, or `READ_ONLY`), overwriting any
 `SCCACHE_WEBDAV_*` values the runner already carries. Every run that receives
 secrets (main, releases, the cache producer and same-repo pull requests) writes.
 Without the variable, or when the token is empty as in fork pull requests,
-compilation is uncached. Compiler hit statistics, rather than a restored Actions
+compilation is uncached. When the sccache download still fails after its
+retries (a GitHub 5xx or network outage), or the job's server cannot start, the
+script exports `INTENT_SCCACHE_DISABLED=1` and the job compiles uncached instead
+of failing. Compiler hit statistics, rather than a restored Actions
 archive, are the evidence of reuse. The job log names the chosen backend and
 mode, never the token. Reusable workflows such as `consumer-checks.yml` accept
 `INTENT_SCCACHE_TOKEN` as an optional secret. Local build configuration is in
