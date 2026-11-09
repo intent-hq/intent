@@ -86,8 +86,9 @@ whole, with `nextToken: null`.
   without its body: the field is removed and replaced with `<field>Omitted: true`
   and `<field>Bytes` (UTF-8 length). The body field is `behaviorPrompt` (and
   `prompt`) for `specialist.list`, `content` for `rules.list`, and `description`
-  for `skill.list`. Read a specialist body with `specialist.get`; a rule file at
-  its `path`.
+  for `skill.list`. An oversized `specialist.list` row also drops its `bundled`
+  baseline and sets `bundledOmitted: true`. Read a specialist body with
+  `specialist.get`; a rule file at its `path`.
 - **Clients** — follow `nextToken` until it is `null` (send `limit` on
   `skill.list`). A daemon that does not advertise bounded reads ignores both params and returns
   the whole catalog without a token, so the same loop works against both. Older
@@ -137,7 +138,8 @@ never resurrects shipped bundles the operator excluded.
   modelOptions?: [{ model, hint, reasoningEffort? }], teamAgents?: [string],
   aliases?: [string], importedFrom?: "claude-code", unsupportedFields?: [string],
   requiredSkills?: [string], missingSkills?: [string],
-  source: "project"|"user"|"bundled", path?, resolvedModel?, resolvedProvider? }`. The optional
+  source: "project"|"user"|"bundled", path?, resolvedModel?, resolvedProvider?,
+  bundled?: SpecialistBaseline, bundledOmitted?: true }`. The optional
   scalars (`codingAgent`, `model`, `reasoningEffort`, `roleReminder`, `agentType`, `role`,
   `icon`) are first-class **string** fields on the wire, not
   frontmatter-only: `list`/`get` emit each one when its resolved value is non-empty, and
@@ -145,6 +147,16 @@ never resurrects shipped bundles the operator excluded.
   `list`/`get`, `source` is the **winning** tier and `path?` the file it resolved from (omitted
   for `bundled`); on `create`/`edit` the body carries the authored fields and `scope` chooses the
   target tier.
+- **`bundled?` baseline (additive)** — `SpecialistBaseline` is `{ name, description,
+  behaviorPrompt, roleReminder?, reasoningEffort?, modelOptions? }`: the resolved
+  **base-tier** (`bundled`) definition of the same id, read from the embedded bundle and
+  bundled directory, or from the replacement directory in replacement mode. `specialist.list`
+  and `specialist.get` emit it on a `user` or `project` Intent definition whose id also
+  resolves in the base tier, so a client can tell whether an override still matches its
+  built-in without its own copy of the bundle. It never carries `model` or `codingAgent`;
+  the optional fields are omitted when empty, as on `SpecialistDef`. It is absent on
+  `bundled` rows, Claude imports, and ids with no base definition. `create`/`edit` ignore it.
+  The Assistant's `ws.app.specialists.list`/`get` omit it.
 - **Claude agent discovery (additive)** — user agents in `~/.claude/agents/` and
   project agents in `<workspace>/.claude/agents/` are available as read-only
   specialist definitions. A non-empty `CLAUDE_CONFIG_DIR` in the daemon's environment
