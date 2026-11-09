@@ -888,13 +888,13 @@ returns it.
 
 ##### Commit identity for remote agents
 
-Every remote agent, sub-agents included, commits with the identity an agent on
-the backend would use: the `user.name` and `user.email` the backend resolves
-for the workspace's checkout at each start
+Every remote agent, sub-agents included, commits with the `user.name` and
+`user.email` the backend's git config resolves for the workspace's checkout at
+each launch
 ([commit identity](../node-link.md#commit-identity)). The machine sets them as
 `GIT_AUTHOR_*` and `GIT_COMMITTER_*` in the agent's environment only. When the
-backend resolves no identity, nothing is set and a commit fails as it would
-for a local agent. No method, setting or result member is added, and a machine
+backend resolves no identity, nothing is set, and a commit fails or falls back
+to the machine's own git identity. No method, setting or result member is added, and a machine
 from before starts its agents as before.
 
 ##### Cloud machines (E2B)

@@ -3487,14 +3487,15 @@ interface ProfileEnvOverlay {
 
 ### Commit identity
 
-A remote agent commits as an agent on the backend would. At every start the
-backend resolves the commit identity of the workspace's checkout with the
-config chain a local agent's spawn uses (worktree, repository, `includeIf`,
-global, then system `user.name` and `user.email`) and sends it in
+A remote agent commits with the identity the backend's git config gives the
+workspace. For every `launch` it sends, the backend resolves `user.name` and
+`user.email` for the workspace's checkout with the config chain a local
+agent's spawn uses (repository, `includeIf`, global and system config; the
+backend daemon's own environment is not consulted) and sends them in
 `launch.gitIdentity`:
 
 ```ts
-interface GitIdentity { // closed body
+interface GitIdentity { // closed body: a new member needs a nodeProtocol
   name: string;  // user.name, not empty
   email: string; // user.email, not empty
 }
@@ -3502,8 +3503,10 @@ interface GitIdentity { // closed body
 
 - **Every agent.** Top-level agents and sub-agents (shared checkout or not)
   get it. It is not a secret and needs no gate.
-- **Freshness.** It is resolved again at every start; nothing is cached, so a
-  config change reaches the next start.
+- **Freshness.** It is resolved again for every `launch` (a model switch
+  sends a new one); nothing is cached on the backend, so a config change
+  reaches the next launch. A restart on the machine without a new `launch`
+  keeps the identity of the launch it restarts.
 - **Absent.** When either value does not resolve, the backend sends no
   `gitIdentity`. The machine then sets nothing, and a commit fails or falls
   back the same way a local agent's would.
