@@ -82,9 +82,9 @@ When it reports a metadata-only diff, CI skips these jobs:
   `release-scripts`. The tag's release workflow still builds every target.
 
 CI Gate accepts a skip only when the classifier succeeded and reported a
-metadata-only diff; a classifier failure falls back to full CI. The parent
-commit already passed these jobs, and the diff adds only release metadata.
-Every merge-queue run and every other PR or push still runs them.
+metadata-only diff; a classifier failure falls back to full CI. The diff adds
+only release metadata to a commit that CI already validated. No other PR, push
+or merge-queue run skips a job because of the classifier.
 Without this, each release-plz refresh needed about 8 minutes plus 14 minutes of
 CI. Main merged about every 15 minutes, so the v0.11.9 release PR (intentd#2493,
 2026-10-19) went through 13 CI runs over 4 hours and was never green on current
