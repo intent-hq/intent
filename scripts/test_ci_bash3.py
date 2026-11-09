@@ -40,6 +40,11 @@ class Bash3(unittest.TestCase):
         # as a local run does (intent PR 8497 ran it by hand).
         selector_suite = 'REQUIRE_BASH3=1 bash scripts/changed-script-tests.test.sh'
         self.assertIn(selector_suite, [line.strip() for line in job.splitlines()])
+        # `make runner-rollout` runs on operators' Macs; the shell-tests job has
+        # no Bash 3.2, so only this job runs the rollout's Bash 3.2 test.
+        rollout_suite = ('REQUIRE_BASH3=1 python3 -S -B infra/runners/test_runners.py -v '
+                         'Rollout.test_rollout_runs_under_bash_3')
+        self.assertIn(rollout_suite, [line.strip() for line in job.splitlines()])
 
     def test_download_mismatch_prevents_execution(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -46,8 +46,22 @@ MEMINFO_64G = 'MemTotal:       63370000 kB\nMemFree:        1000 kB\n'
 PAT = 'github_pat_' + 'p' * 40
 JIT = 'jit' + 'j' * 60
 APP_TOKEN = 'ghs_' + 'a' * 36
-BASH3 = next((b for b in (os.environ.get('BASH3_BIN'), str(Path.home() / '.cache/intent-bash3/bash'))
-              if b and os.access(b, os.X_OK)), None)
+
+
+def find_bash3():
+    """BASH3_BIN, then the `make bash3` cache (scripts/find-bash3.sh's first two), if it is Bash 3."""
+    cache = os.environ.get('BASH3_CACHE_DIR') or str(
+        Path(os.environ.get('XDG_CACHE_HOME') or Path.home() / '.cache') / 'intent-bash3')
+    for candidate in (os.environ.get('BASH3_BIN'), str(Path(cache) / 'bash')):
+        if candidate and os.access(candidate, os.X_OK) and subprocess.run(
+                [candidate, '-c', '[ "${BASH_VERSINFO[0]}" -eq 3 ]'], capture_output=True).returncode == 0:
+            return candidate
+    return None
+
+
+BASH3 = find_bash3()
+# CI's shell-tests-bash3 job sets it: no Bash 3.2 there is a failure, not a skip.
+REQUIRE_BASH3 = bool(os.environ.get('REQUIRE_BASH3'))
 HAVE_TOOLS = all(shutil.which(t) for t in ('bash', 'jq', 'openssl'))
 
 # The Python stubs run isolated (-I): nothing on PYTHONPATH, such as an APM
@@ -2201,9 +2215,12 @@ class Rollout(Stubbed):
         self.assertEqual(rc, 0, err)
         self.assertEqual(self.steps(), [(h, s) for h in self.fleet for s in ('copy', 'install', 'restart')])
 
-    @unittest.skipUnless(BASH3, 'needs Bash 3.2 (make bash3, or BASH3_BIN)')
     def test_rollout_runs_under_bash_3(self):
         # Operators run it from their own machine; stock macOS has Bash 3.2.
+        if not BASH3:
+            if REQUIRE_BASH3:
+                self.fail('no Bash 3 interpreter found and REQUIRE_BASH3 is set (make bash3, or BASH3_BIN)')
+            self.skipTest('needs Bash 3.2 (make bash3, or BASH3_BIN)')
         rc, out, err = self.rollout(bash=BASH3)
         self.assertEqual(rc, 0, err)
         self.assertEqual(len(self.steps()), 3 * len(self.fleet))
@@ -2212,6 +2229,26 @@ class Rollout(Stubbed):
         self.assertNotEqual(rc, 0)
         self.assertIn('rollout.sh intent-ci1', err)
         self.assertNotIn('unbound', err)
+
+    def run_bash3_test(self, **env):
+        # The lookup runs at import, so a fresh interpreter sees this environment.
+        return subprocess.run([sys.executable, '-S', '-B', str(HERE / 'test_runners.py'), '-j1',
+                               'Rollout.test_rollout_runs_under_bash_3'],
+                              capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                              env={**os.environ, 'HOME': str(self.dir), 'XDG_CACHE_HOME': str(self.dir / 'cache'),
+                                   'BASH3_CACHE_DIR': str(self.dir / 'no-bash3'), **env})
+
+    def test_bash_3_test_fails_instead_of_skipping_when_required(self):
+        not_bash3 = self.bin / 'not-bash3'
+        write_exe(not_bash3, '#!/bin/sh\nexit 1\n')
+        for bash3_bin in ('', str(not_bash3)):
+            with self.subTest(BASH3_BIN=bash3_bin):
+                result = self.run_bash3_test(BASH3_BIN=bash3_bin, REQUIRE_BASH3='')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('skipped=1', result.stderr)
+                result = self.run_bash3_test(BASH3_BIN=bash3_bin, REQUIRE_BASH3='1')
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertIn('REQUIRE_BASH3 is set', result.stderr)
 
     def test_rollout_takes_a_host_list_in_its_order(self):
         rc, out, err = self.rollout('intent-ci3', 'intent-cache')
