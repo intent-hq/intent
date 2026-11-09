@@ -15,6 +15,7 @@ paragraph elsewhere under `docs/protocol/` that documents a binding must agree w
 
 ```text
 ws.help(namespace?) → string
+ws.search(query, { in?, agentId?, role?, limit? }?) → { notes?, messages?, truncated? }
 ```
 
 ### ws.agent
