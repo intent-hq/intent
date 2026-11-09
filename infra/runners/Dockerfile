@@ -119,7 +119,7 @@ RUN set -eu; \
       version="${entry%%=*}"; dir="$RUNNER_TOOL_CACHE/node/$version/x64"; \
       curl -fsSL --retry 3 --retry-all-errors -o /tmp/node.txz "https://nodejs.org/dist/v$version/node-v$version-linux-x64.tar.xz"; \
       echo "${entry#*=}  /tmp/node.txz" | sha256sum -c -; \
-      mkdir -p "$dir" && tar xJf /tmp/node.txz -C "$dir" --strip-components=1 && touch "$dir.complete"; \
+      mkdir -p "$dir"; tar xJf /tmp/node.txz -C "$dir" --strip-components=1; touch "$dir.complete"; \
       rm /tmp/node.txz; \
     done
 
