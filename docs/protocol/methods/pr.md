@@ -455,7 +455,8 @@ fields from an old baseline must not invent a cleared requirement. The monitor
 compares the last known `branchUpdateRequired`: GitHub reports it unknown while
 it recomputes after the base moves, so a known→unknown transition is silent and
 a value that becomes known again reports only when it differs from the last known
-one ([intent-hq/intent#8843](https://github.com/intent-hq/intent/pull/8843) took
+one. A value never known before still reports as `forge branch-update requirement
+available: …` ([intent-hq/intent#8843](https://github.com/intent-hq/intent/pull/8843) took
 two empty wakes per blip).
 
 **Revision identity and reads.** GitHub supplies the live base tip through
