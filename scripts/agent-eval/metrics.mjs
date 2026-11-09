@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import zlib from 'node:zlib';
 
 import { addScores, scoreTranscript } from './lib/score.mjs';
 
@@ -68,11 +69,27 @@ export async function collect({ db, since, provider }) {
     params.push(`${provider.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
   }
   const stmt = conn.prepare(
-    `SELECT m.agent_id AS agent, s.harness_version AS harness, m.role AS role, m.content AS content
+    `SELECT m.id AS id, m.agent_id AS agent, s.harness_version AS harness, m.role AS role, m.content AS content
        FROM agent_message m JOIN agent_session s ON s.id = m.agent_id
       WHERE ${where.join(' AND ')}
       ORDER BY m.agent_id, m.seq`,
   );
+  const hasPayloads = conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_message_payload'").get();
+  const payloads = hasPayloads
+    ? conn.prepare("SELECT block_ordinal AS ordinal, encoding, body FROM agent_message_payload WHERE message_id = ? AND kind = 'tool_use_input'")
+    : null;
+  const withFullInputs = (id, blocks) => {
+    if (!payloads || !blocks.some((b) => b?.type === 'tool_use')) return blocks;
+    for (const p of payloads.all(id)) {
+      const block = blocks[p.ordinal];
+      if (block?.type !== 'tool_use') continue;
+      try {
+        const raw = p.encoding === 'zlib' ? zlib.inflateSync(Buffer.from(p.body)) : Buffer.from(p.body);
+        block.input = JSON.parse(raw.toString('utf8'));
+      } catch {}
+    }
+    return blocks;
+  };
   const byHarness = {};
   let agent = null;
   let harness = null;
@@ -91,7 +108,7 @@ export async function collect({ db, since, provider }) {
       harness = row.harness;
       messages = [];
     }
-    messages.push({ role: row.role, blocks: parseBlocks(row.content) });
+    messages.push({ role: row.role, blocks: withFullInputs(row.id, parseBlocks(row.content)) });
   }
   flush();
   conn.close();

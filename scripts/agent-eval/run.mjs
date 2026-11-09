@@ -109,9 +109,16 @@ async function waitDone(rpc, { workspaceId, agentId, sentAt, timeoutMs, pollMs, 
   return { timedOut: true, pending };
 }
 
-async function sessionMessages(rpc, agentId, workspaceId) {
-  const s = (await rpc.call('agent.getSession', { agentId, workspaceId })).session;
-  return { session: s, messages: (s.messages ?? []).map((m) => ({ role: m.role, blocks: m.contentBlocks ?? [] })) };
+/** Whole transcript at full fidelity (getSession serves a slim, bounded page). */
+async function transcript(rpc, agentId, workspaceId) {
+  const pages = [];
+  let nextToken;
+  do {
+    const page = await rpc.call('agent.getConversation', { agentId, workspaceId, limit: 200, ...(nextToken ? { nextToken } : {}) });
+    pages.unshift(page.messages ?? []);
+    nextToken = page.nextToken;
+  } while (nextToken);
+  return pages.flat().map((m) => ({ role: m.role, blocks: m.contentBlocks ?? m.content ?? [] }));
 }
 
 const lastReplyOf = (messages) => {
@@ -125,11 +132,11 @@ async function runTask({ arm, task, run, opts, root }) {
   const started = Date.now();
   const id = `${arm.harness}-${task.id}-${run}`;
   const repo = path.join(root, 'repos', id);
-  fs.mkdirSync(repo, { recursive: true });
-  createFixtureRepo(repo);
   const createWorkspace = async (name) => (await rpc.call('workspace.create', { name, repositoryPath: repo })).workspace;
   const result = { task: task.id, harness: arm.harness, run, pass: false };
   try {
+    fs.mkdirSync(repo, { recursive: true });
+    createFixtureRepo(repo);
     const workspace = await createWorkspace(`eval ${task.id}`);
     const workspaceId = workspace.id;
     await rpc.call('note.update', { noteId: 'spec', workspaceId, content: FIXTURE_SPEC });
@@ -161,14 +168,15 @@ async function runTask({ arm, task, run, opts, root }) {
     let score = scoreTranscript([]);
     const agents = (await rpc.call('agent.list', { workspaceId })).agents ?? [];
     for (const a of agents) {
-      const { session, messages } = await sessionMessages(rpc, a.id, workspaceId);
+      const messages = await transcript(rpc, a.id, workspaceId);
+      const events = toolEvents.get(a.id);
       if (a.id === agent.id) {
-        result.model = session.model ?? opts.model ?? null;
+        result.model = (await rpc.call('agent.get', { agentId: a.id, workspaceId })).agent.model ?? opts.model ?? null;
         ctx.lastReply = lastReplyOf(messages);
         const taskTurn = messages.findIndex((m, i) => i > 0 && m.role === 'user');
-        score = addScores(score, scoreTranscript(taskTurn < 0 ? [] : messages.slice(taskTurn), { toolEvents }));
+        score = addScores(score, scoreTranscript(taskTurn < 0 ? [] : messages.slice(taskTurn), { toolEvents: events }));
       } else {
-        score = addScores(score, scoreTranscript(messages, { toolEvents }));
+        score = addScores(score, scoreTranscript(messages, { toolEvents: events }));
       }
     }
     result.agents = agents.length;
@@ -190,7 +198,7 @@ async function runTask({ arm, task, run, opts, root }) {
 /** Baseline cache for the first harness: dropped when CLI, adapter or model change. */
 function baselineCache(opts, ver) {
   const dir = path.join(EVAL_CACHE, 'baseline', `${opts.provider}-${opts.model ?? 'default'}`);
-  const key = { cli: ver.cli, adapter: ver.adapter, model: opts.model ?? null };
+  const key = { cli: ver.cli, adapter: ver.adapter, model: opts.model ?? null, intentd: ver.intentdSha256 };
   const metaFile = path.join(dir, 'versions.json');
   if (fs.existsSync(metaFile) && JSON.stringify(JSON.parse(fs.readFileSync(metaFile, 'utf8'))) !== JSON.stringify(key)) {
     log(`versions changed since the cached baseline; dropping ${dir}`);
@@ -232,6 +240,7 @@ export async function main(argv = process.argv.slice(2)) {
     fs.writeFileSync(solutions, JSON.stringify(mockSolutions(tasks)));
     Object.assign(extraEnv, { MOCK_AGENT_SCRIPT_PATH: path.join(HERE, 'mock-agent.mjs'), EVAL_MOCK_SOLUTIONS: solutions });
   }
+  if (opts.reuseBaseline && opts.harness[0] === 'current') throw new Error('--reuse-baseline needs a pinned first harness, not "current"');
   const cache = opts.reuseBaseline ? baselineCache(opts, ver) : null;
   const arms = [];
   const results = [];
@@ -239,14 +248,18 @@ export async function main(argv = process.argv.slice(2)) {
   try {
     for (const harness of opts.harness) {
       const daemon = await startDaemon({ bin: opts.bin, root: path.join(root, `daemon-${harness}`), harness, providerEnv, extraEnv });
+      const arm = { harness, daemon, rpc: { close() {} }, toolEvents: new Map() };
+      arms.push(arm);
       const rpc = await connect(daemon.socketPath, { timeoutMs: 120_000 });
-      const toolEvents = new Map();
+      arm.rpc = rpc;
+      const { toolEvents } = arm;
       rpc.onNotification((method, params) => {
         const data = method === 'events.event' && params?.event?.type === 'agent:tool:call' ? params.event.data : null;
-        if (data?.toolCallId) toolEvents.set(data.toolCallId, { status: data.status, output: data.output });
+        if (!data?.toolCallId || !data.agentId) return;
+        if (!toolEvents.has(data.agentId)) toolEvents.set(data.agentId, new Map());
+        toolEvents.get(data.agentId).set(data.toolCallId, { status: data.status, output: data.output });
       });
       await rpc.call('events.subscribe', { eventTypes: ['agent:tool:call'] });
-      arms.push({ harness, daemon, rpc, toolEvents });
     }
     for (let run = 1; run <= opts.n; run++) {
       for (const task of tasks) {

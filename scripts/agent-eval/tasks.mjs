@@ -26,7 +26,8 @@ export function createFixtureRepo(dir) {
   fs.writeFileSync(path.join(dir, 'README.md'), README);
   fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'docs-site', version: '3.14.15', private: true }, null, 2) + '\n');
   fs.writeFileSync(path.join(dir, 'utils', 'format.js'), 'export const format = (s) => s.trim();\n');
-  const git = (...args) => execFileSync('git', ['-C', dir, ...args], { stdio: 'ignore' });
+  const env = { PATH: process.env.PATH, HOME: dir, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  const git = (...args) => execFileSync('git', ['-C', dir, ...args], { stdio: 'ignore', env });
   git('init', '-q', '-b', 'main');
   git('add', '.');
   git('-c', 'user.name=Agent Eval', '-c', 'user.email=agent-eval@example.invalid', 'commit', '-qm', 'Initial fixture');

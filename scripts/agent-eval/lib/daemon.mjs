@@ -28,7 +28,11 @@ export const PROVIDERS = {
       }
     },
     forbidden: ['CLAUDE.md', 'skills', 'plugins', 'agents', 'commands', 'hooks'],
-    settingsKeys: ['hooks', 'mcpServers', 'enabledPlugins'],
+    jsonKeys: {
+      'settings.json': ['hooks', 'mcpServers', 'enabledPlugins'],
+      'settings.local.json': ['hooks', 'mcpServers', 'enabledPlugins'],
+      '.claude.json': ['mcpServers'],
+    },
   },
   codex: {
     configEnv: 'CODEX_HOME',
@@ -39,7 +43,8 @@ export const PROVIDERS = {
       return out !== null && /logged in/i.test(out) && !/not logged in/i.test(out);
     },
     forbidden: ['AGENTS.md', 'skills', 'prompts'],
-    settingsKeys: [],
+    jsonKeys: {},
+    tomlTables: { 'config.toml': ['mcp_servers'] },
   },
   mock: { configEnv: null },
 };
@@ -72,11 +77,7 @@ export function preflightProvider(provider, configDir) {
   if (own.includes(dir)) throw new Error(`${dir} is your own ${provider} config; use a dedicated eval dir`);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const leaks = spec.forbidden.filter((name) => fs.existsSync(path.join(dir, name)));
-  const settingsFile = path.join(dir, 'settings.json');
-  if (fs.existsSync(settingsFile)) {
-    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-    leaks.push(...spec.settingsKeys.filter((k) => settings[k] && Object.keys(settings[k]).length).map((k) => `settings.json:${k}`));
-  }
+  leaks.push(...configLeaks(dir, spec));
   if (leaks.length) throw new Error(`${dir} must hold only the sign-in; remove: ${leaks.join(', ')}`);
   const env = { ...isolatedBaseEnv(fs.mkdtempSync(path.join(os.tmpdir(), 'agent-eval-home-'))), [spec.configEnv]: dir };
   if (!spec.signedIn(env)) {
@@ -85,6 +86,31 @@ export function preflightProvider(provider, configDir) {
     throw err;
   }
   return { env: { [spec.configEnv]: dir }, dir };
+}
+
+/** Non-empty MCP servers, hooks or plugins in the provider's own config files. */
+export function configLeaks(dir, spec) {
+  const leaks = [];
+  for (const [file, keys] of Object.entries(spec.jsonKeys ?? {})) {
+    const full = path.join(dir, file);
+    if (!fs.existsSync(full)) continue;
+    let json;
+    try {
+      json = JSON.parse(fs.readFileSync(full, 'utf8'));
+    } catch {
+      leaks.push(`${file} (unreadable)`);
+      continue;
+    }
+    const scopes = [json, ...Object.values(json.projects ?? {})];
+    for (const k of keys) if (scopes.some((o) => o?.[k] && Object.keys(o[k]).length)) leaks.push(`${file}:${k}`);
+  }
+  for (const [file, tables] of Object.entries(spec.tomlTables ?? {})) {
+    const full = path.join(dir, file);
+    if (!fs.existsSync(full)) continue;
+    const text = fs.readFileSync(full, 'utf8');
+    for (const t of tables) if (new RegExp(`^\\s*\\[\\s*${t}\\b|^\\s*${t}\\s*=|^\\s*${t}\\.`, 'm').test(text)) leaks.push(`${file}:[${t}]`);
+  }
+  return leaks;
 }
 
 export function isolatedBaseEnv(home) {
@@ -154,34 +180,40 @@ export async function startDaemon({ bin, root, harness, providerEnv = {}, extraE
   child.once('exit', (code, signal) => {
     exited = { code, signal };
   });
-  const deadline = Date.now() + 120_000;
-  while (!(await socketAccepts(socketPath))) {
-    if (exited) throw new Error(`intentd exited during startup (${JSON.stringify(exited)}); see ${root}/intentd.log`);
-    if (Date.now() > deadline) throw new Error(`intentd did not open ${socketPath} within 120 s`);
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  // A connection opened before ready is not handed over to the full router, so
-  // each poll uses a fresh one.
-  for (;;) {
-    const rpc = await connect(socketPath, { timeoutMs: 5000 });
-    const status = await rpc.call('system.startupStatus').catch(() => ({ phase: 'preparing' }));
-    rpc.close();
-    if (status.phase === 'ready') break;
-    if (status.phase === 'failed') throw new Error(`intentd startup failed; see ${root}/intentd.log`);
-    if (exited) throw new Error(`intentd exited during startup (${JSON.stringify(exited)}); see ${root}/intentd.log`);
-    if (Date.now() > deadline) throw new Error(`intentd was not ready within 120 s (phase ${status.phase})`);
-    await new Promise((r) => setTimeout(r, Math.min(status.retryAfterMs ?? 500, 1000)));
+  const kill = async () => {
+    if (exited) return;
+    const done = new Promise((r) => child.once('exit', r));
+    child.kill('SIGTERM');
+    const timer = setTimeout(() => child.kill('SIGKILL'), 15_000);
+    await done;
+    clearTimeout(timer);
+  };
+  try {
+    const deadline = Date.now() + 120_000;
+    while (!(await socketAccepts(socketPath))) {
+      if (exited) throw new Error(`intentd exited during startup (${JSON.stringify(exited)}); see ${root}/intentd.log`);
+      if (Date.now() > deadline) throw new Error(`intentd did not open ${socketPath} within 120 s`);
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    // A connection opened before ready is not handed over to the full router, so
+    // each poll uses a fresh one.
+    for (;;) {
+      const rpc = await connect(socketPath, { timeoutMs: 5000 });
+      const status = await rpc.call('system.startupStatus').catch(() => ({ phase: 'preparing' }));
+      rpc.close();
+      if (status.phase === 'ready') break;
+      if (status.phase === 'failed') throw new Error(`intentd startup failed; see ${root}/intentd.log`);
+      if (exited) throw new Error(`intentd exited during startup (${JSON.stringify(exited)}); see ${root}/intentd.log`);
+      if (Date.now() > deadline) throw new Error(`intentd was not ready within 120 s (phase ${status.phase})`);
+      await new Promise((r) => setTimeout(r, Math.min(status.retryAfterMs ?? 500, 1000)));
+    }
+  } catch (error) {
+    await kill();
+    throw error;
   }
   return {
     socketPath,
     dirs,
-    async stop() {
-      if (exited) return;
-      const done = new Promise((r) => child.once('exit', r));
-      child.kill('SIGTERM');
-      const timer = setTimeout(() => child.kill('SIGKILL'), 15_000);
-      await done;
-      clearTimeout(timer);
-    },
+    stop: kill,
   };
 }

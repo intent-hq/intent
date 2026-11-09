@@ -49,3 +49,25 @@ test('--since and --provider narrow the sessions', async () => {
   assert.deepEqual(Object.keys(await collect({ db, since: '2026-11-05' })), ['3.10']);
   assert.deepEqual(Object.keys(await collect({ db, provider: 'codex' })), ['3.9']);
 });
+
+test('full tool inputs come from agent_message_payload when the inline copy is a preview', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const zlib = await import('node:zlib');
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'agent-eval-metrics-')), 'intentd.db');
+  const db = new DatabaseSync(file);
+  db.exec(`
+    CREATE TABLE agent_session (id TEXT PRIMARY KEY, provider TEXT, harness_version TEXT NOT NULL DEFAULT '1.0');
+    CREATE TABLE agent_message (id TEXT PRIMARY KEY, agent_id TEXT, seq INTEGER, role TEXT, content TEXT, created_at TEXT);
+    CREATE TABLE agent_message_payload (message_id TEXT, agent_id TEXT, block_ordinal INTEGER, kind TEXT, encoding TEXT, body BLOB);
+  `);
+  db.prepare('INSERT INTO agent_session VALUES (?, ?, ?)').run('a', 'codex', '3.10');
+  const msg = db.prepare('INSERT INTO agent_message VALUES (?, ?, ?, ?, ?, ?)');
+  msg.run('u', 'a', 1, 'user', JSON.stringify([{ type: 'text', text: 'go' }]), '2026-11-08T00:00:00Z');
+  const preview = { type: 'tool_use', name: 'workspace_api', toolCallId: 't', input: { code: 'const x = 1; // …' }, metadata: { status: 'completed' } };
+  msg.run('m', 'a', 2, 'assistant', JSON.stringify([{ type: 'text', text: 'hi' }, preview]), '2026-11-08T00:00:00Z');
+  const full = zlib.deflateSync(Buffer.from(JSON.stringify({ code: 'const x = 1; await ws.help("pr"); await ws.help("hook")' })));
+  db.prepare("INSERT INTO agent_message_payload VALUES ('m', 'a', 1, 'tool_use_input', 'zlib', ?)").run(full);
+  db.close();
+  const by = await collect({ db: file });
+  assert.equal(by['3.10'].helpCalls, 2);
+});
