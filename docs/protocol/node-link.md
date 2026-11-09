@@ -3347,6 +3347,7 @@ interface FilePullPiece {             // also the answer of file.pullData
   data: string;                       // base64 of the piece's bytes, at most 4 MiB
   sha256?: string;                    // at offset 0: lowercase hex of the whole snapshot
   transferId: string;                 // names the snapshot
+  skipped?: number;                   // a directory at offset 0: entries left out of the archive
 }
 ```
 

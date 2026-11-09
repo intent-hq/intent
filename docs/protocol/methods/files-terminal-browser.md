@@ -981,7 +981,8 @@ size and the limit, and copies nothing. The same 200 MiB cap applies to
 **Result.** `path` is the destination relative to the caller's checkout, `kind`
 is `"file"` or `"directory"`, `size` and `sha256` are the snapshot's, `files` is
 the number of regular files written (1 for a file), and `skipped` is the number of
-folder entries left out (0 for a file). Pulled files are neither committed nor
+folder entries left out (0 for a file), which the source reports in the first
+piece. Pulled files are neither committed nor
 git-ignored: the caller decides what to do with them.
 
 **Errors.** Every error is `-32602`, and its message starts with a code, so

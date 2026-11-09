@@ -515,7 +515,7 @@ interface PullDataArgs {
   offset: number;       // byte offset of the piece; 0 for the first piece
   length: number;       // 1 to 4194304
 }
-// answer: FilePullPiece ({ kind, size, offset, data, sha256?, transferId }),
+// answer: FilePullPiece ({ kind, size, offset, data, sha256?, transferId, skipped? }),
 // the same shape as checkoutReadReply.piece
 ```
 
