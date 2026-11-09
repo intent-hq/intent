@@ -256,8 +256,10 @@ hosted runners, so `actions/setup-python` with `python-version: '3.11'` or
 `'3.12'` uses them and downloads nothing. Without them every job downloaded
 Python from a GitHub release, and a 504 there failed the job
 ([cloudlands-fe run 42578945801](https://github.com/intent-hq/cloudlands-fe/actions/runs/42578945801)).
-`test_runners.py` fails when a workflow in any of the three repositories asks
-`setup-python` for a minor the image does not bake; add it as `PYTHON_<major>_<minor>_*`
+`test_runners.py` fails when a workflow asks `setup-python` for a minor the
+image does not bake. It reads the monorepo's workflows and those of every
+checked-out submodule; monorepo CI checks out no submodules, so run it in a
+full checkout when intentd or cloudlands-fe adds a version. Add a missing minor as `PYTHON_<major>_<minor>_*`
 `ARG`s (version and build number from the release tag `<version>-<build>`,
 SHA-256 from the asset's `digest` in
 `gh api repos/actions/python-versions/releases/tags/<tag>`) and to the smoke
@@ -266,8 +268,9 @@ workflow's list.
 Node sits in the tool cache too (`/opt/hostedtoolcache/node/<version>/x64`):
 `NODE_VERSION` (on `PATH` as `/opt/node`) and each `<version>=<SHA-256>` in
 `NODE_TOOLCACHE` (22.23.4, and 24.21.0 for intentd's exact pin), so
-`actions/setup-node` finds every version the workflows ask for. The same test
-fails when a workflow asks `setup-node` for a version none of them satisfies;
+`actions/setup-node` finds every version the workflows ask for. The same test,
+with the same submodule caveat, fails when a workflow asks `setup-node` for a
+version none of them satisfies;
 add it to `NODE_TOOLCACHE` with the checksum from the release's
 `SHASUMS256.txt` on nodejs.org, and to the smoke workflow's list.
 
