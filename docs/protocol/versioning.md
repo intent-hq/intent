@@ -180,6 +180,13 @@ refusing these frames, and a newer machine on an older backend gets the backend'
 `remote-agent-unsupported:` refusal. Clients need no change.
 
 
+**Prepared Planner specialist (no method-catalog change).**
+Harness 3.9 adds the bundled `planner` specialist (standard role, `icon: "coordinator"`,
+no pinned model) to the current catalog. It writes a critiqued spec in the `spec` note
+and hands it to a top-level `developer`. Older harness bundles are unchanged. Clients
+that predate it show it from the daemon catalog; the frontend fallback copy must stay
+byte-identical to the daemon file.
+
 **Prepared specialist simplification (no method-catalog change).**
 Harness 3.8 removes the built-in Coordinator/Lead (`spec-writer`), Implementor,
 and Verifier from the current catalog. Delegation without a `specialist` creates
