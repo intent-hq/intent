@@ -21,6 +21,18 @@ ARG NODE_VERSION=24.22.0
 ARG NODE_SHA256=cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008
 ARG PWSH_VERSION=7.4.6
 ARG PWSH_SHA256=6f6015203c47806c5cc444c19d8ed019695e610fbd948154264bf9ca8e157561
+# Every minor that workflows pass to setup-python, baked into the tool cache
+# so the action finds it and downloads nothing (see docs/GITHUB_RUNNERS.md,
+# Preinstalled tools). From actions/python-versions: version, release build
+# number, release asset id of the linux-24.04-x64 tarball, and its SHA-256.
+ARG PYTHON_3_11_VERSION=3.11.18
+ARG PYTHON_3_11_BUILD=40260280589
+ARG PYTHON_3_11_ASSET=676813336
+ARG PYTHON_3_11_SHA256=099ef30fc27f0d7067a67be5a5fb7fd66154cfa1e4186c88f71c3a3070c81abc
+ARG PYTHON_3_12_VERSION=3.12.16
+ARG PYTHON_3_12_BUILD=40260402378
+ARG PYTHON_3_12_ASSET=676818387
+ARG PYTHON_3_12_SHA256=dec61ed20cd3e71143f1642ef9966945dea8ae4f3e96b306205a710da4f2191a
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
@@ -81,5 +93,22 @@ RUN curl -fsSL -o /tmp/rustup-init "https://static.rust-lang.org/rustup/archive/
  && /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain "${RUST_TOOLCHAIN}" -c rustfmt -c clippy \
  && rm /tmp/rustup-init \
  && rm -rf /home/runner/.rustup/downloads /home/runner/.rustup/tmp
+
+# The release URL can answer 504 for hours while the API asset URL serves the
+# same file, so fall back to it. setup.sh is the installer setup-python runs.
+RUN set -eu; \
+    install_python() { \
+      url="https://github.com/actions/python-versions/releases/download/$1-$2/python-$1-linux-24.04-x64.tar.gz"; \
+      curl -fsSL --retry 3 --retry-all-errors -o /tmp/python.tgz "$url" \
+        || curl -fsSL --retry 3 --retry-all-errors -H 'Accept: application/octet-stream' -o /tmp/python.tgz \
+             "https://api.github.com/repos/actions/python-versions/releases/assets/$3"; \
+      echo "$4  /tmp/python.tgz" | sha256sum -c -; \
+      mkdir /tmp/python && tar xzf /tmp/python.tgz -C /tmp/python; \
+      (cd /tmp/python && PIP_NO_CACHE_DIR=1 bash ./setup.sh); \
+      rm -rf /tmp/python /tmp/python.tgz; \
+      test -f "$RUNNER_TOOL_CACHE/Python/$1/x64.complete"; \
+    }; \
+    install_python "$PYTHON_3_11_VERSION" "$PYTHON_3_11_BUILD" "$PYTHON_3_11_ASSET" "$PYTHON_3_11_SHA256"; \
+    install_python "$PYTHON_3_12_VERSION" "$PYTHON_3_12_BUILD" "$PYTHON_3_12_ASSET" "$PYTHON_3_12_SHA256"
 
 ENTRYPOINT ["/usr/local/bin/runner-entrypoint"]

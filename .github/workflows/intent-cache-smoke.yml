@@ -148,6 +148,12 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/venv"
           corepack enable && pnpm --version
           gh --version | head -n 1; node --version; pwsh --version
+          # setup-python takes these from the tool cache instead of a GitHub release download.
+          for minor in 3.11 3.12; do
+            marker=$(compgen -G "$RUNNER_TOOL_CACHE/Python/$minor.*/x64.complete" | head -n 1) \
+              || { echo "::error::Python $minor is not in the tool cache"; exit 1; }
+            "${marker%.complete}/bin/python$minor" -m pip --version
+          done
       - name: No core dumps, apt lists present
         run: |
           set -euo pipefail
