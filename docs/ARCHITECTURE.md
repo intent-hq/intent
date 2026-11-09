@@ -224,15 +224,12 @@ per-agent isolation selection and merge/discard routes without aliases. No live
 sandboxes exist, so the removal drops the sandbox store rows and session sandbox
 fields without a recovery path and never touches files on disk.
 
-## Workspace checkouts & agent sandboxes (CoW)
+## Workspace checkouts (CoW)
 
-This section describes **current pinned behavior**. The per-agent sandbox portion
-is retired by the next backend removal (it does not wait for the local node);
-workspace CoW checkout creation is retained. In particular, the legacy shared fallback below is not allowed for
-future explicit isolated node placement.
+This section describes **current pinned behavior**. Per-agent sandboxes were
+removed in protocol 16; workspace CoW checkout creation is retained.
 
-Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
-(sandboxes). Architectural split of responsibilities:
+Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`). Architectural split of responsibilities:
 
 - **Provisioning (`workspace.create`).** `intent-services`
   owns the decision matrix — `workspace.cowIsolation` off ⇒ linked worktree
@@ -343,29 +340,10 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   layout — is never renamed or removed; deletion removes only the workspace
   row. The recursive removal of the trash directory runs in the background
   outside the lock in both modes.
-- **Agent sandboxes.** `services::sandbox_ops` provisions a per-agent CoW clone,
-  resolving the **sandbox source** from the workspace's checkout mode: shared-checkout
-  workspaces (no `checkoutMode`) clone from the user's repository folder; `cow` and
-  `direct` checkouts clone from the **workspace checkout** (a `direct` workspace with no
-  provisioned checkout — an `isNewRepo` initialization — falls back to its repository
-  folder) — and the merge-back on agent completion targets
-  that same directory (agent commits land in the workspace's own checkout, never the
-  user's repo folder). Worktree-mode workspaces are ineligible (agents share the
-  checkout). **Provisioning is asynchronous** relative to `agent.delegate`
-  (PROTOCOL §5.5): the delegate path registers a per-agent settlement gate
-  (`Services::begin_sandbox_provisioning`), spawns the clone in a background task,
-  and returns `effectiveIsolation: "pending"` immediately — a large clone can take
-  tens of seconds, which previously starved the `workspace_api` MCP budget. The
-  background half settles the outcome onto the child's session (sandbox fields +
-  `sandbox:cow:created` event) and releases the gate via a drop guard, so it settles
-  even on panic. The child's turn worker awaits the gate
-  (`await_sandbox_provisioning`) **before its first ACP spawn**, so the child never
-  spawns against a half-copied sandbox. Fallback semantics are unchanged: on
-  reflink-unsupported filesystems or provisioning failure the child runs in shared
-  mode (log-only; no sandbox fields, no event). A delete race is discarded: when
-  `agent.delete` races the clone, `settle_provisioned_sandbox` finds the session
-  missing/soft-deleted and removes the sandbox directory (best-effort deleting the
-  store record too) instead of persisting fields or emitting the event.
+- **Agent sandboxes (removed in protocol 16).** Per-agent CoW sandboxes,
+  their merge-back and the `sandbox.cow.*` routes were removed; every agent that is
+  not placed on a remote machine works in the workspace checkout. Store migration
+  `0187` dropped the `sandbox` table and the session sandbox columns.
 
 ## Agent default-model resolution (daemon-owned)
 
