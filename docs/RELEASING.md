@@ -627,11 +627,12 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   comparison) the cut proceeds unrestricted. When intentd main is ahead and the
   cut would ship fe commits merged after that tag was cut, time overlap alone is
   not treated as a dependency (both repos merge all day, so it held fe alphas for
-  hours on 2026-11-09). `scripts/intentd-skew-evidence.mjs` defers only on
+  hours on 2026-11-09). cloudlands-fe's `intentd-skew-evidence.mjs` helper defers only on
   evidence: a fresh fe commit or its PR body names an intentd PR that is merged,
-  missing from the pinned tag, and changes more than `.md`/`docs/` files; or the
-  fe diff since the last alpha adds a quoted use of an intentd method or event
-  (`method_catalog.txt` / `event_types.json` goldens) that the pin lacks. The
+  missing from the pinned tag, and changes runtime files (Markdown, docs, tests
+  and CI do not count); or a fresh fe commit adds a quoted, non-test use of an
+  intentd method or event (`method_catalog.txt` / `event_types.json` goldens)
+  that the pin lacks. The
   defer notice names the fe and intentd PRs, and the next intentd alpha's
   pin-bump push or a later cron tick re-evaluates readiness. Unreadable evidence
   keeps the deferral. An fe change that reads a new field of an existing method
