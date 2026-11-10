@@ -7,6 +7,12 @@
 // contextUsage.used is the prompt size), then the task prompt. "Done" = every
 // agent in the workspace idle with an empty queue and no active hooks or
 // monitors (unless the task allows one), seen three polls in a row.
+//
+// Isolation: the provider runs from a fresh config dir holding only the copied
+// sign-in, with its skill/plugin sync roots blocked. Claude Code re-syncs the
+// account's skills on a timer, so the dir is re-checked after every task-run;
+// a run that saw anything is marked tainted, the entries are quarantined, and
+// the report fails.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -15,14 +21,13 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import { EVAL_CACHE, preflightProvider, startDaemon, versions } from './lib/daemon.mjs';
+import { EVAL_CACHE, PROVIDERS, isolationLeaks, preflightProvider, quarantineLeaks, startDaemon, syncBackCredentials, versions } from './lib/daemon.mjs';
 import { renderMarkdown, summarize } from './lib/report.mjs';
 import { connect } from './lib/rpc.mjs';
 import { addScores, scoreTranscript } from './lib/score.mjs';
-import { FIXTURE_SPEC, createFixtureRepo, mockSolutions, selectTasks } from './tasks.mjs';
+import { FIXTURE_SPEC, TRIVIAL_PROMPT, controlHeld, createFixtureRepo, mockControls, mockSolutions, selectTasks } from './tasks.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const TRIVIAL_PROMPT = 'Reply with just the word: ready';
 const IDLE_POLLS = 3;
 
 export const USAGE = `usage: node scripts/agent-eval/run.mjs --provider <claude-code|codex|mock> --intentd-bin <path>
@@ -31,7 +36,8 @@ export const USAGE = `usage: node scripts/agent-eval/run.mjs --provider <claude-
 
   --harness       comma list of harness versions to compare; "current" = no override
   --quick         the quick subset (N stays as given; default 1)
-  --config-dir    dedicated provider config dir (default ${path.join(EVAL_CACHE, '<provider>')})
+  --config-dir    dedicated provider sign-in dir (default ${path.join(EVAL_CACHE, '<provider>')});
+                  each run copies only its credentials into a fresh dir
   --reuse-baseline  reuse cached results for the first harness when CLI, adapter
                   and model versions are unchanged
   --expect-pass   exit 1 unless every task passes (the MOCK_AGENT smoke)`;
@@ -133,7 +139,7 @@ async function runTask({ arm, task, run, opts, root }) {
   const id = `${arm.harness}-${task.id}-${run}`;
   const repo = path.join(root, 'repos', id);
   const createWorkspace = async (name) => (await rpc.call('workspace.create', { name, repositoryPath: repo })).workspace;
-  const result = { task: task.id, harness: arm.harness, run, pass: false };
+  const result = { task: task.id, harness: arm.harness, run, pass: false, ...(task.control ? { control: task.control } : {}) };
   try {
     fs.mkdirSync(repo, { recursive: true });
     createFixtureRepo(repo);
@@ -156,6 +162,7 @@ async function runTask({ arm, task, run, opts, root }) {
     if (first.timedOut) throw new Error(`trivial first turn did not finish: ${first.pending.join(', ')}`);
     const afterTrivial = (await rpc.call('agent.get', { agentId: agent.id, workspaceId })).agent;
     result.contextUsed = afterTrivial.contextUsage?.used ?? null;
+    await task.afterFirstTurn?.(ctx);
     await sleep(1500);
     const trivialTokens = tokenTotal((await rpc.call('workspace.getTokenUsage', { workspaceId })).tokenUsage);
 
@@ -195,6 +202,22 @@ async function runTask({ arm, task, run, opts, root }) {
   return result;
 }
 
+/**
+ * Re-check the run's provider config after a task-run. Leaks taint the result
+ * (a FAIL, never cached) and are quarantined so the next task-run starts clean.
+ */
+export function checkIsolation(isolation, result) {
+  if (!isolation.dir) return [];
+  const leaks = isolationLeaks(isolation.dir, isolation.spec);
+  if (!leaks.length) return leaks;
+  result.isolationLeaks = leaks;
+  result.pass = false;
+  result.detail = `config leak (${leaks.join(', ')}); ${result.detail ?? ''}`;
+  quarantineLeaks(isolation.dir, isolation.spec, path.join(isolation.quarantine, `${result.harness}-${result.task}-${result.run}`));
+  if (!result.control) isolation.leaks.push({ task: result.task, harness: result.harness, run: result.run, entries: leaks });
+  return leaks;
+}
+
 /** Baseline cache for the first harness: dropped when CLI, adapter or model change. */
 function baselineCache(opts, ver) {
   const dir = path.join(EVAL_CACHE, 'baseline', `${opts.provider}-${opts.model ?? 'default'}`);
@@ -222,7 +245,10 @@ export async function main(argv = process.argv.slice(2)) {
   const mock = opts.provider === 'mock';
   let tasks = selectTasks({ ids: opts.tasks, quick: opts.quick });
   if (mock) tasks = tasks.filter((t) => t.mock);
-  const { env: providerEnv, dir: configDir } = preflightProvider(opts.provider, opts.configDir);
+  const controls = mock ? mockControls(tasks) : [];
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-eval-'));
+  const { env: providerEnv, dir: configDir, sourceDir } = preflightProvider(opts.provider, opts.configDir, root);
+  const isolation = { dir: configDir, spec: PROVIDERS[opts.provider], quarantine: path.join(root, 'quarantine'), leaks: [] };
   const ver = versions(opts.provider, opts.bin, providerEnv);
   if (!ver.evalOverride && opts.harness.some((h) => h !== 'current')) {
     throw new Error(`${opts.bin} has no eval harness override (INTENTD_EVAL_HARNESS_VERSION); use --harness current or a newer build`);
@@ -230,14 +256,14 @@ export async function main(argv = process.argv.slice(2)) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const out = path.resolve(opts.out ?? path.join('.dev', 'agent-eval', `${stamp}-${opts.provider}`));
   fs.mkdirSync(out, { recursive: true });
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-eval-'));
   log(`provider=${opts.provider} model=${opts.model ?? 'default'} harness=${opts.harness.join(' vs ')} tasks=${tasks.length} n=${opts.n}`);
   log(`versions ${JSON.stringify(ver)}; daemons under ${root}`);
+  log(`provider config ${configDir ?? 'none'}${sourceDir ? ` (sign-in copied from ${sourceDir})` : ''}`);
 
   const extraEnv = {};
   if (mock) {
     const solutions = path.join(root, 'mock-solutions.json');
-    fs.writeFileSync(solutions, JSON.stringify(mockSolutions(tasks)));
+    fs.writeFileSync(solutions, JSON.stringify(mockSolutions([...tasks, ...controls])));
     Object.assign(extraEnv, { MOCK_AGENT_SCRIPT_PATH: path.join(HERE, 'mock-agent.mjs'), EVAL_MOCK_SOLUTIONS: solutions });
   }
   if (opts.reuseBaseline && opts.harness[0] === 'current') throw new Error('--reuse-baseline needs a pinned first harness, not "current"');
@@ -266,10 +292,21 @@ export async function main(argv = process.argv.slice(2)) {
         for (const [i, arm] of arms.entries()) {
           const cached = i === 0 && cache?.get(arm.harness, task, run);
           const r = cached || (await runTask({ arm, task, run, opts, root }));
-          if (i === 0 && cache && !cached && !r.error) cache.put(arm.harness, task, run, r);
+          if (!cached) checkIsolation(isolation, r);
+          syncBackCredentials(isolation.spec, configDir, sourceDir);
+          if (i === 0 && cache && !cached && !r.error && !r.isolationLeaks) cache.put(arm.harness, task, run, r);
           results.push(r);
           log(`${r.pass ? 'PASS' : 'FAIL'} ${arm.harness} ${task.id}#${run}${r.cached ? ' (cached)' : ''}: ${r.detail ?? ''}`);
         }
+      }
+    }
+    for (const task of controls) {
+      for (const arm of arms) {
+        const r = await runTask({ arm, task, run: 1, opts, root });
+        checkIsolation(isolation, r);
+        r.held = controlHeld(r);
+        results.push(r);
+        log(`${r.held ? 'HELD' : 'BROKEN'} control ${arm.harness} ${task.id}: ${r.detail ?? ''}`);
       }
     }
   } catch (error) {
@@ -279,18 +316,28 @@ export async function main(argv = process.argv.slice(2)) {
       arm.rpc.close();
       await arm.daemon.stop();
     }
+    if (configDir) {
+      const late = { task: '(after the last task-run)', harness: '-', run: '-' };
+      if (checkIsolation(isolation, late).length) log(`config leak after the last task-run: ${late.isolationLeaks.join(', ')}`);
+      syncBackCredentials(isolation.spec, configDir, sourceDir);
+      fs.rmSync(configDir, { recursive: true, force: true });
+    }
   }
+  const taskResults = results.filter((r) => !r.control);
+  const controlResults = results.filter((r) => r.control);
   const report = {
     createdAt: new Date().toISOString(),
     provider: opts.provider,
     model: opts.model ?? null,
     harness: opts.harness,
     n: opts.n,
-    configDir,
+    configDir: sourceDir,
     versions: ver,
     tasks: tasks.map((t) => t.id),
-    results,
-    summary: summarize(results, opts.harness),
+    isolation: { ok: isolation.leaks.length === 0, leaks: isolation.leaks },
+    results: taskResults,
+    controls: controlResults.map(({ task, harness, control, held, detail }) => ({ task, harness, expect: control, held, detail })),
+    summary: summarize(taskResults, opts.harness),
     error: failure ? String(failure.message ?? failure) : undefined,
   };
   fs.writeFileSync(path.join(out, 'report.json'), JSON.stringify(report, null, 2) + '\n');
@@ -299,7 +346,15 @@ export async function main(argv = process.argv.slice(2)) {
   if (!opts.keep && !failure) fs.rmSync(root, { recursive: true, force: true });
   else log(`kept daemon dirs and logs under ${root}`);
   if (failure) throw failure;
-  if (opts.expectPass && results.some((r) => !r.pass)) {
+  if (!report.isolation.ok) {
+    log(`provider config leaked into ${isolation.leaks.length} task-run(s); the report is not trustworthy (see Isolation in report.md)`);
+    return 1;
+  }
+  if (report.controls.some((c) => !c.held)) {
+    log('a negative control did not come out as expected');
+    return 1;
+  }
+  if (opts.expectPass && taskResults.some((r) => !r.pass)) {
     log('expected every task to pass');
     return 1;
   }

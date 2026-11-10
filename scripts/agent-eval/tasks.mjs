@@ -1,8 +1,11 @@
 // Eval task set. Prompts are phrased like a user and never name ws.* methods.
 // Each checker reads workspace state only (files, notes, hooks, agents, git).
 // `mock` is the scripted solution the MOCK_AGENT smoke runs through the real
-// workspace_api tool, so CI proves every checker can pass. `allowPending`
-// names waits that legitimately outlive the task (e.g. a reminder hook).
+// workspace_api tool, so CI proves every checker can pass; `mockControl` is a
+// scripted non-solution the smoke runs too, so CI proves the checker fails when
+// the agent does not do the task. `allowPending` names waits that legitimately
+// outlive the task (e.g. a reminder hook). `afterFirstTurn` resets state the
+// runner's trivial first turn changed before the task prompt is sent.
 
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -18,6 +21,8 @@ export const FIXTURE_AGENTS_MD = `# Repository rules
 const README = ['# Docs site', '', 'Static docs for the project.', '', 'Build with make.', '', 'Owner: docs team.'].join('\n') + '\n';
 export const FIXTURE_SPEC = '# Plan\n\nGoal: ship the docs refresh by 2026-12-01.\n';
 const CODE_WORD = 'PELICAN-42';
+/** The runner's trivial first turn; real agents title the workspace on it. */
+export const TRIVIAL_PROMPT = 'Reply with just the word: ready';
 
 /** The fixture repository every task-run starts from. */
 export function createFixtureRepo(dir) {
@@ -86,11 +91,21 @@ export const TASKS = [
   {
     id: 'rename-workspace',
     prompt: "Rename this workspace to 'Docs refresh'.",
+    // The first-turn naming instruction titles the workspace on the trivial turn
+    // ("Agent readiness check"), and ws.workspace.setTitle then skips because a
+    // custom title exists, so every run failed. Clear it: the task measures
+    // whether the agent renames when asked.
+    async afterFirstTurn(ctx) {
+      await ctx.rpc.call('workspace.update', { workspaceId: ctx.workspaceId, title: '' });
+      const w = (await ctx.rpc.call('workspace.get', { workspaceId: ctx.workspaceId })).workspace;
+      if ((w.title ?? '').trim()) throw new Error(`could not clear the first-turn title ${JSON.stringify(w.title)}`);
+    },
     async check(ctx) {
       const w = (await ctx.rpc.call('workspace.get', { workspaceId: ctx.workspaceId })).workspace;
       return verdict((w.title ?? '').trim().toLowerCase() === 'docs refresh', `title=${JSON.stringify(w.title)}`);
     },
     mock: [{ code: 'return await ws.workspace.setTitle("Docs refresh")' }],
+    mockControl: [{ code: 'return await ws.workspace.details()' }],
   },
   {
     id: 'wait-command',
@@ -258,6 +273,40 @@ export const TASKS = [
 
 export const MOCK_CHILD = { match: 'EVAL_CHILD: create hello.txt', steps: [{ code: 'return await ws.file.write("hello.txt", "hi\\n")' }], reply: 'Created hello.txt.' };
 
+/** Like a real agent, the mock titles the workspace on the trivial first turn. */
+export const MOCK_FIRST_TURN = { match: TRIVIAL_PROMPT, steps: [{ code: 'return await ws.workspace.setTitle("Agent readiness check")' }], reply: 'ready' };
+
+const CONTROL_SUFFIX = ' [eval control]';
+
+/**
+ * Smoke-only negative controls; each must come out the way `expect` says:
+ * - `fail`: a task's `mockControl` non-solution, so its checker must fail;
+ * - `leak`: the mock CLI syncs account skills and plugins into its config dir
+ *   mid-run, the way Claude Code does, so the isolation check must flag it.
+ */
+export function mockControls(tasks) {
+  const controls = tasks
+    .filter((t) => t.mockControl)
+    .map((t) => ({ ...t, id: `${t.id}:control`, prompt: t.prompt + CONTROL_SUFFIX, mock: t.mockControl, control: 'fail' }));
+  controls.push({
+    id: 'config-leak:control',
+    control: 'leak',
+    prompt: 'Reply with just the word: done' + CONTROL_SUFFIX,
+    check: () => verdict(true, 'no state to check'),
+    mock: [],
+    mockSyncSkills: true,
+  });
+  return controls;
+}
+
+/** Did a control come out as expected? */
+export function controlHeld(result) {
+  if (result.error) return false;
+  if (result.control === 'fail') return !result.pass && !result.isolationLeaks?.length;
+  if (result.control === 'leak') return Boolean(result.isolationLeaks?.length);
+  return false;
+}
+
 export function selectTasks({ ids, quick }) {
   if (ids?.length) {
     const unknown = ids.filter((id) => !TASKS.some((t) => t.id === id));
@@ -267,9 +316,14 @@ export function selectTasks({ ids, quick }) {
   return quick ? TASKS.filter((t) => t.quick) : TASKS;
 }
 
+/** Controls first: a control prompt contains its task's prompt. */
 export function mockSolutions(tasks) {
+  const ordered = [...tasks.filter((t) => t.control), ...tasks.filter((t) => !t.control)];
   return [
     MOCK_CHILD,
-    ...tasks.filter((t) => t.mock).map((t) => ({ match: t.prompt, steps: t.mock, reply: t.mockReply ?? 'Done.' })),
+    MOCK_FIRST_TURN,
+    ...ordered
+      .filter((t) => t.mock)
+      .map((t) => ({ match: t.prompt, steps: t.mock, reply: t.mockReply ?? 'Done.', ...(t.mockSyncSkills ? { syncSkills: true } : {}) })),
   ];
 }

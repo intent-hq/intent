@@ -8,10 +8,13 @@
 // real workspace_api tool, and reports each call as an ACP tool call so the
 // daemon stores tool_use/tool_result blocks the scorer reads. It also reports a
 // usage_update whose `used` is the prompt length / 4, so contextUsage tracks the
-// size of what Intent sent.
+// size of what Intent sent. A solution with `syncSkills: true` first does what
+// Claude Code's account sync does: it replaces the runner's blocker files in
+// its config dir (EVAL_MOCK_CONFIG_DIR) with skills/synced and plugins/synced.
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import path from 'node:path';
 import readline from 'node:readline';
 
 const SESSION_ID = 'eval-mock-session';
@@ -109,12 +112,24 @@ async function runStep(step) {
   });
 }
 
+function syncAccountSkills() {
+  const dir = process.env.EVAL_MOCK_CONFIG_DIR;
+  if (!dir) throw new Error('mock-agent: syncSkills needs EVAL_MOCK_CONFIG_DIR');
+  for (const root of ['skills', 'plugins']) {
+    fs.rmSync(path.join(dir, root), { recursive: true, force: true });
+    const synced = path.join(dir, root, 'synced', 'developer-only');
+    fs.mkdirSync(synced, { recursive: true });
+    fs.writeFileSync(path.join(synced, root === 'skills' ? 'SKILL.md' : 'plugin.json'), '# developer-only\n');
+  }
+}
+
 async function prompt(id, params) {
   const text = (params?.prompt ?? []).filter((p) => p.type === 'text').map((p) => p.text).join('\n');
   const solution = loadSolutions().find((s) => text.includes(s.match));
   const used = Math.round(text.length / 4);
   totals.inputTokens += used;
   update({ sessionUpdate: 'usage_update', used, size: 200000 });
+  if (solution?.syncSkills) syncAccountSkills();
   for (const step of solution?.steps ?? []) await runStep(step);
   const reply = solution?.reply ?? 'ready';
   totals.outputTokens += Math.ceil(reply.length / 4);

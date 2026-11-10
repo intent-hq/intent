@@ -28,6 +28,12 @@ export const PROVIDERS = {
       }
     },
     forbidden: ['CLAUDE.md', 'skills', 'plugins', 'agents', 'commands', 'hooks'],
+    // Claude Code re-syncs the signed-in claude.ai account's skills and plugins
+    // into skills/synced and plugins/synced on a timer during a run. An empty
+    // read-only file in their place makes that sync fail; the CLI runs on.
+    blockers: ['skills', 'plugins'],
+    credentials: ['.credentials.json'],
+    accountKeys: { '.claude.json': ['oauthAccount', 'userID', 'hasCompletedOnboarding', 'lastOnboardingVersion'] },
     jsonKeys: {
       'settings.json': ['hooks', 'mcpServers', 'enabledPlugins'],
       'settings.local.json': ['hooks', 'mcpServers', 'enabledPlugins'],
@@ -43,10 +49,21 @@ export const PROVIDERS = {
       return out !== null && /logged in/i.test(out) && !/not logged in/i.test(out);
     },
     forbidden: ['AGENTS.md', 'skills', 'prompts'],
+    blockers: ['skills'],
+    credentials: ['auth.json'],
     jsonKeys: {},
     tomlTables: { 'config.toml': ['mcp_servers'] },
   },
-  mock: { configEnv: null },
+  // The scripted smoke agent gets a config dir too, so the isolation checks run
+  // in CI; its "sync" control writes skills the way Claude Code does.
+  mock: {
+    configEnv: 'EVAL_MOCK_CONFIG_DIR',
+    signedIn: () => true,
+    forbidden: ['skills', 'plugins'],
+    blockers: ['skills', 'plugins'],
+    credentials: [],
+    jsonKeys: {},
+  },
 };
 
 function run(cmd, args, env, mergeStderr = false) {
@@ -64,28 +81,140 @@ function realHome() {
 }
 
 /**
- * Check the dedicated provider dir: never the developer's own, signed in, and
- * free of user MCP servers, skills, hooks and instructions. Returns the env the
- * daemon passes to the provider.
+ * Build the run's provider config: a fresh dir under `runRoot` holding only the
+ * sign-in copied from the dedicated eval dir (never the developer's own), with
+ * the skill/plugin sync roots blocked. Returns the env the daemon passes to the
+ * provider, the fresh `dir` and the `sourceDir` the sign-in came from.
  */
-export function preflightProvider(provider, configDir) {
+export function preflightProvider(provider, configDir, runRoot) {
   const spec = PROVIDERS[provider];
   if (!spec) throw new Error(`unsupported PROVIDER=${provider} (supported: ${Object.keys(PROVIDERS).join(', ')})`);
-  if (!spec.configEnv) return { env: {}, dir: null };
-  const dir = path.resolve(configDir || path.join(EVAL_CACHE, provider));
+  if (!spec.configEnv) return { env: {}, dir: null, sourceDir: null };
+  const sourceDir = provider === 'mock' ? null : path.resolve(configDir || path.join(EVAL_CACHE, provider));
   const own = [path.join(realHome(), '.claude'), path.join(realHome(), '.codex')];
-  if (own.includes(dir)) throw new Error(`${dir} is your own ${provider} config; use a dedicated eval dir`);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const leaks = spec.forbidden.filter((name) => fs.existsSync(path.join(dir, name)));
-  leaks.push(...configLeaks(dir, spec));
-  if (leaks.length) throw new Error(`${dir} must hold only the sign-in; remove: ${leaks.join(', ')}`);
+  if (own.includes(sourceDir)) throw new Error(`${sourceDir} is your own ${provider} config; use a dedicated eval dir`);
+  if (sourceDir) fs.mkdirSync(sourceDir, { recursive: true, mode: 0o700 });
+  const dir = path.join(runRoot, `config-${provider}`);
+  isolatedConfig(spec, sourceDir, dir);
+  const leaks = isolationLeaks(dir, spec);
+  if (leaks.length) throw new Error(`fresh config ${dir} is not clean: ${leaks.join(', ')}`);
   const env = { ...isolatedBaseEnv(fs.mkdtempSync(path.join(os.tmpdir(), 'agent-eval-home-'))), [spec.configEnv]: dir };
   if (!spec.signedIn(env)) {
-    const err = new Error(`${provider} is not signed in for the eval. Run once, interactively:\n  ${spec.login(dir)}`);
+    const hint = process.platform === 'darwin' && provider === 'claude-code' ? '\n(macOS keeps Claude Code sign-ins in the Keychain, not in a file the eval can copy; run the eval on Linux.)' : '';
+    const err = new Error(`${provider} is not signed in for the eval. Run once, interactively:\n  ${spec.login(sourceDir)}${hint}`);
     err.exitCode = 2;
     throw err;
   }
-  return { env: { [spec.configEnv]: dir }, dir };
+  return { env: { [spec.configEnv]: dir }, dir, sourceDir };
+}
+
+/** Copy only the sign-in from `sourceDir` into a new `dir` and block the sync roots. */
+export function isolatedConfig(spec, sourceDir, dir) {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  for (const file of spec.credentials ?? []) {
+    const from = sourceDir && path.join(sourceDir, file);
+    if (from && fs.existsSync(from)) fs.copyFileSync(from, path.join(dir, file));
+  }
+  for (const [file, keys] of Object.entries(spec.accountKeys ?? {})) {
+    const from = sourceDir && path.join(sourceDir, file);
+    if (!from || !fs.existsSync(from)) continue;
+    let json;
+    try {
+      json = JSON.parse(fs.readFileSync(from, 'utf8'));
+    } catch {
+      continue;
+    }
+    const kept = Object.fromEntries(keys.filter((k) => k in json).map((k) => [k, json[k]]));
+    fs.writeFileSync(path.join(dir, file), JSON.stringify(kept, null, 2) + '\n', { mode: 0o600 });
+  }
+  blockSyncRoots(spec, dir);
+  return dir;
+}
+
+/** An empty read-only file where a sync would create a directory. */
+export function blockSyncRoots(spec, dir) {
+  for (const name of spec.blockers ?? []) {
+    const p = path.join(dir, name);
+    if (fs.existsSync(p)) continue;
+    fs.writeFileSync(p, '');
+    fs.chmodSync(p, 0o444);
+  }
+}
+
+const isBlocker = (spec, dir, name) => {
+  if (!(spec.blockers ?? []).includes(name)) return false;
+  const st = fs.lstatSync(path.join(dir, name));
+  return st.isFile() && st.size === 0;
+};
+
+/** Entries under `dir/name`, a few levels deep, for the leak report. */
+function listEntries(root, rel, depth = 2, out = []) {
+  const full = path.join(root, rel);
+  let st;
+  try {
+    st = fs.lstatSync(full);
+  } catch {
+    return out;
+  }
+  if (!st.isDirectory() || depth === 0) {
+    out.push(rel);
+    return out;
+  }
+  const kids = fs.readdirSync(full);
+  if (!kids.length) out.push(`${rel}/`);
+  for (const k of kids) listEntries(root, path.join(rel, k), depth - 1, out);
+  return out;
+}
+
+/**
+ * Everything in a provider config dir that can change what the agent sees:
+ * skills, plugins, instructions, hooks (anything in `forbidden` that is not
+ * our blocker file) and MCP servers/hooks/plugins in its config files.
+ */
+export function isolationLeaks(dir, spec) {
+  const leaks = [];
+  for (const name of spec.forbidden ?? []) {
+    if (!fs.existsSync(path.join(dir, name)) || isBlocker(spec, dir, name)) continue;
+    const entries = listEntries(dir, name);
+    leaks.push(...entries.slice(0, 5), ...(entries.length > 5 ? [`${name}: ${entries.length - 5} more`] : []));
+  }
+  leaks.push(...configLeaks(dir, spec));
+  return leaks;
+}
+
+/**
+ * Move leaked entries out of the run's config dir (into `quarantine`) and
+ * restore the blockers, so later task-runs start clean again.
+ */
+export function quarantineLeaks(dir, spec, quarantine) {
+  for (const name of spec.forbidden ?? []) {
+    const p = path.join(dir, name);
+    if (!fs.existsSync(p) || isBlocker(spec, dir, name)) continue;
+    fs.mkdirSync(quarantine, { recursive: true });
+    fs.renameSync(p, path.join(quarantine, name));
+  }
+  blockSyncRoots(spec, dir);
+}
+
+/**
+ * The provider may refresh its OAuth token in the run's copy; write a changed
+ * credential file back so the dedicated dir keeps a valid refresh token.
+ */
+export function syncBackCredentials(spec, dir, sourceDir) {
+  const copied = [];
+  if (!sourceDir) return copied;
+  for (const file of spec.credentials ?? []) {
+    const from = path.join(dir, file);
+    const to = path.join(sourceDir, file);
+    if (!fs.existsSync(from)) continue;
+    const next = fs.readFileSync(from);
+    if (fs.existsSync(to) && fs.readFileSync(to).equals(next)) continue;
+    const tmp = `${to}.agent-eval-${process.pid}`;
+    fs.writeFileSync(tmp, next, { mode: 0o600 });
+    fs.renameSync(tmp, to);
+    copied.push(file);
+  }
+  return copied;
 }
 
 /** Non-empty MCP servers, hooks or plugins in the provider's own config files. */

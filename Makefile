@@ -1504,8 +1504,11 @@ rpc: ## Send one JSON-RPC request to the running intentd: make rpc METHOD=worksp
 # INTENTD_EVAL_HARNESS_VERSION), drive real agents through user-phrased tasks
 # with state checkers and write a side-by-side report under .dev/agent-eval/.
 # The provider signs in once into a dedicated config dir (the runner prints the
-# command); it never reads ~/.claude or ~/.codex. MOCK_AGENT=1 runs the
-# scripted smoke CI uses: no credentials, every task must pass.
+# command); it never reads ~/.claude or ~/.codex. Each run copies only that
+# sign-in into a fresh dir with the skill/plugin sync roots blocked, re-checks it
+# after every task-run, and fails the report if anything appeared (Claude Code
+# re-syncs account skills mid-run). MOCK_AGENT=1 runs the scripted smoke CI
+# uses: no credentials, every task must pass and every negative control hold.
 AGENT_EVAL_BIN ?= $(or $(INTENTD_BIN),$(INTENTD_DIR)/target/debug/intentd)
 agent-eval: ## Compare harness versions with real agents: make agent-eval PROVIDER=claude-code MODEL=opus [HARNESS="3.9 3.10"] [N=1] [QUICK=1] [TASKS=a,b] [INTENTD_BIN=path] [MOCK_AGENT=1]
 	@set -- --intentd-bin "$(AGENT_EVAL_BIN)" --n "$(or $(N),1)"; \
