@@ -28,6 +28,13 @@ export const PROVIDERS = {
       }
     },
     forbidden: ['CLAUDE.md', 'skills', 'plugins', 'agents', 'commands', 'hooks'],
+    // Claude Code re-syncs the signed-in claude.ai account's skills and plugins
+    // into skills/synced and plugins/synced on a timer during a run. An empty
+    // file in their place makes its mkdir fail (the CLI runs on); a sync that
+    // deletes the file first is still caught by the after-task-run check.
+    blockers: ['skills', 'plugins'],
+    credentials: ['.credentials.json'],
+    accountKeys: { '.claude.json': ['oauthAccount', 'userID', 'hasCompletedOnboarding', 'lastOnboardingVersion'] },
     jsonKeys: {
       'settings.json': ['hooks', 'mcpServers', 'enabledPlugins'],
       'settings.local.json': ['hooks', 'mcpServers', 'enabledPlugins'],
@@ -43,10 +50,21 @@ export const PROVIDERS = {
       return out !== null && /logged in/i.test(out) && !/not logged in/i.test(out);
     },
     forbidden: ['AGENTS.md', 'skills', 'prompts'],
+    blockers: ['skills'],
+    credentials: ['auth.json'],
     jsonKeys: {},
     tomlTables: { 'config.toml': ['mcp_servers'] },
   },
-  mock: { configEnv: null },
+  // The scripted smoke agent gets a config dir too, so the isolation checks run
+  // in CI; its "sync" control writes skills the way Claude Code does.
+  mock: {
+    configEnv: 'EVAL_MOCK_CONFIG_DIR',
+    signedIn: () => true,
+    forbidden: ['skills', 'plugins'],
+    blockers: ['skills', 'plugins'],
+    credentials: [],
+    jsonKeys: {},
+  },
 };
 
 function run(cmd, args, env, mergeStderr = false) {
@@ -64,28 +82,172 @@ function realHome() {
 }
 
 /**
- * Check the dedicated provider dir: never the developer's own, signed in, and
- * free of user MCP servers, skills, hooks and instructions. Returns the env the
- * daemon passes to the provider.
+ * Build the run's provider config: a fresh dir under `runRoot` holding only the
+ * sign-in copied from the dedicated eval dir (never the developer's own), with
+ * the skill/plugin sync roots blocked. Returns the env the daemon passes to the
+ * provider, the fresh `dir`, the `sourceDir` the sign-in came from, and the
+ * `baseline` credential bytes for syncBackCredentials. On error the caller
+ * removes `runRoot` (it holds the copied credentials).
  */
-export function preflightProvider(provider, configDir) {
+export function preflightProvider(provider, configDir, runRoot) {
   const spec = PROVIDERS[provider];
   if (!spec) throw new Error(`unsupported PROVIDER=${provider} (supported: ${Object.keys(PROVIDERS).join(', ')})`);
-  if (!spec.configEnv) return { env: {}, dir: null };
-  const dir = path.resolve(configDir || path.join(EVAL_CACHE, provider));
+  if (!spec.configEnv) return { env: {}, dir: null, sourceDir: null, baseline: {} };
+  const sourceDir = provider === 'mock' ? null : path.resolve(configDir || path.join(EVAL_CACHE, provider));
   const own = [path.join(realHome(), '.claude'), path.join(realHome(), '.codex')];
-  if (own.includes(dir)) throw new Error(`${dir} is your own ${provider} config; use a dedicated eval dir`);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const leaks = spec.forbidden.filter((name) => fs.existsSync(path.join(dir, name)));
-  leaks.push(...configLeaks(dir, spec));
-  if (leaks.length) throw new Error(`${dir} must hold only the sign-in; remove: ${leaks.join(', ')}`);
-  const env = { ...isolatedBaseEnv(fs.mkdtempSync(path.join(os.tmpdir(), 'agent-eval-home-'))), [spec.configEnv]: dir };
+  if (own.includes(sourceDir)) throw new Error(`${sourceDir} is your own ${provider} config; use a dedicated eval dir`);
+  if (sourceDir) fs.mkdirSync(sourceDir, { recursive: true, mode: 0o700 });
+  const dir = path.join(runRoot, `config-${provider}`);
+  isolatedConfig(spec, sourceDir, dir);
+  const baseline = credentialBaseline(spec, dir);
+  const leaks = isolationLeaks(dir, spec);
+  if (leaks.length) throw new Error(`fresh config ${dir} is not clean: ${leaks.join(', ')}`);
+  const env = { ...isolatedBaseEnv(fs.mkdtempSync(path.join(runRoot, 'preflight-home-'))), [spec.configEnv]: dir };
   if (!spec.signedIn(env)) {
-    const err = new Error(`${provider} is not signed in for the eval. Run once, interactively:\n  ${spec.login(dir)}`);
+    const hint = process.platform === 'darwin' && provider === 'claude-code' ? '\n(macOS keeps Claude Code sign-ins in the Keychain, not in a file the eval can copy; run the eval on Linux.)' : '';
+    const err = new Error(`${provider} is not signed in for the eval. Run once, interactively:\n  ${spec.login(sourceDir)}${hint}`);
     err.exitCode = 2;
     throw err;
   }
-  return { env: { [spec.configEnv]: dir }, dir };
+  return { env: { [spec.configEnv]: dir }, dir, sourceDir, baseline };
+}
+
+/** The credential bytes as copied, keyed by file name. */
+export function credentialBaseline(spec, dir) {
+  const out = {};
+  for (const file of spec.credentials ?? []) {
+    const p = path.join(dir, file);
+    if (fs.existsSync(p)) out[file] = fs.readFileSync(p);
+  }
+  return out;
+}
+
+/** Copy only the sign-in from `sourceDir` into a new `dir` and block the sync roots. */
+export function isolatedConfig(spec, sourceDir, dir) {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  for (const file of spec.credentials ?? []) {
+    const from = sourceDir && path.join(sourceDir, file);
+    if (from && fs.existsSync(from)) fs.copyFileSync(from, path.join(dir, file));
+  }
+  for (const [file, keys] of Object.entries(spec.accountKeys ?? {})) {
+    const from = sourceDir && path.join(sourceDir, file);
+    if (!from || !fs.existsSync(from)) continue;
+    let json;
+    try {
+      json = JSON.parse(fs.readFileSync(from, 'utf8'));
+    } catch {
+      continue;
+    }
+    const kept = Object.fromEntries(keys.filter((k) => k in json).map((k) => [k, json[k]]));
+    fs.writeFileSync(path.join(dir, file), JSON.stringify(kept, null, 2) + '\n', { mode: 0o600 });
+  }
+  blockSyncRoots(spec, dir);
+  return dir;
+}
+
+/** An empty read-only file where a sync would create a directory. */
+export function blockSyncRoots(spec, dir) {
+  for (const name of spec.blockers ?? []) {
+    const p = path.join(dir, name);
+    if (fs.existsSync(p)) continue;
+    fs.writeFileSync(p, '');
+    fs.chmodSync(p, 0o444);
+  }
+}
+
+const isBlocker = (spec, dir, name) => {
+  if (!(spec.blockers ?? []).includes(name)) return false;
+  const st = fs.lstatSync(path.join(dir, name));
+  return st.isFile() && st.size === 0;
+};
+
+/** Entries under `dir/name`, a few levels deep, for the leak report. */
+function listEntries(root, rel, depth = 2, out = []) {
+  const full = path.join(root, rel);
+  let st;
+  try {
+    st = fs.lstatSync(full);
+  } catch {
+    return out;
+  }
+  if (!st.isDirectory() || depth === 0) {
+    out.push(rel);
+    return out;
+  }
+  const kids = fs.readdirSync(full);
+  if (!kids.length) out.push(`${rel}/`);
+  for (const k of kids) listEntries(root, path.join(rel, k), depth - 1, out);
+  return out;
+}
+
+/**
+ * Everything in a provider config dir that can change what the agent sees:
+ * skills, plugins, instructions, hooks (anything in `forbidden` that is not
+ * our blocker file) and MCP servers/hooks/plugins in its config files.
+ */
+export function isolationLeaks(dir, spec) {
+  const leaks = [];
+  for (const name of spec.forbidden ?? []) {
+    if (!fs.existsSync(path.join(dir, name)) || isBlocker(spec, dir, name)) continue;
+    const entries = listEntries(dir, name);
+    leaks.push(...entries.slice(0, 5), ...(entries.length > 5 ? [`${name}: ${entries.length - 5} more`] : []));
+  }
+  leaks.push(...configLeaks(dir, spec));
+  return leaks;
+}
+
+/**
+ * Move leaked entries out of the run's config dir (into `quarantine`) and
+ * restore the blockers, so later task-runs start clean again.
+ */
+export function quarantineLeaks(dir, spec, quarantine) {
+  for (const name of spec.forbidden ?? []) {
+    const p = path.join(dir, name);
+    if (!fs.existsSync(p) || isBlocker(spec, dir, name)) continue;
+    fs.mkdirSync(quarantine, { recursive: true });
+    fs.renameSync(p, path.join(quarantine, name));
+  }
+  blockSyncRoots(spec, dir);
+}
+
+/**
+ * The provider may refresh its OAuth token in the run's copy, which revokes the
+ * old refresh token; write the new one back so the dedicated dir stays signed
+ * in. Only when the copy changed since `baseline`, parses as JSON (never a
+ * half-written file), and the dedicated dir still holds the baseline bytes (a
+ * concurrent eval or a fresh login wrote a newer sign-in: keep that one).
+ * Updates `baseline`; returns { copied, conflicts }.
+ */
+export function syncBackCredentials(spec, dir, sourceDir, baseline) {
+  const copied = [];
+  const conflicts = [];
+  if (!sourceDir || !dir) return { copied, conflicts };
+  for (const file of spec.credentials ?? []) {
+    const from = path.join(dir, file);
+    const to = path.join(sourceDir, file);
+    if (!fs.existsSync(from)) continue;
+    const next = fs.readFileSync(from);
+    const base = baseline[file];
+    if (base && next.equals(base)) continue;
+    try {
+      JSON.parse(next.toString('utf8'));
+    } catch {
+      continue;
+    }
+    const current = fs.existsSync(to) ? fs.readFileSync(to) : null;
+    if (current && !current.equals(base ?? Buffer.alloc(0)) && !current.equals(next)) {
+      conflicts.push(file);
+      continue;
+    }
+    if (!current?.equals(next)) {
+      const tmp = `${to}.agent-eval-${process.pid}`;
+      fs.writeFileSync(tmp, next, { mode: 0o600 });
+      fs.renameSync(tmp, to);
+      copied.push(file);
+    }
+    baseline[file] = next;
+  }
+  return { copied, conflicts };
 }
 
 /** Non-empty MCP servers, hooks or plugins in the provider's own config files. */

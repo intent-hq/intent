@@ -3,7 +3,8 @@ name: Agent eval smoke
 # Keeps the agent eval runner (scripts/agent-eval) and its task checkers from
 # rotting: MOCK_AGENT=1 drives a scripted ACP agent that solves each task
 # through the real workspace_api tool of a released intentd, so every checker
-# must pass. No provider credentials. A/B on two harness versions when the
+# must pass, and runs negative controls (a task left undone, a mid-run skill
+# sync) that the checkers must catch. No provider credentials. A/B on two harness versions when the
 # downloaded intentd has the eval-only harness override, else one arm.
 on:
   pull_request:

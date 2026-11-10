@@ -37,6 +37,18 @@ export function renderMarkdown(report) {
     '',
   ];
   if (report.error) lines.push(`**Run aborted:** ${cell(report.error)}`, '');
+  if (report.isolation && !report.isolation.ok) {
+    lines.push(
+      '## Isolation: FAILED',
+      '',
+      'Skills, plugins or other user config appeared in the provider config dir during the run, so the agents below may have seen them. Do not trust this report; the entries were quarantined.',
+      '',
+      ...report.isolation.leaks.map((l) => `- ${l.harness} ${l.task}#${l.run}: ${cell(l.entries.join(', '))}`),
+      '',
+    );
+  } else if (report.isolation) {
+    lines.push('Isolation: ok (provider config re-checked after every task-run).', '');
+  }
   const metrics = [
     ['Passed', 'passed'],
     ['Runner errors', 'errors'],
@@ -72,6 +84,10 @@ export function renderMarkdown(report) {
   if (failures.length) {
     lines.push('', '## Failures', '');
     for (const r of failures) lines.push(`- ${r.harness} ${r.task}#${r.run}: ${cell(r.detail)}`);
+  }
+  if (report.controls?.length) {
+    lines.push('', '## Negative controls', '', '| Control | Harness | Expect | Held | Detail |', '|---|---|---|:---:|---|');
+    for (const c of report.controls) lines.push(`| ${c.task} | ${c.harness} | ${c.expect} | ${c.held ? 'yes' : 'NO'} | ${cell(c.detail)} |`);
   }
   return lines.join('\n') + '\n';
 }
