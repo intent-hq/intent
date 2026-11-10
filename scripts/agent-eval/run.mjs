@@ -218,10 +218,19 @@ export function checkIsolation(isolation, result) {
   return leaks;
 }
 
+/**
+ * Bump when the runner changes what a cached result means. 2: results are
+ * isolation-checked (older entries may have run with synced skills).
+ */
+export const BASELINE_SCHEMA = 2;
+
+/** A task's cache identity: everything that decides its outcome. */
+export const taskHash = (task) => hash([task.prompt, task.check.toString(), task.setup?.toString() ?? null, task.afterFirstTurn?.toString() ?? null]);
+
 /** Baseline cache for the first harness: dropped when CLI, adapter or model change. */
-function baselineCache(opts, ver) {
+export function baselineCache(opts, ver) {
   const dir = path.join(EVAL_CACHE, 'baseline', `${opts.provider}-${opts.model ?? 'default'}`);
-  const key = { cli: ver.cli, adapter: ver.adapter, model: opts.model ?? null, intentd: ver.intentdSha256 };
+  const key = { schema: BASELINE_SCHEMA, cli: ver.cli, adapter: ver.adapter, model: opts.model ?? null, intentd: ver.intentdSha256 };
   const metaFile = path.join(dir, 'versions.json');
   if (fs.existsSync(metaFile) && JSON.stringify(JSON.parse(fs.readFileSync(metaFile, 'utf8'))) !== JSON.stringify(key)) {
     log(`versions changed since the cached baseline; dropping ${dir}`);
@@ -229,7 +238,7 @@ function baselineCache(opts, ver) {
   }
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(metaFile, JSON.stringify(key));
-  const file = (harness, task, run) => path.join(dir, `${harness}-${task.id}-${run}-${hash([task.prompt, task.check.toString()])}.json`);
+  const file = (harness, task, run) => path.join(dir, `${harness}-${task.id}-${run}-${taskHash(task)}.json`);
   return {
     get: (h, t, r) => (fs.existsSync(file(h, t, r)) ? { ...JSON.parse(fs.readFileSync(file(h, t, r), 'utf8')), cached: true } : null),
     put: (h, t, r, res) => fs.writeFileSync(file(h, t, r), JSON.stringify(res)),
