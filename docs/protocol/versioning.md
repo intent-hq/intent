@@ -23,6 +23,18 @@ removed. Cache-hydrated `cow` / `direct` checkouts and existing `cow` workspaces
 unchanged. No store migration. The documented surface is **499 / 441 / 58**
 (dispatchable / router / fast path), one router method fewer.
 
+Also within 17.0 (additive optional launch and row fields; presence-detected; no
+method-catalog or nodeProtocol change, so no version bump): **display labels for
+hosted agents** ([display labels](./node-link.md#display-labels), [§5.5](./methods/agents.md)).
+The executor link's `launch` gains the optional `agentName` and `workspaceTitle`. The
+backend sends them on every launch and relaunch; the machine keeps the latest values
+with the hosted agent and serves them on that agent's `agent.memoryUsage` row (tagged
+`remoteOwner`). They are display-only, never identity or authorization, and a rename
+shows after the next launch. Rows omit them, never `null`, when the launch did not send
+them, as an older backend never does. Local rows are unchanged. The launch body ignores
+unknown members within node-link protocol 6 and the fields change no authority or
+meaning, so they need no nodeProtocol version.
+
 **Version 16.0 — per-agent CoW sandbox retirement (breaking).**
 Removes per-agent copy-on-write sandboxes ([nodes.md landing step 2](./methods/nodes.md#errors-and-retirement-gates)).
 `sandbox.cow.merge` and `sandbox.cow.discard` now return `-32601 Method not found`.
