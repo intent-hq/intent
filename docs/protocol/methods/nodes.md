@@ -595,10 +595,10 @@ machine only when it holds an owner connection to that machine.
 
 ###### Claim errors
 
-All are `-32602` unless noted; `data.code` is the identifier. None of them
+All are `-32602` unless noted; the code is `data.code`. None of them
 carries the invite secret or a token.
 
-| `data.code` | When | Invite spent |
+| Code | When | Invite spent |
 | --- | --- | --- |
 | `invalid-node-link` | `uri` is not a valid `intent://node` v1 link (see the link format) | no |
 | `node-invite-invalid` | the machine knows no open or closed invite with that id and secret (the two are not told apart) | no |
