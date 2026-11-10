@@ -90,6 +90,14 @@ principal with a host role, so no collaborator or member allowlist ever sees it.
   with `401` on replay. Revoking one backend leaves other backends' credentials
   valid.
 
+- **Node invites.** `executor.invite.create` (owner-only, as minting) creates a
+  single-use, expiring [node invite](./methods/nodes.md#node-invites-and-claim)
+  whose secret (32 random bytes, hex, stored as its SHA-256) is the only
+  authority of the anonymous `/node/claim` path. A valid claim mints one
+  executor credential for the claiming backend, exactly as `executor.mint`
+  would, and spends the invite. The invite link (`intent://node`) never carries
+  the owner token, and an invite secret is refused on every other path.
+
 Running agents means running code as the machine owner's OS user. The
 credential is narrow in API terms but powerful in effect, which is why only the
 owner can mint it.

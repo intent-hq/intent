@@ -1690,13 +1690,14 @@ it: that credential is the machine's consent.
 The machine serves the link on its existing WSS listener
 ([§1.1](./01-transport.md#11-connection-url)), with the same port, certificate
 (`ws-cert.pem`) and fingerprint as its pairing payload's `fp=`. There is no
-second listener or TLS identity. Two upgrade paths sit beside `/ws`, `/tunnel`
+second listener or TLS identity. Three upgrade paths sit beside `/ws`, `/tunnel`
 and `/invite`:
 
 | Path | Carries | Admits |
 | --- | --- | --- |
 | `/node/link` | Control, journal and RPC frames ([frames](#frames)) | Executor credentials only |
 | `/node/git` | Git sessions as binary messages ([agent refs over git](#agent-refs-over-git)) | Executor credentials only, with the current binding headers |
+| `/node/claim` | One node invite claim ([node invite claim](#node-invite-claim)) | No credential; the invite in the first frame is the only authority |
 
 The upgrade gate runs in this order. Every refusal happens before the
 WebSocket handshake completes:
@@ -1707,7 +1708,7 @@ WebSocket handshake completes:
    these paths.
 3. Before [startup readiness](./startup-readiness.md): `503`, like `/invite`
    and `/tunnel`.
-4. Bearer token (`Authorization: Bearer <token>` header only, no `?token=`):
+4. On `/node/link` and `/node/git`, bearer token (`Authorization: Bearer <token>` header only, no `?token=`):
    looked up **only** among the machine's unrevoked executor credentials
    ([§2.6](./02-authentication.md#26-executor-credentials)), else `401`. A
    machine that never minted a credential, or whose credentials are all
@@ -1761,6 +1762,87 @@ fingerprint.
 - **Disconnect** 10 minutes after the last remote agent on the machine exits.
   With no live agent nothing reconnects until the backend needs the machine
   again.
+
+### Node invite claim
+
+`/node/claim` turns one [node invite](./methods/nodes.md#node-invites-and-claim)
+into an executor credential for the backend that presents it. It is the only
+anonymous `/node/*` path, and it serves one exchange and nothing else.
+
+**Admission.** Gate steps 1 to 3 above apply (path, `server.wsApi.enabled`, no
+`Origin`, startup readiness). Step 4 does not: the upgrade resolves no
+credential, and an `Authorization` header is ignored and confers nothing. The
+listener bounds anonymous load as `/invite` does: at most 32 concurrent claim
+connections (`503` beyond), 16 KiB frames, and the exchange must finish within
+10 s of the upgrade.
+
+**Dialing.** The backend dials with the link's routes, the
+[route race](#routes-and-on-demand-connection) and pinned TLS to the link's
+`fp`. A mismatch is `node-link-certificate-mismatch` and the backend sends
+nothing. Insecure dev mode skips TLS but never the invite check.
+
+**Exchange.** Text frames, JSON, one each way, then the machine closes with
+`1000`:
+
+```ts
+// backend → machine
+interface ClaimFrame {
+  type: "claim";
+  inviteId: string;
+  secret: string;
+  backendId: string;                 // as remoteMachines.backendInfo
+  backendName: string;               // 1-128 UTF-8 bytes
+  backendFingerprint?: string;
+  protocol: ProtocolRange;           // the backend's executor link range
+}
+
+// machine → backend, on success
+interface ClaimedFrame {
+  type: "claimed";
+  credentialId: string;
+  token: string;                     // returned once, never logged
+  machine: { daemonId: string; name: string; platform: { os: string; arch: string };
+             port: number; hosts: string[]; tcAddress?: string; fingerprint: string };
+  machineVersion: string;
+  protocol: ProtocolRange;           // the machine's range
+}
+
+// machine → backend, on refusal
+interface ClaimRefusedFrame {
+  type: "claimRefused";
+  code: "node-invite-invalid" | "node-invite-expired" | "node-invite-used"
+      | "node-invite-revoked" | "node-invite-self" | "node-link-version"
+      | "node-link-protocol" | string; // open enum
+  expiresAt?: string;                // with node-invite-expired
+  machineVersion?: string;           // with node-link-version
+  protocol?: ProtocolRange;          // with node-link-version
+}
+```
+
+These are closed payloads: unknown or mistyped members are refused with
+`node-link-protocol`. The machine decides in this order and spends the invite
+only on the last row:
+
+| Check | Refusal |
+| --- | --- |
+| Frame does not parse, or is not `claim` | `node-link-protocol` |
+| No invite with that id, or the secret's hash does not match (constant-time) | `node-invite-invalid` |
+| Invite revoked | `node-invite-revoked` |
+| Invite already used | `node-invite-used` |
+| Past `expiresAt` | `node-invite-expired` |
+| `backendId` is this daemon's own backend id | `node-invite-self` |
+| No common version between the two ranges | `node-link-version` |
+| Otherwise | In one transaction: mark the invite used (with the claiming `backendId`), insert the executor credential exactly as `executor.mint` does; then send `claimed` |
+
+The `claimed` fields are those of `executor.mint`. If the connection drops
+after the transaction, the invite stays used and the minted credential is shown
+in the machine's `executor.list` with its `inviteId`; nobody holds its token,
+and the owner revokes it there. The backend maps a refusal to the public
+[claim errors](./methods/nodes.md#claim-errors) (`node-link-version` becomes
+`machine-update-required`), and a `404` on the upgrade to
+`machine-update-required` with `update: "machine"`. No `nodeProtocol` version is
+added: the claim runs before any link exists, and the link after it negotiates
+as before.
 
 ### Binding per credential
 

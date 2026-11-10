@@ -191,6 +191,14 @@ a method outside the node-mode list. The message-prefixed
 returned by `agent.setModel`; it remains only as a remote start failure when
 the identity changed outside `agent.setModel` or quota failover. No new numeric error is introduced.
 
+[Node invites](./methods/nodes.md#claim-errors) add `data.code` values on existing
+numeric codes. `-32602` from `remoteMachines.claim`: `invalid-node-link`,
+`node-invite-invalid`, `node-invite-expired` (data `expiresAt`),
+`node-invite-used`, `node-invite-revoked` and `node-invite-self`; its
+`machine-unreachable` (`-32603`) and `machine-update-required` add
+`inviteSpent`. `-32603` from `executor.invite.create`: `listener-down` and
+`no-route`.
+
 The [cloud machines](./methods/nodes.md#remote-machine-errors) add three
 `data.code` values, also on existing numeric codes. `-32602`:
 `cloud-profile-required` (placement or `agent.setModel` would send no

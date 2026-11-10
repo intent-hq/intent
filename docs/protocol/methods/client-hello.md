@@ -198,6 +198,13 @@ affordances only when it is exactly `1`; it grants no caller authority.
 together with `remoteMachines: 1`. Clients and the agent binding
 call it only when it is exactly `1`; it grants no caller authority.
 
+**Remote machine claim (additive).** Exact integer
+`server.capabilities.remoteMachineClaim: 1` means the backend implements
+[`remoteMachines.claim`](./nodes.md#node-invites-and-claim), which adds a machine
+from an `intent://node` link. It is advertised only together with
+`remoteMachines: 1`. Clients accept `intent://node` links only when it is exactly
+`1`; it grants no caller authority.
+
 **Workspace discussions (additive extension).**
 Exactly integer `server.capabilities.discussionConversations: 1` advertises the
 [§5.55 contract](./multiplayer.md#555-workspace-discussions): conversation and
