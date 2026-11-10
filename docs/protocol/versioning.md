@@ -35,6 +35,21 @@ them, as an older backend never does. Local rows are unchanged. The launch body 
 unknown members within node-link protocol 6 and the fields change no authority or
 meaning, so they need no nodeProtocol version.
 
+Also within 17.0 (additive methods, path and capability; capability-gated, so no
+version bump): **node invites** ([node invites and claim](./methods/nodes.md#node-invites-and-claim)).
+`intentd pair --node` mints a single-use, expiring node invite on the machine
+with the owner-only router method `executor.invite.create` and prints an
+`intent://node?v=1&host=…&port=…&fp=…&invite=…&secret=…[&tc=…]` link that carries
+no owner token. `executor.list` adds `invites` and a credential's `inviteId`;
+`executor.revoke` also takes `inviteId`. The backend claims a link with the
+owner-only router method `remoteMachines.claim`, gated by
+`remoteMachineClaim: 1` (advertised only with `remoteMachines: 1`), over the
+machine's new anonymous [`/node/claim`](./node-link.md#node-invite-claim) path;
+the claim mints an ordinary executor credential and the backend saves the
+machine as `remoteMachines.add` does. No `nodeProtocol` version is added. Node
+setup now ends with `intentd pair --node --tunnel` and prints the node link. The
+documented surface is **501 / 443 / 58** (dispatchable / router / fast path).
+
 **Version 16.0 — per-agent CoW sandbox retirement (breaking).**
 Removes per-agent copy-on-write sandboxes ([nodes.md landing step 2](./methods/nodes.md#errors-and-retirement-gates)).
 `sandbox.cow.merge` and `sandbox.cow.discard` now return `-32601 Method not found`.
