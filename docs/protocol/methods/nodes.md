@@ -351,7 +351,9 @@ and members get `-32003`, and the service rechecks the owner role.
 
 Minting again for the same `backendId` creates another credential; the earlier
 one stays valid until revoked. The machine's `agent.memoryUsage` (§5.5) lists the
-agents it runs for each backend, tagged `remoteOwner: { backendId, backendName }`,
+agents it runs for each backend, tagged `remoteOwner: { backendId, backendName }`
+and labelled with the launch's optional `agentName` and `workspaceTitle`
+([display labels](../node-link.md#display-labels)),
 and `system.status` (§5.7) counts the live links in `remoteLinks`: `backends` on the
 machine, `machines` on the backend. `machine.hosts`, `port` and `tcAddress` are the
 routes the machine currently advertises for pairing, and `fingerprint` is its

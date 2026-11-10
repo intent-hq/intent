@@ -2390,6 +2390,8 @@ interface LaunchCommand {
   gitIdentity?: GitIdentity;       // any protocol; see Commit identity
   newMachine?: string;             // any protocol; see Relaunch without a checkout
   harnessVersion?: string;         // any protocol; see below
+  agentName?: string;              // any protocol; display label, see Display labels
+  workspaceTitle?: string;         // any protocol; display label, see Display labels
 }
 ```
 
@@ -2422,6 +2424,36 @@ the compact or full form within that version.
    backend cannot detect this, so a remote agent on an older machine can get the
    pre-3.10 description under a 3.10 stamp until the machine is updated. The
    field needs no nodeProtocol version.
+
+#### Display labels
+
+`agentName` and `workspaceTitle` let the machine show whose agent it runs.
+`agentName` is the session's current name and `workspaceTitle` the title of the
+agent's workspace on the backend.
+
+1. **Display only.** The machine never uses them for identity, routing,
+   authorization, storage paths or any decision. `agentId`, `workspaceId` and
+   the credential's binding stay the only identity. The machine shows them only
+   to its own owner, who already runs the agent's code.
+2. **Sent on every launch.** The backend sends both on every launch, relaunches
+   included, with the values current at that moment. It sends no update
+   between launches: a rename on the backend shows on the machine after the
+   next launch (a model switch, a restore or a reconnect relaunch).
+3. **Bounds.** The backend trims each value and omits it when it is empty. It
+   cuts a value longer than 256 UTF-8 bytes at a character boundary at or below
+   256 bytes.
+4. **Machine side.** The machine keeps the values from the latest launch with
+   the hosted agent, in memory, and replaces them on each launch. A launch
+   without a value clears it. A value that is not a string, is empty after
+   trimming or is longer than 256 UTF-8 bytes counts as absent. Neither case
+   refuses the launch.
+5. **Where they show.** The machine serves them on the agent's
+   [`agent.memoryUsage`](./methods/agents.md) row (`agentName`,
+   `workspaceTitle`) beside `remoteOwner`.
+6. **Older peers.** An older backend never sends them, and its agents' rows
+   omit them as today. An older machine ignores them. The launch body ignores
+   unknown members within protocol 6 and the fields change no authority or
+   meaning, so they need no nodeProtocol version.
 
 The machine refuses a launch its [limits](#capacity-and-permission) deny
 (`node-capacity`) or for a provider it cannot run, including one turned off in
