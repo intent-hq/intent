@@ -129,7 +129,7 @@ export function isolatedBaseEnv(home) {
 export function versions(provider, bin, providerEnv) {
   const spec = PROVIDERS[provider];
   const binary = fs.readFileSync(bin, { encoding: 'latin1' });
-  const adapter = binary.match(/@agentclientprotocol\/(?:claude-agent-acp|codex-acp)@[0-9][\w.-]*/g) ?? [];
+  const adapter = binary.match(/@agentclientprotocol\/(?:claude-agent-acp|codex-acp)@\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)[.\d]*)?/g) ?? [];
   const pick = provider === 'codex' ? /codex-acp/ : /claude-agent-acp/;
   const env = { ...isolatedBaseEnv(os.tmpdir()), ...providerEnv };
   return {
