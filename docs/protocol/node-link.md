@@ -2425,6 +2425,29 @@ the compact or full form within that version.
    pre-3.10 description under a 3.10 stamp until the machine is updated. The
    field needs no nodeProtocol version.
 
+The machine refuses a launch its [limits](#capacity-and-permission) deny
+(`node-capacity`) or for a provider it cannot run, including one turned off in
+its own settings (`node-provider-unavailable`).
+It fetches `baseCommit` over the git connection into a per-repository bare
+cache named by `repoKey`, creates the agent's worktree, on protocol 10 prepares
+its submodules and runs the setup script ([prepared checkout](#prepared-checkout-nodeprotocol-10)),
+spawns the provider and journals `started`. With the checkout the machine creates
+the agent's private temp folder: an owner-only directory beside the checkout, in the
+agent's own directory on the machine. It points the provider's `TMPDIR`, `TMP` and
+`TEMP` at it, over any inherited or profile value, so two agents never share a
+fixed temp file name. The folder lives as long as the checkout: a relaunch with the
+checkout keeps it, and it is removed with the checkout (a
+[final stop](#final-stop-nodeprotocol-9), the bind-time sweep, or a failed
+checkout). The folder needs no nodeProtocol: a machine from before it leaves the
+provider with the machine's own temp variables, shared with its other agents, while
+the backend's instructions still describe a private `$TMPDIR` (they also tell the
+agent to use `mktemp`). The machine opens the provider session without prompt
+injection, so the backend sends the agent's assembled instructions with its
+first prompt. A remote agent's provider, profile or model changes only through
+a validated `agent.setModel` or quota failover; the backend then stops the run
+and sends a new `launch` to the same machine
+([switching a remote agent's model](./methods/nodes.md#switching-a-remote-agents-model)).
+
 #### Display labels
 
 `agentName` and `workspaceTitle` let the machine show whose agent it runs.
@@ -2454,29 +2477,6 @@ agent's workspace on the backend.
    omit them as today. An older machine ignores them. The launch body ignores
    unknown members within protocol 6 and the fields change no authority or
    meaning, so they need no nodeProtocol version.
-
-The machine refuses a launch its [limits](#capacity-and-permission) deny
-(`node-capacity`) or for a provider it cannot run, including one turned off in
-its own settings (`node-provider-unavailable`).
-It fetches `baseCommit` over the git connection into a per-repository bare
-cache named by `repoKey`, creates the agent's worktree, on protocol 10 prepares
-its submodules and runs the setup script ([prepared checkout](#prepared-checkout-nodeprotocol-10)),
-spawns the provider and journals `started`. With the checkout the machine creates
-the agent's private temp folder: an owner-only directory beside the checkout, in the
-agent's own directory on the machine. It points the provider's `TMPDIR`, `TMP` and
-`TEMP` at it, over any inherited or profile value, so two agents never share a
-fixed temp file name. The folder lives as long as the checkout: a relaunch with the
-checkout keeps it, and it is removed with the checkout (a
-[final stop](#final-stop-nodeprotocol-9), the bind-time sweep, or a failed
-checkout). The folder needs no nodeProtocol: a machine from before it leaves the
-provider with the machine's own temp variables, shared with its other agents, while
-the backend's instructions still describe a private `$TMPDIR` (they also tell the
-agent to use `mktemp`). The machine opens the provider session without prompt
-injection, so the backend sends the agent's assembled instructions with its
-first prompt. A remote agent's provider, profile or model changes only through
-a validated `agent.setModel` or quota failover; the backend then stops the run
-and sends a new `launch` to the same machine
-([switching a remote agent's model](./methods/nodes.md#switching-a-remote-agents-model)).
 
 #### Relaunch without a checkout
 
