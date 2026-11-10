@@ -358,7 +358,7 @@ and members get `-32003`, and the service rechecks the owner role.
 | executor.mint | backendId (req), backendName (req, 1-128 UTF-8 bytes), backendFingerprint? | `{ credentialId, token, machine: { daemonId, name, platform: { os, arch }, port, hosts, tcAddress?, fingerprint } }`; creates one credential for that backend; `token` (32 random bytes, hex) is returned once and never logged |
 | executor.list | — | `{ backends: [{ credentialId, backendId, backendName, backendFingerprint?, createdAt, lastUsedAt?, connected, runningAgents, inviteId? }], invites: NodeInvite[] }`; unrevoked credentials only; `inviteId` names the invite a credential was claimed from; `invites` lists open invites only (unused, unexpired, unrevoked; additive, older machines omit it); never returns tokens or invite secrets |
 | executor.invite.create | label? (1-128 UTF-8 bytes), expiresInSecs? (integer, 300-604800, default 86400) | `{ invite: NodeInvite, secret, uri, hosts, port, fingerprint, tcAddress? }`; mints one [node invite](#node-invites-and-claim); `secret` (32 random bytes, hex) is returned once and never logged; `uri` is the `intent://node` link; with the listener off `-32603` `listener-down`, and with no route (no `hosts` and no `tcAddress`) `-32603` `no-route`, both before anything is stored |
-| executor.revoke | credentialId (req) | `{ ok: true }`; sets the credential revoked, closes its live executor connections with `1008`, stops its agents, removes its journal and agent checkouts (as for any [inactive credential](../node-link.md#final-stop-nodeprotocol-9)) and refuses replays with `401`; an already revoked id is a no-op; an unknown id is `-32602` `not-found` |
+| executor.revoke | credentialId? \| inviteId? (exactly one) | `{ ok: true }`; with `credentialId` sets the credential revoked, closes its live executor connections with `1008`, stops its agents, removes its journal and agent checkouts (as for any [inactive credential](../node-link.md#final-stop-nodeprotocol-9)) and refuses replays with `401`; an already revoked id is a no-op; an unknown id is `-32602` `not-found` |
 
 `executor.revoke` also takes `inviteId` instead of `credentialId` (exactly one
 of the two, else `-32602`): it revokes an open invite, so a later claim fails
@@ -394,7 +394,7 @@ methods.
 | --- | --- | --- |
 | remoteMachines.backendInfo | — | `{ backendId, backendName, fingerprint? }`; the backend's persisted head id and display name, for `executor.mint` |
 | remoteMachines.add | machineId (req), name (req), hosts (req, string[]), port (req), tcAddress?, fingerprint (req), credentialId (req), token (req, secret) | `{ machine: RemoteMachine, replacedCredentialId? }`; probes before saving (route race, pin, token, bind, capabilities); on failure saves nothing and fails with `machine-unreachable` or `machine-update-required`; an existing `machineId` is replaced only after a successful probe, and `replacedCredentialId` names the old credential for the caller to revoke |
-| remoteMachines.claim | uri (req, an `intent://node` link) | `{ machine: RemoteMachine, replacedCredentialId? }`; gated by `remoteMachineClaim: 1`; claims the [node invite](#node-invites-and-claim) on the machine over `/node/claim`, then probes and saves exactly as `remoteMachines.add`; errors in [claim errors](#claim-errors) |
+| remoteMachines.claim | uri (req, secret, an `intent://node` link) | `{ machine: RemoteMachine, replacedCredentialId? }`; gated by `remoteMachineClaim: 1`; claims the [node invite](#node-invites-and-claim) on the machine over `/node/claim`, then probes and saves exactly as `remoteMachines.add`; errors in [claim errors](#claim-errors) |
 | remoteMachines.list | — | `{ machines: RemoteMachine[] }`; never returns tokens |
 | remoteMachines.remove | machineId (req), stopAgents? (boolean, default false) | `{ ok: true, credentialId }`; with live agents on the machine and no `stopAgents: true` fails `-32602` `machine-in-use` with `runningAgents`; with `stopAgents: true` it deletes nothing until the machine [acknowledges every stop](../node-link.md#stop-acknowledgement-nodeprotocol-7) (at most 30 s; from nodeProtocol 9 these are [final stops](../node-link.md#final-stop-nodeprotocol-9) and the wait is at most 90 s), else fails `-32603` `machine-unreachable` with `unconfirmedStops`; the caller revokes `credentialId` on the machine; unknown id is a no-op |
 | remoteMachines.refresh | machineId (req) | `{ machine: RemoteMachine }`; connects on demand and reads fresh capabilities; failures update `state` and fail with `machine-unreachable`, `machine-revoked` or `machine-update-required` |
@@ -568,8 +568,10 @@ intent://node?v=1&host=<ip[,ip...]>&port=<p>&fp=<sha256>&invite=<inviteId>&secre
 
 1. The app (owner of the current backend) hands the link to the current backend
    with `remoteMachines.claim { uri }`. The app never connects to the machine
-   and never holds a token for it. The frontend keeps the link out of the
-   renderer's storage and logs, as for pairing tokens.
+   and never holds a token for it. `uri` is a secret, like the `token` of
+   `remoteMachines.add`: the frontend keeps it out of the renderer's storage
+   and logs, and the backend never logs it, stores it or echoes it in a result
+   or an error.
 2. The backend parses the link and dials the machine's
    [`/node/claim`](../node-link.md#node-invite-claim) with the routes and the
    route race of the executor link, pinned to `fp`. The pin is checked before
@@ -607,10 +609,19 @@ carries the invite secret or a token.
 | `machine-unreachable` (`-32603`) | no route reached `/node/claim`, or the probe after the claim failed; `attempts: [{ route, error }]` as for `add`; a pin mismatch is `error: "node-link-certificate-mismatch"` | data `inviteSpent` |
 | `machine-update-required` | the machine has no `/node/claim` (`404`, `update: "machine"`), the two protocol ranges do not meet, or the probe found it out of date; data as for `add` | data `inviteSpent` |
 
-`inviteSpent: true` means the claim succeeded but the probe did not: the
-backend saved nothing and discarded the token, the invite is used, and the
-user needs a new link (`intentd pair --node`). It is `false` or absent when the
-invite is still open. A client shows a certificate message when every attempt
+`inviteSpent` says whether the link can be tried again:
+
+- `inviteSpent: false` means the backend never wrote the `claim` frame, or the
+  machine refused it before spending (the refusal codes above). The invite is
+  still open and the same link can be retried.
+- `inviteSpent: true` means the `claim` frame was written and no refusal came
+  back: the claim succeeded but the probe failed, or the reply was lost. The
+  backend saved nothing and holds no token. The invite is used, or may be, so
+  the user makes a new link (`intentd pair --node`); a retry of the same link
+  most likely fails with `node-invite-used`.
+
+`machine-unreachable` and `machine-update-required` from `remoteMachines.claim`
+always carry `inviteSpent`. A client shows a certificate message when every attempt
 is `node-link-certificate-mismatch`: the link does not match the machine at
 that address. A backend without `remoteMachineClaim: 1` answers `-32601`, and a
 non-owner caller gets `-32003`.

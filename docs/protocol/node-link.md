@@ -1821,7 +1821,11 @@ interface ClaimRefusedFrame {
 
 These are closed payloads: unknown or mistyped members are refused with
 `node-link-protocol`. The machine decides in this order and spends the invite
-only on the last row:
+only on the last row. The invite rows are read and the spend is written in one
+store transaction, as a conditional update (the invite becomes used only while
+it is still unused, unrevoked and unexpired). So of two concurrent claims, or a
+claim racing `executor.revoke { inviteId }`, exactly one wins; the loser gets
+`node-invite-used` or `node-invite-revoked`, and never a second credential:
 
 | Check | Refusal |
 | --- | --- |
@@ -1832,7 +1836,7 @@ only on the last row:
 | Past `expiresAt` | `node-invite-expired` |
 | `backendId` is this daemon's own backend id | `node-invite-self` |
 | No common version between the two ranges | `node-link-version` |
-| Otherwise | In one transaction: mark the invite used (with the claiming `backendId`), insert the executor credential exactly as `executor.mint` does; then send `claimed` |
+| Otherwise | In the same transaction: mark the invite used (with the claiming `backendId`), insert the executor credential exactly as `executor.mint` does; after commit send `claimed` |
 
 The `claimed` fields are those of `executor.mint`. If the connection drops
 after the transaction, the invite stays used and the minted credential is shown
