@@ -61,6 +61,7 @@ test('controlHeld: fail controls must fail without a leak, leak controls must le
   assert.equal(controlHeld({ control: 'fail', pass: false }), true);
   assert.equal(controlHeld({ control: 'fail', pass: true }), false);
   assert.equal(controlHeld({ control: 'fail', pass: false, error: 'boom' }), false);
+  assert.equal(controlHeld({ control: 'fail', pass: false, timedOut: true }), false);
   assert.equal(controlHeld({ control: 'leak', pass: false, isolationLeaks: ['skills/synced/x'] }), true);
   assert.equal(controlHeld({ control: 'leak', pass: true }), false);
 });

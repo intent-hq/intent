@@ -301,7 +301,7 @@ export function mockControls(tasks) {
 
 /** Did a control come out as expected? */
 export function controlHeld(result) {
-  if (result.error) return false;
+  if (result.error || result.timedOut) return false;
   if (result.control === 'fail') return !result.pass && !result.isolationLeaks?.length;
   if (result.control === 'leak') return Boolean(result.isolationLeaks?.length);
   return false;

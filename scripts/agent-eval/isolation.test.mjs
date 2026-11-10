@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { PROVIDERS, isolatedConfig, isolationLeaks, quarantineLeaks, syncBackCredentials } from './lib/daemon.mjs';
+import { PROVIDERS, credentialBaseline, isolatedConfig, isolationLeaks, quarantineLeaks, syncBackCredentials } from './lib/daemon.mjs';
 import { renderMarkdown } from './lib/report.mjs';
 import { checkIsolation } from './run.mjs';
 
@@ -86,10 +86,35 @@ test('checkIsolation taints the task-run and records it; a control is tainted bu
 test('a refreshed token is written back to the dedicated dir, an unchanged one is not', () => {
   const source = syncedSource();
   const dir = isolatedConfig(claude, source, path.join(tmp('run'), 'config'));
-  assert.deepEqual(syncBackCredentials(claude, dir, source), []);
+  const baseline = credentialBaseline(claude, dir);
+  assert.deepEqual(syncBackCredentials(claude, dir, source, baseline), { copied: [], conflicts: [] });
   fs.writeFileSync(path.join(dir, '.credentials.json'), '{"claudeAiOauth":{"refreshToken":"r2"}}');
-  assert.deepEqual(syncBackCredentials(claude, dir, source), ['.credentials.json']);
+  assert.deepEqual(syncBackCredentials(claude, dir, source, baseline), { copied: ['.credentials.json'], conflicts: [] });
   assert.match(fs.readFileSync(path.join(source, '.credentials.json'), 'utf8'), /r2/);
+  assert.deepEqual(syncBackCredentials(claude, dir, source, baseline), { copied: [], conflicts: [] });
+});
+
+test('a stale run never overwrites a newer sign-in another run wrote back', () => {
+  const source = syncedSource();
+  const a = isolatedConfig(claude, source, path.join(tmp('run-a'), 'config'));
+  const b = isolatedConfig(claude, source, path.join(tmp('run-b'), 'config'));
+  const baseA = credentialBaseline(claude, a);
+  const baseB = credentialBaseline(claude, b);
+  fs.writeFileSync(path.join(a, '.credentials.json'), '{"claudeAiOauth":{"refreshToken":"r2"}}');
+  syncBackCredentials(claude, a, source, baseA);
+  assert.deepEqual(syncBackCredentials(claude, b, source, baseB), { copied: [], conflicts: [] });
+  fs.writeFileSync(path.join(b, '.credentials.json'), '{"claudeAiOauth":{"refreshToken":"r3"}}');
+  assert.deepEqual(syncBackCredentials(claude, b, source, baseB), { copied: [], conflicts: ['.credentials.json'] });
+  assert.match(fs.readFileSync(path.join(source, '.credentials.json'), 'utf8'), /r2/);
+});
+
+test('a half-written credentials file is never copied back', () => {
+  const source = syncedSource();
+  const dir = isolatedConfig(claude, source, path.join(tmp('run'), 'config'));
+  const baseline = credentialBaseline(claude, dir);
+  fs.writeFileSync(path.join(dir, '.credentials.json'), '{"claudeAiOauth":{"refre');
+  assert.deepEqual(syncBackCredentials(claude, dir, source, baseline), { copied: [], conflicts: [] });
+  assert.match(fs.readFileSync(path.join(source, '.credentials.json'), 'utf8'), /r1/);
 });
 
 test('the report fails loudly on a leak and lists the negative controls', () => {

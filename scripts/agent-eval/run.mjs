@@ -242,17 +242,28 @@ export async function main(argv = process.argv.slice(2)) {
     console.log(USAGE);
     return 0;
   }
+  function writeBack() {
+    const { conflicts } = syncBackCredentials(PROVIDERS[opts.provider], configDir, sourceDir, baseline);
+    if (conflicts.length) log(`not writing refreshed ${conflicts.join(', ')} back: ${sourceDir} holds a newer sign-in`);
+  }
   const mock = opts.provider === 'mock';
   let tasks = selectTasks({ ids: opts.tasks, quick: opts.quick });
   if (mock) tasks = tasks.filter((t) => t.mock);
   const controls = mock ? mockControls(tasks) : [];
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-eval-'));
-  const { env: providerEnv, dir: configDir, sourceDir } = preflightProvider(opts.provider, opts.configDir, root);
-  const isolation = { dir: configDir, spec: PROVIDERS[opts.provider], quarantine: path.join(root, 'quarantine'), leaks: [] };
-  const ver = versions(opts.provider, opts.bin, providerEnv);
-  if (!ver.evalOverride && opts.harness.some((h) => h !== 'current')) {
-    throw new Error(`${opts.bin} has no eval harness override (INTENTD_EVAL_HARNESS_VERSION); use --harness current or a newer build`);
+  let providerEnv, configDir, sourceDir, baseline, ver;
+  try {
+    ({ env: providerEnv, dir: configDir, sourceDir, baseline } = preflightProvider(opts.provider, opts.configDir, root));
+    ver = versions(opts.provider, opts.bin, providerEnv);
+    if (!ver.evalOverride && opts.harness.some((h) => h !== 'current')) {
+      throw new Error(`${opts.bin} has no eval harness override (INTENTD_EVAL_HARNESS_VERSION); use --harness current or a newer build`);
+    }
+  } catch (error) {
+    if (configDir) writeBack();
+    fs.rmSync(root, { recursive: true, force: true });
+    throw error;
   }
+  const isolation = { dir: configDir, spec: PROVIDERS[opts.provider], quarantine: path.join(root, 'quarantine'), leaks: [] };
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const out = path.resolve(opts.out ?? path.join('.dev', 'agent-eval', `${stamp}-${opts.provider}`));
   fs.mkdirSync(out, { recursive: true });
@@ -293,7 +304,7 @@ export async function main(argv = process.argv.slice(2)) {
           const cached = i === 0 && cache?.get(arm.harness, task, run);
           const r = cached || (await runTask({ arm, task, run, opts, root }));
           if (!cached) checkIsolation(isolation, r);
-          syncBackCredentials(isolation.spec, configDir, sourceDir);
+          writeBack();
           if (i === 0 && cache && !cached && !r.error && !r.isolationLeaks) cache.put(arm.harness, task, run, r);
           results.push(r);
           log(`${r.pass ? 'PASS' : 'FAIL'} ${arm.harness} ${task.id}#${run}${r.cached ? ' (cached)' : ''}: ${r.detail ?? ''}`);
@@ -319,7 +330,7 @@ export async function main(argv = process.argv.slice(2)) {
     if (configDir) {
       const late = { task: '(after the last task-run)', harness: '-', run: '-' };
       if (checkIsolation(isolation, late).length) log(`config leak after the last task-run: ${late.isolationLeaks.join(', ')}`);
-      syncBackCredentials(isolation.spec, configDir, sourceDir);
+      writeBack();
       fs.rmSync(configDir, { recursive: true, force: true });
     }
   }
