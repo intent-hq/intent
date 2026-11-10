@@ -2705,11 +2705,14 @@ pin in order (parents first):
    for a nested one (git reads a submodule's `active` from the repository
    that contains it). It never sets a submodule URL and never contacts the
    forge;
-4. sets `submodule.<name>.fetchRecurseSubmodules=false` in the same worktree
-   config, also for a pin an earlier launch already populated. The submodule
+4. sets `submodule.<name>.fetchRecurseSubmodules=false` and
+   `fetch.recurseSubmodules=false` in the same worktree config. The submodule
    has no remote, so git's on-demand recursion would otherwise make every
    `git fetch` whose new commits move the gitlink exit 1. The per-module key
-   wins over a `.gitmodules` value.
+   wins over a `.gitmodules` value; the worktree's `fetch.recurseSubmodules`
+   wins over a user's global `submodule.recurse`. For a pin an earlier launch
+   already populated the machine only sets these keys, and a failure there is
+   a warning, not `node-checkout-failed`.
 
 `git submodule status` in the machine checkout then matches the backend
 worktree. A fetch or check that fails ends the launch with
