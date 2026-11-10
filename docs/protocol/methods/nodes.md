@@ -1471,6 +1471,9 @@ a deny-by-default method list, golden-tested like the collaborator allowlist so
 every cataloged method is either listed or refused:
 
 - `client.hello`, `system.status`, `host.status`, `principal.me`;
+- `agent.memoryUsage` ([§5.5](./agents.md)), owner-only as everywhere, so
+  `intentd agents` and the Agent memory dialog list the agents the machine
+  runs for its backends;
 - `server.pairingInfo` and the `pairing.*` methods, local-only as today;
 - `settings.get` / `settings.update` for the `remoteAgents.*` (that is,
   `remoteAgents.permission`), `daemon.*` and `server.*` keys;
