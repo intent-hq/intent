@@ -990,6 +990,31 @@ No methods, events, numeric codes or nodeProtocol change, and the surface
 counts are unchanged. Clients detect it by the presence of `remoteCompatible`
 on profile rows; there is no public protocol version bump.
 
+**Remote-compatible as a saved choice, and machine sign-in (additive, presence-detected).**
+[`remoteCompatible`](./methods/provider-profiles.md#remote-compatibility) becomes
+the user's saved "Use on remote machines" choice instead of a computed value.
+`providers.profiles.create`, `update` and `updateDefault` accept
+`remoteCompatible?: boolean`, with the new field error `remote-account-folder`
+(an account folder can never be marked). `RemoteIncompatibility.reason` gains
+`not-marked`. `DefaultConfig` gains `remoteLaunch`
+(`"send" | "machine-sign-in" | "refused"`), and `providers.catalog` gains
+`defaultRemoteLaunch`; `defaultRemoteIncompatibility` now lists only Defaults
+that cannot run. The new setting `providers.remoteMachineSignIn` (per base
+provider, missing means on) lets an unmarked Default run with the machine's own
+sign-in ([machine sign-in](./methods/provider-profiles.md#machine-sign-in-on-remote-machines)).
+The [launch rules](./methods/nodes.md#placement-across-machines) apply to placement,
+sub-agents, `agent.setModel` and failover. `profile-not-remote-compatible` data
+gains `name` and `machineSignIn?`; the new `-32602` `machine-not-signed-in`
+refuses a machine-sign-in launch on machines reported signed out, and the new
+machine start-failure code `node-provider-signed-out` reports one that fails on
+authentication. A one-time migration keeps every launch that worked before (see
+[Remote compatibility](./methods/provider-profiles.md#remote-compatibility));
+`create` without the field applies the same rule. No methods or events are added,
+no numeric codes, and no nodeProtocol change (start-failure codes are journaled
+strings), so the surface counts are unchanged and there is no public protocol
+version bump. Clients detect it by the presence of `DefaultConfig.remoteLaunch`
+and of `providers.remoteMachineSignIn` in `settings.list`.
+
 **Daemon-link traffic capture — capability `remoteLinkTraffic: 1` (additive).**
 [Link traffic capture](./methods/nodes.md#link-traffic-capture) lets the owner
 record a daemon's executor-link frames in both directions. It adds three

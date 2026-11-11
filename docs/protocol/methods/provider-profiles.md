@@ -136,9 +136,15 @@ redaction applies. Deleting the file removes every profile.
   provider's entries and leaves other base providers' entries where they are.
 - **Backup flag.** `backup` is written only while `true`; an absent member reads as
   `false`. The file `version` stays `1`, so files without the member load unchanged.
-- **Downgrade.** An older daemon ignores `backup` and keeps the array order. It drops
-  `backup` when it next rewrites the file, after any create, update or delete, so the
-  flags must be set again after an upgrade. It never fails over.
+- **Remote-compatible flag.** Each profile entry, and each `defaults` entry, stores
+  `remoteCompatible: boolean` once [migrated](#remote-compatibility). Unlike
+  `backup`, it is written for both values, so a missing member always means "not
+  migrated yet". The file `version` stays `1`.
+- **Downgrade.** An older daemon ignores `backup` and `remoteCompatible`, and keeps
+  the array order. It drops both when it next rewrites the file, after any create,
+  update or delete. After an upgrade the `backup` flags must be set again, and the
+  daemon migrates `remoteCompatible` again from the rule, so an explicit choice that
+  differs from the rule must be made again. An older daemon never fails over.
 - **Reads.** The daemon reads the file at startup and after its own writes. It does
   not watch for external edits; changes made outside the daemon apply after a restart.
   If the file is malformed or has an unknown `version`, the daemon still starts and
@@ -213,11 +219,11 @@ guests receive `-32003`. Each is daemon-global, with no `workspaceId` required.
 | Method | Params | Result |
 | --- | --- | --- |
 | providers.profiles.list | baseProviderId? | { profiles: ProviderProfile[], defaults: DefaultConfig[], revision } |
-| providers.profiles.create | baseProviderId (req), name (req), env?: EnvEntryWrite[], backup?: boolean | { profile: ProviderProfile, revision } |
-| providers.profiles.update | profileId (req), name?, env?: EnvEntryWrite[], backup?: boolean | { profile: ProviderProfile, revision, activation: ProfileActivation } |
+| providers.profiles.create | baseProviderId (req), name (req), env?: EnvEntryWrite[], backup?: boolean, remoteCompatible?: boolean | { profile: ProviderProfile, revision } |
+| providers.profiles.update | profileId (req), name?, env?: EnvEntryWrite[], backup?: boolean, remoteCompatible?: boolean | { profile: ProviderProfile, revision, activation: ProfileActivation } |
 | providers.profiles.delete | profileId (req) | { profileId, revision } |
 | providers.profiles.reorder | baseProviderId (req), profileIds (req): string[] | { profiles: ProviderProfile[], revision } |
-| providers.profiles.updateDefault | baseProviderId (req), name?, env?: EnvEntryWrite[] | { defaultConfig: DefaultConfig, revision, activation: ProfileActivation } — see [Default configuration overrides](#default-configuration-overrides) |
+| providers.profiles.updateDefault | baseProviderId (req), name?, env?: EnvEntryWrite[], remoteCompatible?: boolean | { defaultConfig: DefaultConfig, revision, activation: ProfileActivation } — see [Default configuration overrides](#default-configuration-overrides) |
 
 ```ts
 interface ProviderProfile {
@@ -231,12 +237,12 @@ interface ProviderProfile {
   createdAt: string;          // RFC 3339
   updatedAt: string;
   activation?: { runningProcesses: number }; // see "Activation on reads"
-  remoteCompatible?: boolean; // see "Remote compatibility"; present on implementing daemons
+  remoteCompatible?: boolean; // the saved "Use on remote machines" choice; see "Remote compatibility"
   remoteIncompatibility?: RemoteIncompatibility; // present exactly when remoteCompatible is false
 }
 interface RemoteIncompatibility {
-  reason: "account-folder" | string; // open enum; "account-folder" is the only value today
-  keys: string[];                   // the variable names that cause it, as saved; never values
+  reason: "account-folder" | "not-marked" | string; // open enum
+  keys: string[];  // account-folder: the variable names, as saved; not-marked: []; never values
 }
 type EnvEntryRead =
   | { key: string; kind: "set"; value: string } // "********" (masked) or "" (saved empty string); CLAUDE_CONFIG_DIR / CODEX_HOME: the stored value
@@ -272,6 +278,10 @@ interface ProfileActivation {
 - **Backup.** `backup` defaults to `false` on create. On update, omitting it keeps the
   saved value. A non-boolean value returns `-32602`. Changing only `backup` is not an
   environment change: `envChanged` is `false` and running processes are unaffected.
+- **Remote compatible.** `remoteCompatible` is the saved choice to let the
+  configuration run on remote machines (see [Remote compatibility](#remote-compatibility)).
+  On update, omitting it keeps the saved value; changing only it is not an
+  environment change (`envChanged: false`). A non-boolean value returns `-32602`.
 - **Order.** `list` returns profiles in file order, so each base provider's profiles
   appear in that base provider's saved order. Catalog `profiles` uses the same order. Clients render this order and do not sort by name.
 - **Reorder.** `profileIds` is the complete new order for `baseProviderId`: every saved
@@ -310,34 +320,60 @@ interface ProfileActivation {
     last known state; omission does not mean `0`.
   - The `update` result's top-level `activation` additionally carries `envChanged`.
   - `ProviderProfileSummary` (catalog rows and events) does not carry activation.
-- <a id="remote-compatibility"></a>**Remote compatibility.** Every `ProviderProfile`
-  and `DefaultConfig` read carries `remoteCompatible`: whether the configuration can
-  run an agent on another machine (a [remote agent](./nodes.md#daemon-to-daemon-remote-machines)).
-  That covers `list` (profiles and `defaults`), the `profile` in `create` and
-  `update` results, the `profiles` in `reorder` results, and the `defaultConfig` in
-  `updateDefault` results.
-  - A configuration that **sets** an account folder (`CLAUDE_CONFIG_DIR` or
-    `CODEX_HOME`, compared ignoring ASCII case, under either base provider) is not
-    remote-compatible: `remoteCompatible: false` with
-    `remoteIncompatibility: { reason: "account-folder", keys }`, where `keys` lists
-    those variable names as saved. The folder is signed in on this backend; another
-    machine may lack it or hold a different account under the same path, so the rule
-    holds whether or not the folder exists on any machine.
-  - Everything else is `remoteCompatible: true` with no `remoteIncompatibility`: the
-    Default configuration with no overrides (the machine's own sign-in), an
-    environment of other values such as API keys or base URLs, and an `unset`
-    account folder.
+- <a id="remote-compatibility"></a>**Remote compatibility.** `remoteCompatible` is a
+  **saved choice** ("Use on remote machines"): the user's consent to send this
+  configuration's environment to any machine this backend launches a
+  [remote agent](./nodes.md#daemon-to-daemon-remote-machines) on. There is no
+  per-machine consent. Every `ProviderProfile` and `DefaultConfig` read carries it:
+  `list` (profiles and `defaults`), the `profile` in `create` and `update` results,
+  the `profiles` in `reorder` results, and the `defaultConfig` in `updateDefault`
+  results. `create`, `update` and `updateDefault` write it.
+  - **Can't be marked.** A configuration that **sets** an account folder
+    (`CLAUDE_CONFIG_DIR` or `CODEX_HOME`, compared ignoring ASCII case, under either
+    base provider) is never remote-compatible. The folder is signed in on this
+    backend; another machine may lack it or hold a different account under the same
+    path. A write that sends `remoteCompatible: true` for a configuration whose
+    saved `env` would set an account folder fails with the `remote-account-folder`
+    field error on `remoteCompatible`, and nothing is saved. A write that adds an
+    account folder and omits `remoteCompatible` unmarks the configuration in the
+    same commit.
+  - **Reads.** `remoteCompatible: true` has no `remoteIncompatibility`.
+    `remoteCompatible: false` has one, with the first matching reason:
+    1. `{ reason: "account-folder", keys }` when an account folder is set; `keys`
+       lists those variable names as saved. Clients show the toggle as unavailable
+       and say why.
+    2. `{ reason: "not-marked", keys: [] }` otherwise. Clients show the toggle off.
+  - **Default.** For the Default configuration the choice decides whether its
+    overrides are sent. A marked Default sends its overrides; with none, it sends
+    nothing. An unmarked Default sends nothing and runs only through the machine's
+    own sign-in, when [machine sign-in](#machine-sign-in-on-remote-machines) is on
+    for its base provider. `DefaultConfig.remoteLaunch` gives the result.
+  - **Create default.** When `create` omits `remoteCompatible`, the daemon applies
+    the profile migration rule below to the new `env`, so an older client keeps
+    today's behaviour. Clients that know the field always send it.
+    `updateDefault` and `update` keep the saved value when it is omitted.
+  - **Migration.** A profile-file entry, or a `defaults` entry, without the stored
+    member keeps today's behaviour: the daemon fills the member at startup from the
+    rule below and rewrites the file once, before it serves any request.
+    - A profile is marked unless it sets an account folder. So API key and token
+      profiles start marked, Different login profiles (an account folder) start
+      unmarked, and Advanced profiles follow the same rule.
+    - A Default with at least one saved entry and no account folder starts marked.
+      Every other Default starts unmarked and keeps working on remote machines
+      through machine sign-in, which is on by default.
+    After migration the value changes only through an explicit write, or the
+    unmarking above; an `env` change never marks a configuration.
   - [Cloud machines](./nodes.md#placement-on-e2b) need more: a configuration
-    runs there only when its `env` has at least one `kind: "set"` entry. The
-    Default configuration with no overrides is `remoteCompatible: true` but
-    cannot run on E2B.
-  - The value follows the saved environment, so it is recomputed on every read and
-    changes only through an `env` write.
+    runs there only when it is marked **and** its `env` has at least one
+    `kind: "set"` entry. Machine sign-in never applies there, because a sandbox
+    has no sign-in.
   - `reason` is an open string enum. Clients treat an unknown reason as not
     remote-compatible and show `keys` when present.
-  - It is value-free: `keys` carries variable names only. Daemons that predate it
-    omit both fields; clients then treat the configuration as compatible and let
-    placement decide.
+  - It is value-free: `keys` carries variable names only. Daemons that predate the
+    field omit both fields; clients then treat the configuration as compatible and
+    let placement decide. Daemons that predate the saved choice compute the value
+    (only `account-folder` is then possible) and omit `DefaultConfig.remoteLaunch`;
+    clients detect the saved choice by `remoteLaunch` (see [Compatibility](#compatibility)).
 
 **Validation.** Invalid input returns `-32602` with `data.code: "invalid-params"` and
 `data.fieldErrors: [{ field, code, message }]`, listing every failure found:
@@ -357,6 +393,7 @@ interface ProfileActivation {
 | `env[i].value` | `env-value-invalid` | No NUL characters, and at most 32 KiB of UTF-8. |
 | `env[i].value` | `env-value-placeholder` | A `set` value of `********` is rejected. Use `kind: "keep"`. |
 | `env[i].kind` | `env-keep-missing` | `keep` names a key with no saved entry, or appears on create. |
+| `remoteCompatible` | `remote-account-folder` | `remoteCompatible: true` is sent while the saved `env` would set `CLAUDE_CONFIG_DIR` or `CODEX_HOME` (see [Remote compatibility](#remote-compatibility)). The message names the variables and says to turn off "Use on remote machines" or remove the folder. |
 | `profileIds[i]` | `profile-order-duplicate` | Reorder only. The id appears more than once. |
 | `profileIds[i]` | `profile-order-unknown` | Reorder only. The id is not a saved profile of `baseProviderId`. |
 | `profileIds` | `profile-order-incomplete` | Reorder only. A saved profile of `baseProviderId` is missing from the list. |
@@ -433,14 +470,23 @@ never removes external account directories.
 - **Remote compatibility in the catalog.** Each `profiles` row
   (`ProviderProfileSummary`) also carries `remoteCompatible` and, when it is `false`,
   `remoteIncompatibility`, as on `ProviderProfile`
-  ([Remote compatibility](#remote-compatibility)). The catalog gains an additive
-  top-level `defaultRemoteIncompatibility?: { "<baseProviderId>": RemoteIncompatibility }`,
-  holding only the base providers whose Default configuration is not remote-compatible
-  and omitted when every Default is compatible, like `defaultNames`. A base provider
-  absent from it is compatible. Member reads may include both, since they carry no
-  values. A provider picker for a remote agent reads these to mark or hide
-  configurations that cannot run there. `providers:profiles-changed` invalidates them;
-  its `profile` summary does not carry the two fields, so clients re-read the catalog.
+  ([Remote compatibility](#remote-compatibility)). The catalog gains two additive
+  top-level maps for the Default configurations:
+  - `defaultRemoteLaunch?: { "<baseProviderId>": DefaultRemoteLaunch }`, one entry
+    per base provider that advertises `supportsProfiles`, with the value of
+    `DefaultConfig.remoteLaunch`.
+  - `defaultRemoteIncompatibility?: { "<baseProviderId>": RemoteIncompatibility }`,
+    holding only the base providers whose Default **cannot run** on a remote machine
+    (`remoteLaunch: "refused"`), omitted when there is none, like `defaultNames`. An
+    unmarked Default that runs through machine sign-in is absent, so a client that
+    reads only this map still offers it. The reason is `account-folder` when the
+    Default sets one, else `not-marked`.
+
+  Member reads may include all three, since they carry no values. A provider picker
+  for a remote agent reads them to mark or hide configurations that cannot run there
+  (see the [launch rules](./nodes.md#placement-across-machines)).
+  `providers:profiles-changed` invalidates them; its `profile` summary does not carry
+  the fields, so clients re-read the catalog.
 - `models.list { providerId: providerRef }` returns that profile's catalog with
   `ModelInfo.provider = providerRef`. Cache keys and the version key include the
   profile's resolved environment fingerprint. Catalogs and cached status never cross
@@ -734,14 +780,19 @@ interface DefaultConfig {
   env: EnvEntryRead[];         // masked except folder paths; in stored order; [] when none saved
   settingsFingerprint: string; // opaque; "" exactly when no entries are saved
   activation?: { runningProcesses: number }; // as on ProviderProfile
-  remoteCompatible?: boolean;                // as on ProviderProfile
+  remoteCompatible?: boolean;                // saved choice: send these overrides to remote machines
   remoteIncompatibility?: RemoteIncompatibility; // as on ProviderProfile
+  remoteLaunch?: DefaultRemoteLaunch;        // what a remote launch of the bare reference does
 }
+type DefaultRemoteLaunch =
+  | "send"             // marked: its overrides are sent (none saved: nothing is sent)
+  | "machine-sign-in"  // not marked, machine sign-in on: nothing is sent; the machine's own sign-in runs it
+  | "refused";         // not marked, machine sign-in off: refused with profile-not-remote-compatible
 ```
 
 | Method | Params | Result |
 | --- | --- | --- |
-| providers.profiles.updateDefault | baseProviderId (req), name?, env?: EnvEntryWrite[] | { defaultConfig: DefaultConfig, revision, activation: ProfileActivation } |
+| providers.profiles.updateDefault | baseProviderId (req), name?, env?: EnvEntryWrite[], remoteCompatible?: boolean | { defaultConfig: DefaultConfig, revision, activation: ProfileActivation } |
 
 - **Reads.** `providers.profiles.list` gains an additive `defaults: DefaultConfig[]`
   with one entry per base provider that advertises `supportsProfiles`, in catalog
@@ -760,6 +811,12 @@ interface DefaultConfig {
   complete new list when present, unchanged when omitted. The same limits, key rules,
   reserved keys and home expansion apply, with the same field codes. `keep` names a
   key with a saved Default entry. An empty list removes every override.
+- **Remote compatible.** `remoteCompatible` is the Default's "Use on remote
+  machines" choice, with the [profile rules](#remote-compatibility) (including
+  `remote-account-folder`). Omitting it keeps the saved value. A Default may be
+  marked with no overrides; a remote launch then sends nothing. Removing every
+  override does not unmark it. `remoteLaunch` is recomputed on every read from this
+  choice and [machine sign-in](#machine-sign-in-on-remote-machines).
 - **Validation.** `baseProviderId` must be a canonical id with
   `supportsProfiles: true` (`base-provider-unsupported`). Errors use the same
   `-32602` `invalid-params` envelope and `fieldErrors` as profile mutations. The
@@ -767,11 +824,13 @@ interface DefaultConfig {
   `providers.profiles.*` methods.
 - **Storage.** Both halves belong to the daemon's own data dir, like profiles:
   - The profile file gains an optional
-    `defaults: { "<baseProviderId>": { "name"?, "envId"? } }` member. `name` is
-    present only for a renamed Default. `envId` is present only while entries are
-    saved; it is minted like a profile id and is never exposed. A base provider with
-    neither is omitted, and the member is omitted when empty. The file `version`
-    stays `1`.
+    `defaults: { "<baseProviderId>": { "name"?, "envId"?, "remoteCompatible"? } }`
+    member. `name` is present only for a renamed Default. `envId` is present only
+    while entries are saved; it is minted like a profile id and is never exposed.
+    The file `version` stays `1`.
+  - Each `defaults` entry also stores `remoteCompatible` once
+    [migrated](#remote-compatibility), so the entry is kept for every base provider
+    that advertises `supportsProfiles`, even with neither `name` nor `envId`.
   - Environment entries live in the protected `SecretStore` under account
     `providerProfiles.<envId>.env`, in the profile document shape. Because `envId`
     is random and recorded only in this daemon's file, another daemon sharing the
@@ -834,7 +893,10 @@ one event, with a `revision` one higher than the previous event, in three cases:
   carries no count; clients re-run `providers.profiles.list` to read it.
 - **A Default configuration change** ([Default configuration overrides](#default-configuration-overrides)).
   A committed `providers.profiles.updateDefault` has `change: "default-updated"`
-  with `baseProviderId` and `envChanged`. A change in the Default configuration's
+  with `baseProviderId` and `envChanged`. A committed change to a base provider's
+  [machine sign-in](#machine-sign-in-on-remote-machines) entry also emits one
+  `default-updated` for that base provider, with `envChanged: false`, because its
+  `remoteLaunch` changed. A change in the Default configuration's
   `activation.runningProcesses` has `change: "default-activation"` with
   `baseProviderId`. Neither carries `profileId` or `profile`; clients re-run
   `providers.profiles.list` (and `providers.catalog` for a new name).
@@ -853,20 +915,43 @@ a reconnect. A failover switch changes no profile and emits no
 #### Remote execution nodes
 
 An agent placed on a remote machine over the daemon-to-daemon executor link runs
-with the same selected profile or Default overrides, resolved on the backend and
-sent to the machine as an environment overlay; with neither, the machine uses its
-own provider login. Nothing falls back to another account. See
-[provider credentials](../node-link.md#provider-credentials-profile-environment).
+with the selected profile or a marked Default's overrides, resolved on the backend
+and sent to the machine as an environment overlay; otherwise nothing is sent and
+the machine uses its own provider sign-in. Nothing falls back to another account.
+See [provider credentials](../node-link.md#provider-credentials-profile-environment).
 
-Only a [remote-compatible](#remote-compatibility) configuration runs on a remote
-machine. Choosing one that sets an account folder for a remote agent, at placement
-or through `agent.setModel`, fails before any write with `-32602`
-`profile-not-remote-compatible`
+Only a configuration the user marked [remote-compatible](#remote-compatibility)
+is sent. The [launch rules](./nodes.md#placement-across-machines) decide every
+remote launch: placement, sub-agents, `agent.setModel` and quota failover. An
+unmarked profile, or an unmarked Default while machine sign-in is off, fails
+before any write with `-32602` `profile-not-remote-compatible`
 ([remote machine errors](./nodes.md#remote-machine-errors)). A remote agent can
-switch to another remote-compatible configuration or model that its machine offers;
-see [switching a remote agent's model](./nodes.md#switching-a-remote-agents-model).
-Quota failover on a remote agent likewise passes over backups that are not
-remote-compatible.
+switch to another allowed configuration or model that its machine offers; see
+[switching a remote agent's model](./nodes.md#switching-a-remote-agents-model).
+Quota failover on a remote agent passes over candidates the launch rules refuse.
+
+##### Machine sign-in on remote machines
+
+The setting [`providers.remoteMachineSignIn`](settings.md#machine-sign-in-on-remote-machines)
+on the **sending backend** holds one boolean per base provider that advertises
+`supportsProfiles` (`codex`, `claude-code`). A missing entry is **on**. It applies
+only when the bare reference (the Default configuration) is chosen for a remote
+agent and the Default is not marked:
+
+- **On.** Nothing is sent. The machine runs the provider with its own sign-in, if
+  the provider is detected and not disabled there. A machine whose sign-in status is
+  `unknown` is still tried; a launch that then fails on authentication is reported
+  as `node-provider-signed-out`
+  ([machine codes](../node-link.md#machine-start-failure-codes)). A machine known to be
+  `signed-out` or `auth-failed` is refused before launch with
+  `machine-not-signed-in`.
+- **Off.** The launch is refused with `profile-not-remote-compatible`,
+  `reason: "not-marked"` and `machineSignIn: false`.
+
+The setting never applies to a profile, to a marked Default, or on
+[E2B](./nodes.md#placement-on-e2b). Providers without profiles always run with the
+machine's own sign-in, as before. The result for each base provider is read as
+`DefaultConfig.remoteLaunch` and the catalog's `defaultRemoteLaunch`.
 
 #### Compatibility
 
@@ -893,6 +978,25 @@ absent, they treat every configuration as compatible and rely on the
 `profile-not-remote-compatible` refusal. Older clients ignore `remoteCompatible`,
 `remoteIncompatibility` and `defaultRemoteIncompatibility`, and surface the refusal's
 message.
+
+Clients detect the **saved choice** and machine sign-in by the presence of
+`remoteLaunch` on `DefaultConfig` (and `defaultRemoteLaunch` on the catalog), and
+show the machine sign-in control only when `providers.remoteMachineSignIn` is in
+`settings.list`. Without them, the daemon computes `remoteCompatible` from the
+account-folder rule: clients show it read-only and never send `remoteCompatible`,
+which such a daemon ignores. Older clients keep working unchanged:
+
+- The migration keeps every launch that worked before working, and `create`
+  without the field applies the same rule.
+- `update` and `updateDefault` without the field keep the saved choice, except
+  that adding an account folder unmarks the configuration.
+- `defaultRemoteIncompatibility` lists only Defaults that cannot run, so an older
+  picker still offers an unmarked Default that runs through machine sign-in.
+- An older Settings page reads an unmarked Default as `remoteCompatible: false`
+  (`not-marked`) and may describe it as not remote-ready even when machine sign-in
+  lets it run. This is an accepted, display-only degradation.
+- New refusals (`not-marked`, `machine-not-signed-in`, `node-provider-signed-out`)
+  reach older clients as ordinary errors with a full message.
 
 Clients detect backup failover support by the presence of `backup` on
 `ProviderProfile` and `ProviderProfileSummary`. When it is absent, they hide the

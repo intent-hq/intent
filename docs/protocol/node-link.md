@@ -2611,13 +2611,14 @@ while `effectiveIsolation` is still `pending`) surfaces on the agent as
 later `started` clears it. Once the agent is `isolated`, turn failures follow
 the existing turn-error path and do not set `placementError`. A failure while
 the backend records the launch sets `placementError.code` to
-`remote-launch-failed`. The machine codes are:
+`remote-launch-failed`. <a id="machine-start-failure-codes"></a>The machine codes are:
 
 | Code | Meaning |
 | --- | --- |
 | `node-capacity` | The machine's limits deny another agent ([capacity refusal](#capacity-and-permission)) |
 | `node-provider-unavailable` | The provider cannot run on the machine: unknown there, or turned off in its own `providers.enabled` ([enabled providers](#capabilities-report)); no process starts |
 | `node-profile-unavailable` | The selected profile cannot be used on the machine; no other account was used |
+| `node-provider-signed-out` | A launch without `profileEnv` failed because the provider is not signed in on the machine. The machine also sets the provider's report `status` to `auth-failed`. The detail names the provider and says to sign in on that machine or mark a configuration for remote machines. A machine from before sends `node-agent-start-failed`. |
 | `node-checkout-failed` | The agent's checkout could not be prepared (its base, a [submodule](#prepared-checkout-nodeprotocol-10), or on a [relaunch](#relaunch-without-a-checkout) its saved refs, including a failed `unapplied/` pin) |
 | `node-agent-start-failed` | The provider process could not be started or set up (also any error without a code) |
 | `node-agent-not-running` / `node-agent-busy` | A prompt for a stopped agent, or while a turn runs |
@@ -3938,9 +3939,12 @@ interface ProfileEnvOverlay {
 }
 ```
 
-- **Selection.** With a profile selected (or Default-configuration overrides
-  saved), the backend sends its overlay in `launch.profileEnv`. With neither,
-  it sends nothing and the machine uses its own provider login. A selected
+- **Selection.** With a marked profile selected, or a marked Default with
+  overrides saved, the backend sends its overlay in `launch.profileEnv`.
+  Otherwise it sends nothing and the machine uses its own provider login, which
+  for an unmarked Default needs
+  [machine sign-in](./methods/provider-profiles.md#machine-sign-in-on-remote-machines)
+  to be on. An unmarked profile is refused before any launch. A selected
   profile that cannot be resolved fails at create with
   `provider-profile-replacement-required` and again at each start; the backend
   never falls back to another account or to the machine's login.

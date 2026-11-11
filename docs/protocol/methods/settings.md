@@ -223,6 +223,35 @@ accept profile references, with no inheritance from the base entry
 ([per-profile Fast mode](provider-profiles.md#per-profile-fast-mode)). Profile metadata and environment
 values are managed only through `providers.profiles.*`, never through `settings.*`.
 
+<a id="machine-sign-in-on-remote-machines"></a>**Machine sign-in on remote machines.**
+
+`providers.remoteMachineSignIn` is a non-sensitive, TOML-backed `object` setting in
+category `providers`, with `defaultValue: {}`. It is a daemon-global map on the
+**sending backend** from a base provider id that advertises `supportsProfiles`
+(`codex`, `claude-code`) to a boolean. A missing entry means **on**. When the
+Default configuration of that base provider is chosen for a remote agent and is not
+marked for remote machines, on lets the machine run the provider with its own
+sign-in; off refuses the launch
+([rules](provider-profiles.md#machine-sign-in-on-remote-machines)). It never
+affects local agents, profiles, a marked Default or E2B.
+
+```jsonc
+{"changes": [{"path": "providers.remoteMachineSignIn", "value": {"claude-code": false}}]}
+```
+
+The value must be an object whose members name canonical providers advertising
+`supportsProfiles: true` in `providers.catalog` (§5.38), with boolean values.
+Profile references, aliases, unknown ids, other providers, arrays, null and
+non-booleans are `-32602`; validation rejects the entire batch before persistence.
+It is a whole-value replacement: clients preserve the other provider's entry. There
+are no dotted child settings. `settings.reset` restores `{}`, so every entry reads
+as on. A committed change emits `settings:changed` and, for each base provider whose
+effective value changed, `providers:profiles-changed` with
+`change: "default-updated"` ([events](provider-profiles.md#events)). The value
+applies to the next remote launch, switch or failover; running agents are not
+affected. Clients show the control on each provider's Default row only when the
+setting is present in `settings.list`.
+
 **Provider Fast mode preference.**
 
 `providers.fastMode` is a non-sensitive, TOML-backed `object` setting in category
@@ -351,7 +380,7 @@ accept this root as `instanceBaseUrl`. A successful PAT or device connection
 publishes host and root together; clients must not perform two independent
 settings writes to emulate connection setup.
 
-- **Providers / agents:** `providers.active` *(deprecated: superseded by `model.defaultProvider`; kept in the catalog during the deprecation window but read-only on the wire — `settings.update` tolerates-and-ignores it before the read-only rejection would fire, so old clients never fail a batch)*, `model.defaultProvider`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `model.defaultReasoningEffort`, `quickActions.defaultModel`, `quickActions.typeOverrides`, `quickActions.defaultReasoningEffort`, `quickActions.typeReasoningEffortOverrides`, `quickActions.providerSettings`, `specialists.default`, `specialists.dir`.
+- **Providers / agents:** `providers.active` *(deprecated: superseded by `model.defaultProvider`; kept in the catalog during the deprecation window but read-only on the wire — `settings.update` tolerates-and-ignores it before the read-only rejection would fire, so old clients never fail a batch)*, `model.defaultProvider`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `providers.remoteMachineSignIn`, `model.defaultReasoningEffort`, `quickActions.defaultModel`, `quickActions.typeOverrides`, `quickActions.defaultReasoningEffort`, `quickActions.typeReasoningEffortOverrides`, `quickActions.providerSettings`, `specialists.default`, `specialists.dir`.
   `model.defaultReasoningEffort` ([intent-hq/intentd#970](https://github.com/intent-hq/intentd/pull/970)) is an optional string persisted in `config.toml` under the `[model]` table as `defaultReasoningEffort` — the fallback reasoning effort for newly created agents, stored **as-is** (providers own the level vocabulary; the daemon never normalizes it) with a blank or whitespace-only value reading as unset (default: unset).
   It is the last rung of the creation-time reasoning-effort chain (§5.5 "Creation-time reasoning-effort resolution"), applying only when no explicit param / specialist model-option / specialist frontmatter effort decided the level **and** the session's model itself resolved from the settings chain; a level the resolved model's cached `effortLevels` provably does not list is dropped with a daemon warn log rather than rejected (§5.11).
   Agent model resolution walks `model.providerDefaults[provider]` → `model.default` (the settings-chain step of the daemon-side creation-time resolver, §5.5 — specialist frontmatter `model` takes precedence over this chain, and every result is provider-guarded).
