@@ -758,6 +758,11 @@ are tracked separately, never per model.
     way: it tries the chosen reference, and fails over as usual if it is out of quota.
   - If every candidate is marked, nothing moves: the turn tries its current reference
     and fails over as usual.
+  - A remote agent whose reference sends nothing (a plain Default with no overrides,
+    or an unmarked Default on a machine) runs on the machine's own sign-in, another
+    account than this backend's. This backend's mark never moves it: the turn starts on
+    the plain reference. A marked Default with overrides sends this backend's account,
+    so its mark applies ([intent-hq/intent#9100](https://github.com/intent-hq/intent/issues/9100)).
 - **Edited.** When `providers.profiles.update` or `providers.profiles.updateDefault`
   saves a change (the name, the environment, or a profile's `backup`), the edited
   reference's state is cleared before the call returns, so the next turn of every
