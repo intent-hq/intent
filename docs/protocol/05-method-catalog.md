@@ -38,6 +38,11 @@ adds six original pre-workspace router methods, plus the independently gated
 `sourceControl.checkout.repoConfig` read (`gitlabCheckoutRepoConfig: 1`). `gitlabCheckout: 1` gates the complete
 contract on the selected destination; it does not confer host or project access.
 
+The [session import contract (§5.5)](./methods/agents.md#importing-provider-sessions)
+adds two owner-only router methods, `agent.importableSessions.list` and
+`agent.importSession`, which bring an existing provider session on the daemon host
+into a workspace as a new agent with its history.
+
 The [PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup)
 adds one read-only router method, `workspace.findByPullRequest`.
 `prWorkspaceLookup: 1` gates support.
@@ -116,18 +121,18 @@ The [Agent Plugins contract (§5.57)](./methods/plugins.md) adds five
 administrator-only router methods that install, update, remove, enable and list
 app-wide plugins; `agentPlugins: 1` gates support.
 
-The documented surface reserves **497 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The documented surface reserves **499 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
 
-- **Router methods:** 443 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 445 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 54 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 0; use canonical Git read names
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 7 notifications: `events.lost` ([loss contract](./event-stream-recovery.md)), `events.event` (§6.3) and the socket-private `workspace.repositoryContext.retired`, `workspace.repositorySelection.retired`, `accept-changes.retired`, `sourceControl.read.retired`, `sourceControl.read.invalidated` controls (§6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 497 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 499 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 497 dispatchable names + 7 notifications. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 499 dispatchable names + 7 notifications. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.57) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
@@ -139,12 +144,12 @@ methods and four socket-private control notifications. Their individual hello
 capabilities gate support; catalog entries do not grant permission or establish
 which desktop release contains the feature. All existing methods remain present.
 
-### Router methods by namespace (443 total)
+### Router methods by namespace (445 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
 | accept-changes | 7 | addRemote, execute, getStatus, mergePR, prepare, reconcile, release — the "accept the agent's work" pipeline (§5.18; `workspaceId` req) |
-| agent | 52 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getCreationPreferences, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listActive, listInterrupted, listUserMessages, markSeen, memoryUsage, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, resolveProposal, respondPermission, restore, retire, retry, sendMessage, sendQueuedMessageNow, sendQueuedMessagesNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate, workers.list, workers.stop |
+| agent | 54 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getCreationPreferences, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, importSession, importableSessions.list, list, listActive, listInterrupted, listUserMessages, markSeen, memoryUsage, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, resolveProposal, respondPermission, restore, retire, retry, sendMessage, sendQueuedMessageNow, sendQueuedMessagesNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate, workers.list, workers.stop |
 | client | 1 | list — live hello'd connections grouped by logical `clientId` (§5.17; v9.9, daemon-global result; optional routing-only `workspaceId`). The handshake itself (`client.hello`) is a fast-path method, below |
 | cloudMachines | 5 | configure, kill, list, pause, remove — E2B and Northflank cloud machines (§5.50) from named entries, daemon-global; configure/remove owner-only, list owner and members, pause/kill owner or starter |
 | comment | 6 | add, delete, getThread, list, resolveThread, respond |
