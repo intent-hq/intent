@@ -59,6 +59,11 @@ the default for one chat with `agent.update { agentId, changes: { permissionPoli
   it.
 - Sub-agents do not inherit it; they use the daemon default unless overridden.
 - Remote agents refuse it: their machine applies `remoteAgents.permission`.
+- Codex: an effective policy other than `"allow"` starts the adapter with
+  `INITIAL_AGENT_MODE=workspace-write` (unless the daemon's environment sets it), since
+  `agent-full-access` never requests permission. In that sandbox Codex asks only to
+  escalate (write outside the workspace, use the network). Escalation is denied under
+  every headless policy; `"interactive"` sends it to the user.
 
 The normalized permission request payload is:
 
