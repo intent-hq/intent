@@ -1015,6 +1015,15 @@ strings), so the surface counts are unchanged and there is no public protocol
 version bump. Clients detect it by the presence of `DefaultConfig.remoteLaunch`
 and of `providers.remoteMachineSignIn` in `settings.list`.
 
+**Default credential auto-mark (behaviour change, no capability).**
+An `updateDefault` that adds an API key or token marks that Default for remote
+machines in the same commit, unless the write sends `remoteCompatible` or the
+Default sets an account folder
+([credential auto-mark](./methods/provider-profiles.md#default-credential-auto-mark)).
+No field, method, event or error code changes, and there is no public protocol
+version bump; clients read the result on the `updateDefault` reply and the next
+`providers.profiles.list`.
+
 **Daemon-link traffic capture — capability `remoteLinkTraffic: 1` (additive).**
 [Link traffic capture](./methods/nodes.md#link-traffic-capture) lets the owner
 record a daemon's executor-link frames in both directions. It adds three

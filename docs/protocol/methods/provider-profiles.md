@@ -380,8 +380,9 @@ interface ProfileActivation {
       [launch rules](./nodes.md#placement-across-machines) say for any unmarked
       Default. Its folder never leaves the backend. The user can turn machine
       sign-in off to keep it refused.
-    After migration the value changes only through an explicit write, or the
-    unmarking above; an `env` change never marks a configuration.
+    After migration the value changes only through an explicit write, the
+    unmarking above, or a Default's [credential auto-mark](#default-credential-auto-mark);
+    no other `env` change marks a configuration.
   - [Cloud machines](./nodes.md#placement-on-e2b) need more: a configuration
     runs there only when it is marked **and** its `env` has at least one
     `kind: "set"` entry. Machine sign-in never applies there, because a sandbox
@@ -832,10 +833,29 @@ type DefaultRemoteLaunch =
   key with a saved Default entry. An empty list removes every override.
 - **Remote compatible.** `remoteCompatible` is the Default's "Use on remote
   machines" choice, with the [profile rules](#remote-compatibility) (including
-  `remote-account-folder`). Omitting it keeps the saved value. A Default may be
-  marked with no overrides; a remote launch then sends nothing. Removing every
-  override does not unmark it. `remoteLaunch` is recomputed on every read from this
-  choice and [machine sign-in](#machine-sign-in-on-remote-machines).
+  `remote-account-folder`). Omitting it keeps the saved value, except for the
+  credential auto-mark below. A Default may be marked with no overrides; a remote
+  launch then sends nothing. Removing every override does not unmark it.
+  `remoteLaunch` is recomputed on every read from this choice and
+  [machine sign-in](#machine-sign-in-on-remote-machines).
+- <a id="default-credential-auto-mark"></a>**Credential auto-mark.** An
+  `updateDefault` that **adds a credential** marks the Default in the same commit,
+  so the credential is used on remote machines without a second step. A
+  credential is a `kind: "set"` entry for one of `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CODEX_ACCESS_TOKEN`,
+  `CODEX_API_KEY` or `OPENAI_API_KEY` (compared ignoring ASCII case). It is added
+  when the saved environment did not already set that key; changing the value of a
+  key that is already set, or `keep`, adds nothing.
+  - An explicit `remoteCompatible` in the same write wins.
+  - A Default whose saved result sets an account folder stays unmarked.
+  - Removing the credential later never unmarks it.
+  - A write that adds no credential (a rename, other keys, an `unset`) keeps the
+    saved choice.
+  - The daemon applies it for every client, so an older client that saves an API
+    key on the Default gets the same result. The `updateDefault` result and the
+    `default-updated` event carry the new state; clients re-list as usual.
+  - It applies only to Default configurations. A profile's choice changes only as
+    described in [Remote compatibility](#remote-compatibility).
 - **Validation.** `baseProviderId` must be a canonical id with
   `supportsProfiles: true` (`base-provider-unsupported`). Errors use the same
   `-32602` `invalid-params` envelope and `fieldErrors` as profile mutations. The
@@ -1008,7 +1028,8 @@ which such a daemon ignores. Older clients keep working unchanged:
 - The migration keeps every launch that worked before working, and `create`
   without the field applies the same rule.
 - `update` and `updateDefault` without the field keep the saved choice, except
-  that adding an account folder unmarks the configuration. Removing the folder does
+  that adding an account folder unmarks the configuration, and adding a credential
+  to a Default marks it ([credential auto-mark](#default-credential-auto-mark)). Removing the folder does
   not mark it again, though today that edit makes it compatible; an older client
   cannot mark it, so the user marks it in a newer client. This is an accepted
   degradation: marking is consent.
