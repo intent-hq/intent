@@ -957,6 +957,16 @@ test it for exactly `1`. Older backends that advertise `remoteMachines: 1`
 ignore the field, so clients detect support only through this flag. No method
 is added and the public protocol version is unchanged.
 
+**Proposer placement on workspace proposals (additive, presence-detected).**
+On a backend with `remoteInitialAgent: 1`, `ws.workspace.proposeSibling` stamps an
+optional top-level `placement` on the `workspace-create` proposal: the proposing
+agent's location at propose time, as the closed placement object
+([proposer placement](./methods/workspace.md#51-workspace)). Card Apply may send it, or
+the user's choice, as `initialAgent.placement`; `ws.workspace.applyProposal` sends it
+unchanged. It sits outside `payload.params`, so older clients ignore it and still create
+a local initial agent. No method, event, capability or error code is added, and the
+public protocol version is unchanged; clients detect it by the field's presence.
+
 **Cloud machines on E2B — capability `cloudMachines: 1` (additive).**
 [Cloud machines (§5.50)](./methods/nodes.md#cloud-machines-e2b) let a backend
 start its own remote machines in E2B sandboxes with the owner's E2B API key. They

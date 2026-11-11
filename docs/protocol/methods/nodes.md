@@ -708,7 +708,9 @@ the workspace by `workspaceId`. A retry with the same `idempotencyKey`
 replays that error; it creates no second workspace and does not relaunch. A failure the machine reports after the reply
 surfaces on the initial agent like any remote start failure (`placementError`
 and `agent:updated`). An omitted `initialAgent.placement` keeps the initial
-agent local, as before.
+agent local, as before. A `workspace-create` proposal can carry the proposing agent's
+location as a default for this field
+([proposer placement](./workspace.md#51-workspace)).
 
 ##### Batch placement
 
