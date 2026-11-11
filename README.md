@@ -18,13 +18,13 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/github/license/intent-hq/intent?color=ddec61&labelColor=161616" alt="License: Apache 2.0"></a>
-  <a href="https://github.com/intent-hq/cloudlands-releases/releases/stable"><img src="https://img.shields.io/github/v/release/intent-hq/cloudlands-releases?label=release&color=ddec61&labelColor=161616" alt="Latest release"></a>
+  <a href="https://github.com/intent-hq/cloudlands-releases/releases/latest"><img src="https://img.shields.io/github/v/release/intent-hq/cloudlands-releases?label=release&color=ddec61&labelColor=161616" alt="Latest release"></a>
   <a href="https://github.com/intent-hq/intent/stargazers"><img src="https://img.shields.io/github/stars/intent-hq/intent?style=flat&color=ddec61&labelColor=161616" alt="GitHub stars"></a>
   <a href="https://x.com/intentcode"><img src="https://img.shields.io/badge/follow-%40intentcode-ddec61?labelColor=161616&logo=x" alt="Follow @intentcode on X"></a>
 </p>
 
 <p align="center">
-  <img src="docs/assets/readme/demo.gif" width="800" alt="Intent: the Developer writes a spec with a mock-up and diagram, agents start in parallel on a Mac Studio and in E2B sandboxes, then twenty more agents take twenty bugs">
+  <img src="docs/assets/readme/demo.gif" width="800" alt="Intent, a workspace for coding agents: the Developer writes a spec with a mock-up and diagram, agents start in parallel on a Mac Studio and in E2B sandboxes, then twenty more agents take twenty bugs">
 </p>
 
 ## What is Intent?
@@ -37,7 +37,7 @@ There are already many ways to run coding agents, and most of them tie you to on
 - **Bring your own agents.** Use the coding agents and subscriptions you already have, side by side in one workspace. Intent doesn't proxy or resell model access.
 - **Bring your own compute.** Run agents on your laptop, on other machines you own (a Mac for the Xcode build, a Windows PC for the Windows checks), or in cloud sandboxes on E2B or your own VMs.
 - **Built for teams.** Share a workspace, talk it through in one discussion with the agents, and get a ping on your phone when an agent needs you.
-- **Open source and local-first.** Apache 2.0, no telemetry, and your workspaces live on your machine.
+- **Open source and local-first.** Apache 2.0, no product analytics or crash reporting, and your workspaces live on your machine.
 
 <table>
   <tr>
@@ -75,7 +75,7 @@ There are already many ways to run coding agents, and most of them tie you to on
 | PR Reviewer | Reviews pull requests with high-confidence, actionable feedback |
 | UI Designer | Builds accessible, production-ready interfaces |
 | Vulnerability Scanner | Finds real, exploitable security vulnerabilities |
-| Bug Burn-down and Maintenance Coordinators | Keep a steady stream of reviewed, green PRs for bugs, dependency updates and CI fixes |
+| Maintenance Coordinator | Keeps a steady stream of reviewed, green PRs for bugs, dependency and security updates, and CI failures |
 
 Write your own specialists in Settings and choose which one starts a workspace or takes each delegated task.
 
@@ -92,13 +92,13 @@ Write your own specialists in Settings and choose which one starts a workspace o
 │                 intentd - Rust daemon                    │
 │   workspaces · specs · tasks · agents · git · terminals  │
 └───────────┬───────────────────────────────▲──────────────┘
-            │ Agent Client Protocol         │ MCP: agents use the same workspace API
+            │ Agent Client Protocol         │ MCP (workspace API)
             ▼                               │
    Claude Code · Codex · Cursor · OpenCode · local models
    on this machine, on your other machines, or in E2B sandboxes
 ```
 
-Clients are thin: all state and business logic, including the agent runtime, live in `intentd`, which persists to SQLite and serves JSON-RPC 2.0 over a local socket and WSS/TLS. Each agent gets its own MCP bridge back to the daemon, so agents can edit the spec, delegate, message each other and run scripts, and every action is attributable. Each workspace works on a copy-on-write clone of your repository on its own branch. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the backend design and [docs/protocol/](docs/protocol/README.md) for the wire contract.
+Clients are thin: all state and business logic, including the agent runtime, live in `intentd`, which persists to SQLite and serves JSON-RPC 2.0 over a local socket and WSS/TLS. Each agent gets its own MCP bridge back to the daemon, so agents can edit the spec, delegate, message each other and run scripts, and every action is attributable. Each workspace gets its own isolated checkout of your repository on its own branch (copy-on-write where the filesystem supports it). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the backend design and [docs/protocol/](docs/protocol/README.md) for the wire contract.
 
 This monorepo ties the components together as git submodules and carries the cross-cutting docs, tooling and CI; the code lives in the component repos:
 
@@ -113,8 +113,8 @@ To run the daemon on its own, for example on a remote host, see [Self-hosting th
 ## Network & privacy
 
 Intent is local-first: all state lives on your machine, and the stack ships
-**no telemetry, analytics, or crash reporting**. Network access is limited to
-update checks against public GitHub Releases and actions you take yourself:
+**no product analytics or crash reporting**. Network access is limited to
+update checks and actions you take yourself:
 
 - **Desktop app auto-updates** — the packaged app checks for and downloads
   updates from GitHub Releases on
@@ -129,6 +129,15 @@ update checks against public GitHub Releases and actions you take yourself:
   [intentd releases page](https://github.com/intent-hq/intentd/releases). The
   mirror is the permanent public distribution channel, kept even after the
   intentd repo goes public.
+- **Anonymous update statistics** — update checks go through
+  `updates.intentapp.dev`, which counts each check and redirects to the same
+  GitHub release asset. Only non-identifying values are sent: platform, app
+  version, install source, what triggered the check, whether it is the first
+  check of the day, week or month, and a coarse install-age bucket. It is on by
+  default; turn it off in **Settings → General → Updates → Share anonymous
+  update statistics**, or for a standalone `intentd` with `DO_NOT_TRACK=1`,
+  `INTENTD_DISABLE_TELEMETRY=1`, or `telemetry = false` in
+  `<data_dir>/sitter/config.toml`.
 - **Provider sign-ins (user-initiated)** — signing in to a coding-agent
   provider (Claude Code, Codex, Cursor, OpenCode and others) runs that
   provider's own CLI/OAuth sign-in flow through the daemon; each provider
@@ -158,7 +167,9 @@ make build   # cargo build --workspace
 
 Test runs isolate their build outputs and bound their disk use; see
 [local Rust gates](CONTRIBUTING.md#local-rust-gates) and
-[gate build storage](CONTRIBUTING.md#gate-build-storage) for the details, flags and coverage targets.
+[gate build storage](CONTRIBUTING.md#gate-build-storage) for the details and flags. `make coverage-e2e` / `make coverage-all` additionally need cargo-llvm-cov and the
+llvm-tools-preview component; `make doctor` reports them as an `[optional]` row, and
+`BOOTSTRAP_COVERAGE=1 make bootstrap-dev-host` installs them.
 
 Developing from a remote daemon host? Start with the one-screen
 [agent loop](AGENTS.md#developing-on-a-remote-host); use the
