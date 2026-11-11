@@ -894,14 +894,22 @@ the rules refuse, from the catalog's `remoteCompatible` rows and
    `cli-missing` or `prerequisite-missing`), and that list the requested model
    (or no model was requested);
 2. for a launch without a profile, also skips machines whose provider status is
-   `signed-out` or `auth-failed`; a launch with a selected profile (any launch
-   that sends `profileEnv`) ignores the default account's sign-in status. When a
-   machine sign-in launch has no candidate only because of this step
-   (or the named machine is signed out), it fails with `machine-not-signed-in`
-   instead of `model-unavailable`;
+   `signed-out` or `auth-failed`, **except** for a plain Default that has a
+   profile marked for remote machines to [auto-pick](./provider-profiles.md#remote-auto-pick):
+   it keeps those machines as candidates (step 1 still requires the CLI). A
+   launch with a selected profile (any launch that sends `profileEnv`) ignores
+   the default account's sign-in status. When a machine sign-in launch with
+   nothing to auto-pick has no candidate only because of this step (or the named
+   machine is signed out), it fails with `machine-not-signed-in` instead of
+   `model-unavailable`;
 3. orders those with free capacity by fewest running agents, then most recently
    used;
-4. connects on demand, refreshing a stale report first.
+4. connects on demand, refreshing a stale report first;
+5. **after** the machine is chosen, a plain Default whose chosen machine reports
+   the provider `signed-out` or `auth-failed` runs the auto-picked profile
+   instead, and the agent is created on it. A machine signed in or `unknown`
+   runs the Default on its own sign-in. The order among candidates (step 3) does
+   not depend on sign-in.
 
 So a machine with no default login but a valid selected profile stays a
 candidate, and a profile whose credentials fail does so at launch without

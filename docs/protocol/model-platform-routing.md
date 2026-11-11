@@ -391,9 +391,13 @@ that is not revoked, once the provider reference is
 2. the provider is installed: `cli-missing` and `prerequisite-missing` are
    skipped for every launch;
 3. without a selected profile, the default account's status is `signed-in` or
-   `unknown` (`signed-out` and `auth-failed` are skipped); with a selected
-   profile (the launch sends `profileEnv`) that status is not consulted, because
-   it describes the machine's own login, not the profile's credentials;
+   `unknown` (`signed-out` and `auth-failed` are skipped), unless a plain
+   Default has a profile marked for remote machines to
+   [auto-pick](./methods/provider-profiles.md#remote-auto-pick): then those machines
+   stay candidates, and once one of them is chosen the backend sends that
+   profile. With a selected profile (the launch sends `profileEnv`) that status
+   is not consulted, because it describes the machine's own login, not the
+   profile's credentials;
 4. the requested model is listed, or no model was requested. The model list
    comes from the machine's installed provider and is used for profile launches
    too; a model the profile's account cannot use fails at launch, not here;

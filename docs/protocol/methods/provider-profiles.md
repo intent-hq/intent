@@ -968,7 +968,9 @@ a reconnect. A failover switch changes no profile and emits no
 An agent placed on a remote machine over the daemon-to-daemon executor link runs
 with the selected profile or a marked Default's overrides, resolved on the backend
 and sent to the machine as an environment overlay; otherwise nothing is sent and
-the machine uses its own provider sign-in. Nothing falls back to another account.
+the machine uses its own provider sign-in. Nothing falls back to another account,
+except the documented [auto-pick](#remote-auto-pick) of a marked profile for a
+plain Default that the chosen machine cannot sign in.
 See [provider credentials](../node-link.md#provider-credentials-profile-environment).
 
 Only a configuration the user marked [remote-compatible](#remote-compatibility)
@@ -1002,8 +1004,11 @@ launch asks for the plain Default (no profile chosen) and the machine cannot run
 it on its own sign-in, admission sends the **first profile marked for remote
 machines** of that base provider, in the saved profile order, instead:
 
-- on a machine whose report says the provider is `signed-out` or `auth-failed`
-  (placement would otherwise refuse with `machine-not-signed-in`);
+- on a machine whose report says the provider is `signed-out` or `auth-failed`.
+  The order is: while such a profile exists, placement keeps machines signed out
+  of the provider as candidates (their CLI must be installed); it chooses a
+  machine as usual; **then**, if the chosen machine is signed out, the profile is
+  sent ([placement across machines](./nodes.md#placement-across-machines), step 5);
 - on [E2B](./nodes.md#placement-on-e2b), which has no sign-in; there the profile
   must also send a set variable.
 
