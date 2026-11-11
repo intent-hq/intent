@@ -346,6 +346,23 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
   `-f latest=true` to move `latest`). PRs that change `packaging/e2b` build and
   smoke-test private `pr-<n>` tags from the newest release. Sizes and pinned provider
   CLI versions live in `packaging/e2b/intent-node.mjs`.
+- **Intent node container image.** After each successful Release run, intentd's
+  `intent-node-image.yml` builds `ghcr.io/intent-hq/intent-node:<version>`
+  (linux/amd64, one image for every size) and moves `latest`, for clouds that run
+  containers (Northflank). Its Dockerfile is rendered from the same template
+  definition in `packaging/e2b`, so it carries the same tools. Its default command
+  idles (`sleep infinity`); the backend starts `intentd` itself. The image is
+  smoke-tested (`intentd --version`, the tools, gh, no running `intentd`) before it
+  is pushed with the workflow's `GITHUB_TOKEN` (`packages: write`). Fail-soft: when
+  GHCR refuses the push it logs a warning and succeeds. GHCR creates the package
+  private, so an organization owner makes it public once: allow public packages
+  (organization **Settings → Packages → Package creation → Public**), then open the
+  `intent-node` package, **Package settings → Danger Zone → Change visibility →
+  Public**. A public package cannot be made private again. To rebuild or backfill a
+  version, dispatch it by hand
+  (`gh workflow run intent-node-image.yml --repo intent-hq/intentd -f version=X.Y.Z`;
+  add `-f latest=true` to move `latest`). PRs that change `packaging/e2b` build and
+  smoke-test a local `pr-<n>` image without pushing it.
 
 ### When a published daemon reaches running installs
 
