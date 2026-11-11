@@ -177,8 +177,11 @@ These errors are future contracts; current CoW errors remain until retirement.
 The [daemon-to-daemon remote machines contract](./methods/nodes.md#remote-machine-errors)
 adds structured `data.code` values on existing numeric codes. `-32602`:
 `model-unavailable` (also from `agent.setModel` on a remote agent),
-`profile-not-remote-compatible` (a profile or Default configuration that sets an
-account folder, at placement or `agent.setModel`; data `{ providerRef, reason, keys }`),
+`profile-not-remote-compatible` (the launch rules refuse a profile or Default
+configuration: not marked for remote machines, or it sets an account folder, at
+placement or `agent.setModel`; data `{ providerRef, name, reason, keys, machineSignIn? }`),
+`machine-not-signed-in` (a Default that relies on the machine's own sign-in, on
+machines reported signed out; data `{ providerRef, machines, retryable }`),
 `machine-update-required`, `machine-in-use`, and the
 `placement-unavailable` reasons
 `machine-unreachable`, `machine-unknown` and `machine-revoked`; `no-capacity`

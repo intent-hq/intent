@@ -405,8 +405,10 @@ deciding. `node-configuration-ambiguous` does not apply: several machines are
 an ordinary candidate set. An explicit remote placement never falls back to
 the local daemon.
 
-**Errors.** A provider reference that sets an account folder fails first with
-`profile-not-remote-compatible`, naming the variables. When no machine lists the model, admission fails before any launch
+**Errors.** A provider reference the [launch rules](./methods/nodes.md#placement-across-machines)
+refuse (not marked for remote machines, or setting an account folder) fails first
+with `profile-not-remote-compatible`; a Default that relies on machine sign-in on
+machines reported signed out fails with `machine-not-signed-in`. When no machine lists the model, admission fails before any launch
 with `model-unavailable`, listing each machine's provider status and models
 (at most 50 per machine); a provider switched off in the machine's own settings
 reports status `disabled` rather than `cli-missing` (see

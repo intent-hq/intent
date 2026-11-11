@@ -675,12 +675,12 @@ repository instead of a separate hub.
 
 On a backend that also advertises `remoteInitialAgent: 1`, `workspace.create`
 accepts `initialAgent.placement` with the same closed object and validation as `agent.create`. The placement checks,
-the [remote-compatibility](./provider-profiles.md#remote-compatibility) check
+the [launch rules](#placement-across-machines) check
 and the model check of [placement across machines](#placement-across-machines),
 and admission all run under `workspace.create`'s
 [pre-side-effect validation](./workspace.md#51-workspace) ("Pre-side-effect
 validation" in its notes): a `-32602` (a malformed or `null` placement, `placement-unavailable`,
-`profile-not-remote-compatible`, `model-unavailable` or
+`profile-not-remote-compatible`, `machine-not-signed-in`, `model-unavailable` or
 `attachments-too-large-for-machine:`, below) creates no workspace, worktree,
 event or agent. A placement on a create without a git repository (a
 [plain-folder workspace](./workspace.md#plain-folder-workspaces)) is also
@@ -724,7 +724,7 @@ placement (in the batch or in any entry), or a task that would run remotely
 (by an explicit or an inherited placement) in a call with `isolation`, fails
 the whole batch with `-32602` and starts nothing. Each task the batch starts
 is then admitted as its own delegation, in the batch's admission order: a task
-that fails admission (`profile-not-remote-compatible`, `model-unavailable`,
+that fails admission (`profile-not-remote-compatible`, `machine-not-signed-in`, `model-unavailable`,
 `placement-unavailable` or `machine-update-required`) has nothing written for
 it and gets the usual error row `{ taskNoteId, title, disposition: "error",
 reason }`, where `reason` is the full error text (the message, then the
@@ -741,11 +741,11 @@ branch, all [forwarded](../workspace-routing.md#remote-agents-on-the-executor-li
 to the backend) without a `placement`, the default is the parent's machine: the
 backend admits the child as if it had sent `placement: { "target": "remote",
 "nodeId": <the parent's nodeId> }`. Every normal check runs, in order: the
-[remote-compatibility](./provider-profiles.md#remote-compatibility) check, the
+[launch rules](#placement-across-machines) check, the
 machine's state, provider and model checks of
 [placement across machines](#placement-across-machines), and its capacity. A
 failure returns the normal error (`profile-not-remote-compatible`,
-`model-unavailable`, `placement-unavailable` or `machine-update-required`, with
+`machine-not-signed-in`, `model-unavailable`, `placement-unavailable` or `machine-update-required`, with
 the same `code` and `data`) before any write; the backend never falls back to
 another machine or to the backend. Only the message changes: it adds that the
 sub-agent defaults to the parent's machine (by name) and that
@@ -855,12 +855,38 @@ sub-agent:
 
 ##### Placement across machines
 
-The agent's provider reference must first be
-[remote-compatible](./provider-profiles.md#remote-compatibility): a profile, or
-a bare base provider whose Default configuration overrides set, an account
-folder (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) fails with `-32602`
-`profile-not-remote-compatible` before any write, lease or launch, whatever
-machine was named.
+The agent's provider reference must first pass the **launch rules**, before any
+write, lease or launch, whatever machine was named. "Marked" is the saved
+[remote-compatible](./provider-profiles.md#remote-compatibility) choice, and
+"machine sign-in" is the base provider's entry in
+[`providers.remoteMachineSignIn`](./provider-profiles.md#machine-sign-in-on-remote-machines)
+on this backend.
+
+| Selected | Marked | Machine sign-in | Result on a remote machine |
+| --- | --- | --- | --- |
+| A profile | Yes | — | Its environment is sent as `profileEnv`. |
+| A profile | No | — | Refused: `profile-not-remote-compatible`, reason `not-marked` (or `account-folder` when it sets one). |
+| The Default | Yes | — | Its overrides are sent. With none, nothing is sent and the machine's own sign-in runs it, as in the next row (but whatever machine sign-in is set to). |
+| The Default | No | On | Nothing is sent. The machine's own sign-in runs it, if the provider is detected and not disabled there. A machine whose sign-in is `unknown` is still tried; a `signed-out` or `auth-failed` one is refused with `machine-not-signed-in`. |
+| The Default | No | Off | Refused: `profile-not-remote-compatible`, reason `not-marked` (or `account-folder`), `machineSignIn: false`. |
+| A provider without profiles (for example Unsloth) | — | — | Allowed. Nothing is sent. The model must be on that machine's own list (`model-unavailable` otherwise). |
+| Anything, on [E2B](#placement-on-e2b) | — | — | Must send a `profileEnv` (`cloud-profile-required` otherwise, as today), and a profile or Default must also be marked. Machine sign-in never applies, because a sandbox has no sign-in. |
+
+A **machine sign-in launch** is a launch of the bare `codex` or `claude-code`
+reference that sends nothing: an unmarked Default while machine sign-in is on, or
+a marked Default with no overrides. Only these launches get
+`machine-not-signed-in`.
+
+The same rules apply to every route that starts or switches a remote agent's
+provider: `agent.create`, `agent.delegate` (single and [batch](#batch-placement)),
+`agent.wakeOrCreate`'s creation branch, `workspace.create`'s `initialAgent`,
+[sub-agents of remote agents](#sub-agents-of-remote-agents),
+[`agent.setModel`](#switching-a-remote-agents-model) and
+[quota failover](./provider-profiles.md#backup-failover), which skips a candidate
+the rules refuse. A delegating agent gets the refusal and its message, never a
+silent fallback to another account. Pickers for a remote agent mark or hide what
+the rules refuse, from the catalog's `remoteCompatible` rows and
+`defaultRemoteLaunch`.
 
 `placement.nodeId` names an exposed machine; `os` / `arch` filter. With
 `target: "remote"` and no `nodeId`, the backend:
@@ -872,7 +898,10 @@ machine was named.
    (or no model was requested);
 2. for a launch without a profile, also skips machines whose provider status is
    `signed-out` or `auth-failed`; a launch with a selected profile (any launch
-   that sends `profileEnv`) ignores the default account's sign-in status;
+   that sends `profileEnv`) ignores the default account's sign-in status. When a
+   machine sign-in launch has no candidate only because of this step
+   (or the named machine is signed out), it fails with `machine-not-signed-in`
+   instead of `model-unavailable`;
 3. orders those with free capacity by fewest running agents, then most recently
    used;
 4. connects on demand, refreshing a stale report first.
@@ -890,8 +919,10 @@ including to a profile reference or another base provider. It is accepted when
 all of these hold, judged on the agent's machine's cached
 [capabilities report](../node-link.md#capabilities-report) without connecting:
 
-1. the target reference is
-   [remote-compatible](./provider-profiles.md#remote-compatibility);
+1. the target reference passes the
+   [launch rules](#placement-across-machines): a marked profile, a marked
+   Default, an unmarked Default while machine sign-in is on, or a provider
+   without profiles;
 2. the machine's report lists the target base provider (it omits providers
    disabled in the machine's own settings) as usable under the placement
    rules: installed (not `cli-missing` or `prerequisite-missing`), and for a
@@ -913,7 +944,9 @@ surfaces as any remote start failure does.
 
 Refusals are `-32602` and change nothing:
 
-- `profile-not-remote-compatible` when the target is not remote-compatible;
+- `profile-not-remote-compatible` when the launch rules refuse the target;
+- `machine-not-signed-in` when the target is a
+  [machine sign-in launch](#placement-across-machines) and the machine's report says the provider is `signed-out` or `auth-failed`;
 - `model-unavailable` when the provider is not usable on the agent's machine or
   the model is not listed; `machines` holds only the agent's machine;
 - `placement-unavailable` with reason `machine-unknown` or `machine-revoked`
@@ -924,7 +957,7 @@ remains a start-path safety net: a remote start whose provider or model changed
 by any route other than a validated `agent.setModel` or
 [quota failover](./provider-profiles.md#backup-failover) fails with a message
 starting `remote-model-change-unsupported:`. Quota failover is the other
-accepted switch, and it too picks only remote-compatible backups. A switch or
+accepted switch, and it too picks only candidates the launch rules allow. A switch or
 failover that still reaches the machine on a provider disabled there (its
 settings changed after the cached report) is refused by the machine with
 `node-provider-unavailable` before any process starts, and surfaces as a remote
@@ -1382,15 +1415,17 @@ carries a `profileEnv`:
 1. The entry exists and its key is not known to be rejected, else
    `cloud-machine-unavailable` with `reason` `not-configured` (also for a
    `cloudMachineId` that names no entry) or `key-rejected`.
-2. The provider reference is
+2. The provider reference is marked
    [remote-compatible](./provider-profiles.md#remote-compatibility), else
-   `profile-not-remote-compatible`.
+   `profile-not-remote-compatible`. An unmarked Default is refused here even
+   while [machine sign-in](./provider-profiles.md#machine-sign-in-on-remote-machines)
+   is on, with `machineSignIn` in the data, because a sandbox has no sign-in.
 3. The launch sends a `profileEnv`, else `cloud-profile-required`. A sandbox
    has no login of its own. A configuration sends one when its `env` has at
    least one `kind: "set"` entry: an API-key profile, an env-only subscription
    token such as `CLAUDE_CODE_OAUTH_TOKEN`, or a Default configuration that sets
    such variables. The Default configuration with no overrides sends none, even
-   though it is `remoteCompatible`. Clients use the same rule on the
+   when it is marked `remoteCompatible`. Clients use the same rule on the
    [profile reads](./provider-profiles.md#remote-compatibility) to show which
    configurations can run on E2B. For an agent on a cloud machine,
    `agent.setModel` to such a configuration fails with `cloud-profile-required`,
@@ -1654,24 +1689,56 @@ With several candidates, `machines[]` carries those fields per machine.
 
 `profile-not-remote-compatible` is `-32602`, raised before any write by
 placement (`agent.create`, `agent.delegate`, `agent.wakeOrCreate`'s creation
-branch) and by `agent.setModel` on a remote agent when the provider reference
-is not [remote-compatible](./provider-profiles.md#remote-compatibility):
+branch, `workspace.create`'s `initialAgent`) and by `agent.setModel` on a remote
+agent when the [launch rules](#placement-across-machines) refuse the provider
+reference:
 
 ```ts
 interface ProfileNotRemoteCompatibleData {
   code: "profile-not-remote-compatible";
   providerRef: string;               // the reference as given (a profile ref or a bare base id)
-  reason: "account-folder" | string; // open enum, as on RemoteIncompatibility
-  keys: string[];                    // variable names only, never values
+  name: string;                      // the configuration's display name, for example "Work" or "Default"
+  reason: "account-folder" | "not-marked" | string; // open enum, as on RemoteIncompatibility
+  keys: string[];                    // account-folder: variable names only, never values; not-marked: []
+  machineSignIn?: boolean;           // bare reference only: the base provider's machine sign-in setting
 }
 ```
 
-Its message names the configuration and the variable and points to a
-configuration that uses the machine's own sign-in or an API key, for example
-"Work uses an account folder (CLAUDE_CONFIG_DIR) that only exists on this
-backend, so it can't run on another machine; pick a profile that uses the
-machine's own sign-in or an API key." It is not retryable: the configuration
-must change first.
+The message is written for the user and for a delegating model. It names the
+configuration, says why, and says how to fix it. It is not retryable: a setting
+must change first. The messages are:
+
+| Case | Message |
+| --- | --- |
+| Profile, `not-marked` | "Work isn't marked for remote machines. Turn on Use on remote machines for it in Settings → Providers → Claude Code, or pick a configuration that is marked." |
+| Profile, `account-folder` | "Work uses an account folder (CLAUDE_CONFIG_DIR) that only exists on this backend, so it can't run on another machine; pick a configuration that uses an API key or token and is marked for remote machines." |
+| Default, `not-marked`, machine sign-in off | "Default isn't marked for remote machines, and using the machine's own sign-in is off for Claude Code. In Settings → Providers → Claude Code, turn on either option on the Default row, or pick a profile marked for remote machines." |
+| Default, `account-folder`, machine sign-in off | "Default uses an account folder (CLAUDE_CONFIG_DIR) that only exists on this backend, and using the machine's own sign-in is off for Claude Code. Turn that on in Settings → Providers → Claude Code, or pick a profile marked for remote machines." |
+| Default, `not-marked`, on E2B | "Default isn't marked for remote machines, and E2B has no sign-in of its own; pick a profile with an API key or token that is marked for remote machines." |
+| Default, `account-folder`, on E2B | "Default uses an account folder (CLAUDE_CONFIG_DIR) that only exists on this backend, and E2B has no sign-in of its own; pick a profile with an API key or token that is marked for remote machines." |
+
+`machine-not-signed-in` is `-32602`, raised before any write by placement and by
+`agent.setModel` on a remote agent, when a
+[machine sign-in launch](#placement-across-machines) would run on machines whose cached report
+says the provider is `signed-out` or `auth-failed`. It is raised when the named
+machine is signed out, or when sign-in status is the only reason no candidate
+remains:
+
+```ts
+interface MachineNotSignedInData {
+  code: "machine-not-signed-in";
+  providerRef: string;  // the bare base id
+  machines: { nodeId: string; name: string; status: "signed-out" | "auth-failed"; observedAt: string }[];
+  retryable: boolean;   // true when a listed report is older than 1 hour
+}
+```
+
+Its message reads, for example, "Claude Code isn't signed in on Build box, and
+Default sends no sign-in of its own. Sign in to Claude Code on Build box, or pick
+a profile with an API key or token that is marked for remote machines." A machine whose status is `unknown` is still tried. If that launch fails
+on authentication, the agent gets `placementError.code`
+`node-provider-signed-out` ([machine codes](../node-link.md#machine-start-failure-codes)),
+with a detail of the same form, and the machine's report then reads `auth-failed`.
 
 `model-unavailable` is `-32602`, raised before any launch when no candidate
 lists the requested model, and by `agent.setModel` on a remote agent whose
