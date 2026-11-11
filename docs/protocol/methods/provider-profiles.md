@@ -963,14 +963,23 @@ Quota failover on a remote agent passes over candidates the launch rules refuse.
 
 ##### Which providers a machine offers
 
-For each remote machine and base provider, the backend uses, in order:
+This decides which providers a machine **offers**; it never changes the
+configuration a launch selected. A base provider is offered on a remote machine
+when either holds:
 
-1. **The machine's own sign-in, when it has one.** The provider's CLI is detected
-   there and its sign-in status is `signed-in` or `unknown` (an `unknown` one is
-   still tried). An unmarked Default sends nothing and runs this way.
-2. **Otherwise, or when one is picked, a remote-compatible profile from this
-   backend** (a marked profile, or a marked Default with overrides). The provider's
-   CLI must be installed on the machine; its own sign-in does not matter.
+1. **The machine's own sign-in can run it.** The provider's CLI is detected there
+   and its sign-in status is `signed-in` or `unknown` (an `unknown` one is still
+   tried). A launch of the Default that sends nothing (an unmarked Default, or a
+   marked one with no overrides) runs this way.
+2. **This backend has a remote-compatible configuration for it** (a marked
+   profile, or a marked Default with overrides), and the provider's CLI is
+   installed on the machine; its own sign-in does not matter. A launch runs this
+   way only when that configuration is the one selected.
+
+Nothing falls back to another account: a launch of the bare Default on a machine
+that is signed out is refused with `machine-not-signed-in`, even when a marked
+profile exists; its message tells the caller to sign in there or to pick a
+profile marked for remote machines.
 
 When neither applies, the provider is **not offered** for that machine: it is left
 out of the agent-facing machine list (`ws.agent.create` and `ws.help("agent")`),

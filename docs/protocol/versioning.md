@@ -1017,9 +1017,11 @@ version bump. Clients detect it by the presence of `DefaultConfig.remoteLaunch`.
 **A machine's own sign-in is always used; no machine sign-in setting (narrowing, no capability).**
 The prepared `providers.remoteMachineSignIn` setting is removed before it shipped
 in any component, with its refusal and `profile-not-remote-compatible`'s
-`machineSignIn` data. For each remote machine and provider, the backend uses the
-machine's own sign-in when it has one, otherwise a remote-compatible profile from
-this backend; a provider with neither is not offered for that machine
+`machineSignIn` data. A provider is offered on a remote machine when the machine's
+own sign-in can run it, or when this backend has a remote-compatible configuration
+for it and its CLI is installed there; a provider with neither is not offered for
+that machine. This never changes the selected configuration: a bare Default on a
+signed-out machine is still refused with `machine-not-signed-in`
 ([which providers a machine offers](./methods/provider-profiles.md#which-providers-a-machine-offers)).
 An unmarked Default is refused only on E2B. `DefaultRemoteLaunch` is `send` or
 `machine-sign-in` (`refused` only for an unreadable environment), and the catalog
