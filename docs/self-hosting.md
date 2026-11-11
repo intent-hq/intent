@@ -44,7 +44,7 @@ powershell -c "irm https://github.com/intent-hq/intentd-releases/releases/downlo
 ```sh
 brew tap intent-hq/homebrew-tap
 brew install intentd
-brew services start intentd   # runs `intentd serve --resume-all` now and on startup
+brew services start intentd   # runs `intentd serve` now and on startup
 ```
 
 The Intent desktop app picks up an already-running daemon such as this
@@ -57,7 +57,7 @@ bundled `intentd` (sidecar mode) and stops it on quit.
 ## Debian/Ubuntu
 
 `.deb` packages ship the sitter with a systemd user unit that runs
-`intentd serve --resume-all`; download them from the sitter releases on the
+`intentd serve`; download them from the sitter releases on the
 public
 [intentd-releases page](https://github.com/intent-hq/intentd-releases/releases):
 
