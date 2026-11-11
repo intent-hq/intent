@@ -735,7 +735,11 @@ are tracked separately, never per model.
 - **Out of quota.** A quota failure on a reference marks it out of quota until the
   reset time the error reports (parsed as for the return-after time), otherwise for
   5 hours. The newest failure replaces any earlier state. A failure is recorded even
-  when the conversation has no candidate to fail over to.
+  when the conversation has no candidate to fail over to. A quota failure of a remote
+  agent whose reference sends nothing (it ran on the machine's own sign-in, see
+  **Turn start** below) marks nothing: that account is not this backend's. The
+  conversation still fails over as usual
+  ([intent-hq/intent#9100](https://github.com/intent-hq/intent/issues/9100)).
 - **Working.** The first output of an attempt on a reference (or a turn that
   completes on it without output) marks it working. This replaces an out-of-quota mark
   only when the attempt started after the mark was recorded.
