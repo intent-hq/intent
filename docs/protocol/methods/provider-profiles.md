@@ -912,10 +912,10 @@ one event, with a `revision` one higher than the previous event, in three cases:
   carries no count; clients re-run `providers.profiles.list` to read it.
 - **A Default configuration change** ([Default configuration overrides](#default-configuration-overrides)).
   A committed `providers.profiles.updateDefault` has `change: "default-updated"`
-  with `baseProviderId` and `envChanged`. A committed change to a base provider's
-  [machine sign-in](#machine-sign-in-on-remote-machines) entry also emits one
-  `default-updated` for that base provider, with `envChanged: false`, because its
-  `remoteLaunch` changed. A change in the Default configuration's
+  with `baseProviderId` and `envChanged`. A committed write of the
+  [machine sign-in](#machine-sign-in-on-remote-machines) setting also emits one
+  `default-updated` per base provider that advertises `supportsProfiles`, with
+  `envChanged: false`, because a Default's `remoteLaunch` may have changed. A change in the Default configuration's
   `activation.runningProcesses` has `change: "default-activation"` with
   `baseProviderId`. Neither carries `profileId` or `profile`; clients re-run
   `providers.profiles.list` (and `providers.catalog` for a new name).

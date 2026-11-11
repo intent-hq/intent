@@ -245,9 +245,9 @@ Profile references, aliases, unknown ids, other providers, arrays, null and
 non-booleans are `-32602`; validation rejects the entire batch before persistence.
 It is a whole-value replacement: clients preserve the other provider's entry. There
 are no dotted child settings. `settings.reset` restores `{}`, so every entry reads
-as on. A committed change emits `settings:changed` and, for each base provider whose
-effective value changed, `providers:profiles-changed` with
-`change: "default-updated"` ([events](provider-profiles.md#events)). The value
+as on. A committed write emits `settings:changed` and then one `providers:profiles-changed`
+with `change: "default-updated"` per base provider that advertises `supportsProfiles`
+([events](provider-profiles.md#events)). The value
 applies to the next remote launch, switch or failover; running agents are not
 affected. Clients show the control on each provider's Default row only when the
 setting is present in `settings.list`.
