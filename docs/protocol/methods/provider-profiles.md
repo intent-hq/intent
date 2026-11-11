@@ -685,6 +685,26 @@ has had time to reset.
   session's existing metadata document. They survive a daemon restart, need no
   database migration, and are not part of `AgentLite` or `AgentSession`.
 
+<a id="auto-selection-notice"></a>**Auto-selection notice.** An agent created on
+an [auto-picked](#remote-auto-pick) profile gets one transcript row, with
+`role: "system"`, one text block such as "Default isn't signed in on Build box, so
+this agent runs with claude-code (Work), marked for remote machines.", and
+
+```ts
+metadata = {
+  type: "provider_auto_selected";
+  fromProvider: string;   // the plain Default asked for (a bare base id)
+  toProvider: string;     // the profile reference that runs instead
+  model: string | null;   // the agent's model; null = provider default
+  reason: "machine-signed-out" | "sandbox-no-sign-in";
+  machine: string;        // the machine's name, or "E2B"
+}
+```
+
+It follows the `provider_failover` rules: the standard `agent:message` event,
+transcript-only, never replayed to a provider, rendered as an inline notice; an
+older client shows its text.
+
 **Return notice.** The return row has `role: "system"`, one text block naming home,
 and
 
@@ -974,18 +994,35 @@ when either holds:
 2. **This backend has a remote-compatible configuration for it** (a marked
    profile, or a marked Default with overrides), and the provider's CLI is
    installed on the machine; its own sign-in does not matter. A launch runs this
-   way only when that configuration is the one selected.
+   way when that configuration is selected, or through the
+   [auto-pick](#remote-auto-pick) below when the plain Default is.
 
-Nothing falls back to another account: a launch of the bare Default on a machine
-that is signed out is refused with `machine-not-signed-in`, even when a marked
-profile exists; its message tells the caller to sign in there or to pick a
-profile marked for remote machines.
+<a id="remote-auto-pick"></a>**Auto-pick for the plain Default.** When a remote
+launch asks for the plain Default (no profile chosen) and the machine cannot run
+it on its own sign-in, admission sends the **first profile marked for remote
+machines** of that base provider, in the saved profile order, instead:
+
+- on a machine whose report says the provider is `signed-out` or `auth-failed`
+  (placement would otherwise refuse with `machine-not-signed-in`);
+- on [E2B](./nodes.md#placement-on-e2b), which has no sign-in; there the profile
+  must also send a set variable.
+
+A machine whose sign-in is `signed-in` or `unknown` runs the Default on its own
+sign-in first. Only when no marked profile qualifies does the original refusal
+stand (`machine-not-signed-in`, or on E2B `profile-not-remote-compatible` /
+`cloud-profile-required`). A profile chosen explicitly is never replaced. The
+agent is created on the picked profile: its `provider` is that profile's
+reference, so lists and detail reads show it, and its transcript gets one
+[`provider_auto_selected`](#auto-selection-notice) row. Auto-pick runs at
+admission (`agent.create`, `agent.delegate`, `agent.wakeOrCreate`'s creation
+branch, `workspace.create`'s `initialAgent`, sub-agents of remote agents); it
+does not apply to `agent.setModel`, quota failover or a later start.
 
 When neither applies, the provider is **not offered** for that machine: it is left
 out of the agent-facing machine list (`ws.agent.create` and `ws.help("agent")`),
 out of placement's automatic choice, and is refused at admission; clients hide it
-from their pickers for that machine. A provider that is signed out there and has no
-remote-compatible profile on this backend is refused with `machine-not-signed-in`
+from their pickers for that machine. A plain Default on a machine that is signed
+out, with no marked profile to auto-pick, is refused with `machine-not-signed-in`
 ([remote machine errors](./nodes.md#remote-machine-errors)). A machine whose sign-in
 was `unknown` and then fails on authentication reports `node-provider-signed-out`
 ([machine codes](../node-link.md#machine-start-failure-codes)).

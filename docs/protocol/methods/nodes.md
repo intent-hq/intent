@@ -866,9 +866,9 @@ providers each machine offers follows
 | A profile | Yes | Its environment is sent as `profileEnv`. The provider's CLI must be installed there. |
 | A profile | No | Refused: `profile-not-remote-compatible`, reason `not-marked` (or `account-folder` when it sets one). |
 | The Default | Yes | Its overrides are sent. With none, nothing is sent and the machine's own sign-in runs it, as in the next row. |
-| The Default | No | Nothing is sent. The machine's own sign-in runs it, if the provider is detected and not disabled there. A machine whose sign-in is `unknown` is still tried; a `signed-out` or `auth-failed` one is refused with `machine-not-signed-in`. |
+| The Default | No | Nothing is sent. The machine's own sign-in runs it, if the provider is detected and not disabled there. A machine whose sign-in is `unknown` is still tried. On a `signed-out` or `auth-failed` one, admission [auto-picks](./provider-profiles.md#remote-auto-pick) the first marked profile of that provider; with none it is refused with `machine-not-signed-in`. |
 | A provider without profiles (for example Unsloth) | — | Allowed. Nothing is sent. The model must be on that machine's own list (`model-unavailable` otherwise). |
-| Anything, on [E2B](#placement-on-e2b) | — | Must send a `profileEnv` (`cloud-profile-required` otherwise, as today), and a profile or Default must also be marked. The machine's own sign-in never applies, because a sandbox has no sign-in. |
+| Anything, on [E2B](#placement-on-e2b) | — | Must send a `profileEnv` (`cloud-profile-required` otherwise, as today), and a profile or Default must also be marked. The machine's own sign-in never applies, because a sandbox has no sign-in. A plain Default that cannot run there [auto-picks](./provider-profiles.md#remote-auto-pick) the first marked profile that sends a set variable. |
 
 A **machine sign-in launch** is a launch of the bare `codex` or `claude-code`
 reference that sends nothing: an unmarked Default, or a marked Default with no
@@ -1414,7 +1414,9 @@ carries a `profileEnv`:
    `cloudMachineId` that names no entry) or `key-rejected`.
 2. The provider reference is marked
    [remote-compatible](./provider-profiles.md#remote-compatibility), else
-   `profile-not-remote-compatible`. An unmarked Default is refused here,
+   `profile-not-remote-compatible`. A plain Default that fails this step or the
+   next first [auto-picks](./provider-profiles.md#remote-auto-pick) the first
+   marked profile that sends a set variable; only with none is it refused,
    because a sandbox has no sign-in of its own.
 3. The launch sends a `profileEnv`, else `cloud-profile-required`. A sandbox
    has no login of its own. A configuration sends one when its `env` has at
@@ -1727,7 +1729,10 @@ interface MachineNotSignedInData {
 ```
 
 This is how a provider that a machine does not offer is refused: it is signed
-out there and nothing on this backend could be sent instead. The
+out there, and this backend has no marked profile of that provider to
+[auto-pick](./provider-profiles.md#remote-auto-pick). With one, admission sends it
+instead and no error is raised. `agent.setModel` to the Default on a signed-out
+machine is still refused, since it does not auto-pick. The
 agent-facing machine list leaves such a provider out for that machine
 ([which providers a machine offers](./provider-profiles.md#which-providers-a-machine-offers)).
 Its message reads, for example, "Claude Code isn't signed in on Build box, and
