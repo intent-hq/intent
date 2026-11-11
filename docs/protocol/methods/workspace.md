@@ -367,6 +367,46 @@ delegated and background agents do not receive the binding and raw dispatch reje
 Like `proposeSibling` this is an MCP binding over existing daemon paths, not a JSON-RPC
 method: `agent.resolveProposal` and the client-driven Apply flow are unchanged.
 
+**Proposer placement (`proposal.placement`, additive).** On a backend that advertises
+`remoteInitialAgent: 1`, `ws.workspace.proposeSibling` stamps an optional top-level
+`placement` on the `workspace-create` proposal (next to `kind`, `preview` and `payload`):
+where the proposing agent runs when it proposes. The value is the closed `agent.create`
+placement object of the [placement subset](./nodes.md#placement-subset), so a client can
+send it unchanged as `initialAgent.placement`:
+
+| Proposing agent runs on | `placement` |
+|---|---|
+| The backend | `{ "target": "local" }` |
+| A remote machine | `{ "target": "remote", "nodeId": "<the agent's nodeId>" }` |
+| An E2B sandbox | `{ "target": "e2b", "cloudMachineId": "<the agent's entry>" }` — a **new** sandbox from the same [named entry](./nodes.md#named-e2b-entries), never the proposer's own; `cloudMachineId` is omitted when the agent has no recorded entry |
+
+The stamp is taken once, at propose time; it is not updated when the agent or the
+machine changes later. It is outside `payload.params`, so the create params stay as
+before and a client that does not know the field ignores it and creates a local
+initial agent, as before. Clients detect the field by its presence: a proposal without
+`placement` (an older backend, or one without `remoteInitialAgent: 1`) has no stamp,
+and a client may fall back to the proposing agent's current location from its agent
+state. It is never `null`.
+
+- **Card Apply** sends `workspace.create { initialAgent.placement }` with the stamp, or
+  with the user's choice in its place. The stamp is a default, not a lock. An offline
+  or removed machine fails admission with the documented `-32602` data
+  (`placement-unavailable` and the [remote machine reasons](./nodes.md#remote-machine-errors)),
+  nothing is created and the card stays pending, so the user can pick another place and
+  Apply again with the same idempotency key.
+- **`ws.workspace.applyProposal`** passes the stamp as `initialAgent.placement`, and
+  sends none when the proposal has no stamp. The agent cannot override it: `placement`
+  is not an allowed option. A pre-side-effect refusal (`placement-unavailable`,
+  `profile-not-remote-compatible`, `machine-not-signed-in`, `model-unavailable`, …)
+  reaches the agent as that structured error with its `data.code` and reason; nothing
+  is created, no resolution is recorded and the card stays pending, with no fallback
+  to local. A launch failure after the workspace commits (`-32603` `launch-failed`,
+  [placement subset](./nodes.md#placement-subset)) keeps the workspace: the binding
+  resolves the proposal `applied` with `detail` `"Created workspace <id>; its first
+  agent failed to start: <cause.code>"` and returns the error to the agent with
+  `workspaceId` and `cause`, so neither the agent nor the card retries into a replay
+  of the same error.
+
 **Attach semantics.** Proposals emitted by a `workspace_api` call attach to that call's
 `tool_result` regardless of the script's return value. When the binding runs, the MCP
 dispatch layer mints a `tar-` nonce, stamps it into the proposal's resource item, and
