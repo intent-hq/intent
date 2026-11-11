@@ -47,9 +47,12 @@ brew install intentd
 brew services start intentd   # runs `intentd serve --resume-all` now and on startup
 ```
 
-The Intent desktop app connects to an already-running daemon such as this
-brew-managed one when configured to; it can also spawn its own bundled
-`intentd` (sidecar mode).
+The Intent desktop app picks up an already-running daemon such as this
+brew-managed one automatically, with nothing to configure: at startup it probes
+the default socket and, when a daemon answers, connects to it instead of
+spawning its own bundled `intentd`. Quitting the app leaves an adopted daemon
+(and its agents) running. When no daemon is running, the app spawns its
+bundled `intentd` (sidecar mode) and stops it on quit.
 
 ## Debian/Ubuntu
 
