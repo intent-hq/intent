@@ -2766,7 +2766,7 @@ interface PromptSection {
   estTokens: number;               // ceil(chars / 4)
   controlHint?: {
     kind: "edit-repo-rules" | "change-specialist" | "agent-features" | "mcp-settings";
-    text: string;                  // e.g. "Edit AGENTS.md"
+    text: string;                  // e.g. "Includes AGENTS.md"
   };
 }
 
