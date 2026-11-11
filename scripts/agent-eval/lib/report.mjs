@@ -53,7 +53,7 @@ export function renderMarkdown(report) {
     lines.push(
       '## claude.ai connectors: FAILED',
       '',
-      `The agents below were offered or called claude.ai account connectors (ENABLE_CLAUDEAI_MCP_SERVERS=${report.connectors.optOut ?? 'unset'}; an intentd that does not forward it leaves them on). Do not trust this report.`,
+      `The agents below were offered or called claude.ai account connectors (ENABLE_CLAUDEAI_MCP_SERVERS=${report.connectors.optOut ?? 'unset'}). Do not trust this report. A row names the task-run whose check first saw the connector.`,
       '',
       ...report.connectors.seen.map((c) => `- ${c.harness} ${c.task}#${c.run}: ${cell(c.tools.join(', '))}`),
       '',

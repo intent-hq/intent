@@ -283,8 +283,10 @@ const CONTROL_SUFFIX = ' [eval control]';
  * - `fail`: a task's `mockControl` non-solution, so its checker must fail;
  * - `leak`: the mock CLI syncs account skills and plugins into its config dir
  *   mid-run, the way Claude Code does, so the isolation check must flag it;
- * - `connector`: the mock is offered and calls a claude.ai connector tool, so
- *   the connector check must flag it.
+ * - `connector-offered`: the mock's session record offers a claude.ai connector
+ *   tool it never calls, so the session-record scan alone must flag it;
+ * - `connector-called`: the mock calls one with no session record, so the
+ *   tool-call check alone must flag it.
  */
 export function mockControls(tasks) {
   const controls = tasks
@@ -298,14 +300,16 @@ export function mockControls(tasks) {
     mock: [],
     mockSyncSkills: true,
   });
-  controls.push({
-    id: 'claude-ai-connector:control',
-    control: 'connector',
-    prompt: 'Reply with just the word: connected' + CONTROL_SUFFIX,
-    check: () => verdict(true, 'no state to check'),
-    mock: [],
-    mockConnector: true,
-  });
+  for (const how of ['offered', 'called']) {
+    controls.push({
+      id: `claude-ai-connector-${how}:control`,
+      control: `connector-${how}`,
+      prompt: `Reply with just the word: ${how}` + CONTROL_SUFFIX,
+      check: () => verdict(true, 'no state to check'),
+      mock: [],
+      mockConnector: how,
+    });
+  }
   return controls;
 }
 
@@ -313,8 +317,9 @@ export function mockControls(tasks) {
 export function controlHeld(result) {
   if (result.error || result.timedOut) return false;
   if (result.control === 'fail') return !result.pass && !result.isolationLeaks?.length && !result.connectorTools?.length;
+  if (result.control === 'connector-offered') return Boolean(result.connectorOffered?.length) && !result.connectorCalled?.length && !result.isolationLeaks?.length;
+  if (result.control === 'connector-called') return Boolean(result.connectorCalled?.length) && !result.connectorOffered?.length && !result.isolationLeaks?.length;
   if (result.control === 'leak') return Boolean(result.isolationLeaks?.length);
-  if (result.control === 'connector') return Boolean(result.connectorTools?.length) && !result.isolationLeaks?.length;
   return false;
 }
 
@@ -340,7 +345,7 @@ export function mockSolutions(tasks) {
         steps: t.mock,
         reply: t.mockReply ?? 'Done.',
         ...(t.mockSyncSkills ? { syncSkills: true } : {}),
-        ...(t.mockConnector ? { connector: true } : {}),
+        ...(t.mockConnector ? { connector: t.mockConnector } : {}),
       })),
   ];
 }

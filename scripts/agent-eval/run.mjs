@@ -191,7 +191,7 @@ async function runTask({ arm, task, run, opts, root }) {
       }
     }
     result.agents = agents.length;
-    if (connectors.size) result.connectorTools = [...connectors].sort();
+    if (connectors.size) result.connectorCalled = [...connectors].sort();
     result.score = score;
     await sleep(1500);
     result.tokens = tokenTotal((await rpc.call('workspace.getTokenUsage', { workspaceId })).tokenUsage) - trivialTokens;
@@ -222,12 +222,15 @@ export function connectorCalls(messages, events) {
 
 /**
  * Taint a task-run whose agent had claude.ai connector tools: those its agents
- * called (`result.connectorTools`, from runTask) plus what the provider's own
- * records in the config dir gained since the last check.
+ * called (`result.connectorCalled`, from runTask) plus what the provider's own
+ * records in the config dir gained since the last check (`connectorOffered`).
+ * The two are kept apart so each negative control proves its own path.
  */
 export function checkConnectors(isolation, result) {
   if (!isolation.spec?.connectors) return [];
-  const seen = new Set([...(result.connectorTools ?? []), ...connectorTraces(isolation.dir, isolation.spec, (isolation.scanned ??= new Map()))]);
+  const offered = connectorTraces(isolation.dir, isolation.spec, (isolation.scanned ??= new Map()));
+  if (offered.length) result.connectorOffered = offered;
+  const seen = new Set([...(result.connectorCalled ?? []), ...offered]);
   if (!seen.size) return [];
   const tools = [...seen].sort();
   result.connectorTools = tools;
@@ -358,7 +361,7 @@ export async function main(argv = process.argv.slice(2)) {
           const r = cached || (await runTask({ arm, task, run, opts, root }));
           if (!cached) checkIsolation(isolation, r);
           writeBack();
-          if (i === 0 && cache && !cached && !r.error && !r.isolationLeaks && !r.connectorTools) cache.put(arm.harness, task, run, r);
+          if (i === 0 && cache && !cached && !r.error && !r.isolationLeaks && !r.connectorCalled) cache.put(arm.harness, task, run, r);
           results.push(r);
           log(`${r.pass ? 'PASS' : 'FAIL'} ${arm.harness} ${task.id}#${run}${r.cached ? ' (cached)' : ''}: ${r.detail ?? ''}`);
         }

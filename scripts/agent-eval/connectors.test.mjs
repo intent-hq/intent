@@ -29,7 +29,9 @@ test('the claude-code provider env opts out of claude.ai connectors', () => {
 
 test('connector tool names match the CLI and the intentd-derived spellings only', () => {
   for (const n of ['mcp__claude_ai_Gmail__search_threads', 'claude_ai_Gmail_search_threads', 'mcp__claude_ai_Claude_Docs__read']) assert.ok(isConnectorTool(n), n);
-  for (const n of ['mcp__workspace-mcp__workspace_api', 'workspace_api', 'Bash', 'my_claude_ai_tool', undefined]) assert.ok(!isConnectorTool(n), String(n));
+  for (const n of ['mcp__workspace-mcp__workspace_api', 'workspace_api', 'Bash', 'my_claude_ai_tool', 'grep -r mcp__claude_ai_ .', 'cat docs/mcp__claude_ai_Gmail__x.md', undefined]) {
+    assert.ok(!isConnectorTool(n), String(n));
+  }
 });
 
 test('connector traces come from offered tools and the connected list, each reported once', () => {
@@ -51,6 +53,28 @@ test('connector traces come from offered tools and the connected list, each repo
   assert.deepEqual(connectorTraces(dir, claude, seen), ['mcp__claude_ai_Slack__send'], 'only the appended record');
 });
 
+test('only offered and called tool records count, never text that mentions a connector', () => {
+  const dir = tmp();
+  const mention = 'grep -r mcp__claude_ai_Gmail__search_threads .';
+  const bash = { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: mention } }] } };
+  const result = { type: 'user', message: { content: [{ type: 'tool_result', content: 'mcp__claude_ai_Slack__send' }] } };
+  const text = { type: 'assistant', message: { content: [{ type: 'text', text: 'mcp__claude_ai_Slack__send' }] } };
+  session(dir, 'r/s.jsonl', [bash, result, text].map((r) => JSON.stringify(r) + '\n').join('') + 'not json mcp__claude_ai_X__y\n');
+  assert.deepEqual(connectorTraces(dir, claude, new Map()), []);
+  const called = { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'mcp__claude_ai_Gmail__search_threads', input: {} }] } };
+  session(dir, 'r/s.jsonl', JSON.stringify(called) + '\n');
+  assert.deepEqual(connectorTraces(dir, claude, new Map()), ['mcp__claude_ai_Gmail__search_threads']);
+});
+
+test('a rewritten (shorter) session file is scanned again', () => {
+  const dir = tmp();
+  const seen = new Map();
+  const file = session(dir, 'r/s.jsonl', offered('mcp__workspace-mcp__workspace_api').repeat(3));
+  assert.deepEqual(connectorTraces(dir, claude, seen), []);
+  fs.writeFileSync(file, offered('mcp__claude_ai_Gmail__search_threads'));
+  assert.deepEqual(connectorTraces(dir, claude, seen), ['mcp__claude_ai_Gmail__search_threads']);
+});
+
 test('a record still being written is read once complete', () => {
   const dir = tmp();
   const seen = new Map();
@@ -66,7 +90,10 @@ test('connector calls are found in transcript blocks and live tool events', () =
     { role: 'assistant', blocks: [{ type: 'tool_use', name: 'workspace_api' }, { type: 'tool_use', name: 'claude_ai_Gmail_search_threads' }] },
     { role: 'assistant', blocks: [{ type: 'text', text: 'mcp__claude_ai_Slack__send' }] },
   ];
-  const events = new Map([['t1', { toolName: 'claude_ai_Claude_Docs_read', title: 'mcp__claude_ai_Claude_Docs__read' }]]);
+  const events = new Map([
+    ['t1', { toolName: 'claude_ai_Claude_Docs_read', title: 'mcp__claude_ai_Claude_Docs__read' }],
+    ['t2', { toolName: 'Bash', title: 'grep -r mcp__claude_ai_ .' }],
+  ]);
   assert.deepEqual(connectorCalls(messages, events).sort(), ['claude_ai_Claude_Docs_read', 'claude_ai_Gmail_search_threads', 'mcp__claude_ai_Claude_Docs__read']);
   assert.deepEqual(connectorCalls([], undefined), []);
 });
@@ -85,18 +112,26 @@ test('checkConnectors taints and records a task-run; a control is tainted but no
   assert.match(offeredRun.detail, /^claude\.ai connectors loaded \(mcp__claude_ai_Claude_Docs__read\); ok/);
   assert.deepEqual(isolation.connectors, [{ task: 'spec-section', harness: 'current', run: 2, tools: ['mcp__claude_ai_Claude_Docs__read'] }]);
 
-  const called = { task: 'claude-ai-connector:control', harness: 'current', run: 1, pass: true, control: 'connector', connectorTools: ['claude_ai_Gmail_search_threads'] };
+  assert.deepEqual(offeredRun.connectorOffered, ['mcp__claude_ai_Claude_Docs__read']);
+  assert.equal(offeredRun.connectorCalled, undefined);
+
+  const called = { task: 'claude-ai-connector-called:control', harness: 'current', run: 1, pass: true, control: 'connector-called', connectorCalled: ['claude_ai_Gmail_search_threads'] };
   checkIsolation(isolation, called);
   assert.deepEqual(called.connectorTools, ['claude_ai_Gmail_search_threads']);
+  assert.equal(called.connectorOffered, undefined, 'already-scanned records are not reported again');
   assert.equal(called.pass, false);
   assert.equal(isolation.connectors.length, 1);
   assert.ok(controlHeld(called));
 });
 
-test('the connector control is part of the smoke and fails when the check misses it', () => {
-  const control = mockControls([]).find((c) => c.control === 'connector');
-  assert.equal(control.mockConnector, true);
-  assert.ok(!controlHeld({ control: 'connector', pass: true }));
+test('each connector control proves its own detection path', () => {
+  const controls = mockControls([]).filter((c) => c.control.startsWith('connector-'));
+  assert.deepEqual(controls.map((c) => [c.control, c.mockConnector]), [['connector-offered', 'offered'], ['connector-called', 'called']]);
+  assert.ok(controlHeld({ control: 'connector-offered', connectorOffered: ['x'] }));
+  assert.ok(!controlHeld({ control: 'connector-offered', connectorCalled: ['x'] }), 'the call path must not stand in for the record scan');
+  assert.ok(controlHeld({ control: 'connector-called', connectorCalled: ['x'] }));
+  assert.ok(!controlHeld({ control: 'connector-called', connectorOffered: ['x'] }), 'the record scan must not stand in for the call path');
+  assert.ok(!controlHeld({ control: 'connector-called', pass: true }));
   assert.ok(!controlHeld({ control: 'fail', pass: false, connectorTools: ['claude_ai_x_y'] }));
 });
 
