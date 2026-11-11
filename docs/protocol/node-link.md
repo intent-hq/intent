@@ -3941,10 +3941,9 @@ interface ProfileEnvOverlay {
 
 - **Selection.** With a marked profile selected, or a marked Default with
   overrides saved, the backend sends its overlay in `launch.profileEnv`.
-  Otherwise it sends nothing and the machine uses its own provider login, which
-  for an unmarked Default needs
-  [machine sign-in](./methods/provider-profiles.md#machine-sign-in-on-remote-machines)
-  to be on. An unmarked profile is refused before any launch. A selected
+  Otherwise it sends nothing and the machine uses its own provider login
+  ([which providers a machine offers](./methods/provider-profiles.md#which-providers-a-machine-offers)).
+  An unmarked profile is refused before any launch. A selected
   profile that cannot be resolved fails at create with
   `provider-profile-replacement-required` and again at each start; the backend
   never falls back to another account or to the machine's login.

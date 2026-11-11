@@ -407,8 +407,11 @@ the local daemon.
 
 **Errors.** A provider reference the [launch rules](./methods/nodes.md#placement-across-machines)
 refuse (not marked for remote machines, or setting an account folder) fails first
-with `profile-not-remote-compatible`; a Default that relies on machine sign-in on
-machines reported signed out fails with `machine-not-signed-in`. When no machine lists the model, admission fails before any launch
+with `profile-not-remote-compatible`; a Default that relies on the machine's own
+sign-in on machines reported signed out fails with `machine-not-signed-in`. The
+machine list given to agents leaves out a provider a machine cannot run: signed
+out there with no remote-compatible profile on this backend, or not installed
+([which providers a machine offers](./methods/provider-profiles.md#which-providers-a-machine-offers)). When no machine lists the model, admission fails before any launch
 with `model-unavailable`, listing each machine's provider status and models
 (at most 50 per machine); a provider switched off in the machine's own settings
 reports status `disabled` rather than `cli-missing` (see

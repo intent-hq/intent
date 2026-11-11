@@ -357,9 +357,9 @@ interface ProfileActivation {
     2. `{ reason: "not-marked", keys: [] }` otherwise. Clients show the toggle off.
   - **Default.** For the Default configuration the choice decides whether its
     overrides are sent. A marked Default sends its overrides; with none, it sends
-    nothing. An unmarked Default sends nothing and runs only through the machine's
-    own sign-in, when [machine sign-in](#machine-sign-in-on-remote-machines) is on
-    for its base provider. `DefaultConfig.remoteLaunch` gives the result.
+    nothing. An unmarked Default sends nothing and runs through the machine's own
+    sign-in ([which providers a machine offers](#which-providers-a-machine-offers)).
+    `DefaultConfig.remoteLaunch` gives the result.
   - **Create default.** When `create` omits `remoteCompatible`, the daemon applies
     the profile migration rule below to the new `env`, so an older client keeps
     today's behaviour. Clients that know the field always send it.
@@ -374,19 +374,18 @@ interface ProfileActivation {
       unmarked, and Advanced profiles follow the same rule.
     - A Default with at least one saved entry and no account folder starts marked.
       Every other Default starts unmarked and keeps working on remote machines
-      through machine sign-in, which is on by default. This includes a Default that
-      sets an account folder: today it is refused, and after migration it runs
-      with the machine's own sign-in and sends nothing, as the
+      through the machine's own sign-in. This includes a Default that sets an
+      account folder: today it is refused, and after migration it runs with the
+      machine's own sign-in and sends nothing, as the
       [launch rules](./nodes.md#placement-across-machines) say for any unmarked
-      Default. Its folder never leaves the backend. The user can turn machine
-      sign-in off to keep it refused.
+      Default. Its folder never leaves the backend.
     After migration the value changes only through an explicit write, the
     unmarking above, or a Default's [credential auto-mark](#default-credential-auto-mark);
     no other `env` change marks a configuration.
   - [Cloud machines](./nodes.md#placement-on-e2b) need more: a configuration
     runs there only when it is marked **and** its `env` has at least one
-    `kind: "set"` entry. Machine sign-in never applies there, because a sandbox
-    has no sign-in.
+    `kind: "set"` entry. The machine's own sign-in never applies there, because a
+    sandbox has no sign-in.
   - `reason` is an open string enum. Clients treat an unknown reason as not
     remote-compatible and show `keys` when present.
   - It is value-free: `keys` carries variable names only. Daemons that predate the
@@ -495,14 +494,11 @@ never removes external account directories.
   - `defaultRemoteLaunch?: { "<baseProviderId>": DefaultRemoteLaunch }`, one entry
     per base provider that advertises `supportsProfiles`, with the value of
     `DefaultConfig.remoteLaunch`.
-  - `defaultRemoteIncompatibility?: { "<baseProviderId>": RemoteIncompatibility }`,
-    holding only the base providers whose Default **cannot run** on a remote machine
-    (`remoteLaunch: "refused"`), omitted when there is none, like `defaultNames`. An
-    unmarked Default that runs through machine sign-in is absent, so a client that
-    reads only this map still offers it. The reason is `account-folder` when the
-    Default sets one, else `not-marked`.
+  - `defaultRemoteIncompatibility?` is no longer sent: on a machine every Default
+    runs, through the machine's own sign-in when it is not marked. An older client
+    that reads it treats every Default as compatible, which is now correct.
 
-  Member reads may include all three, since they carry no values. A provider picker
+  Member reads may include both, since they carry no values. A provider picker
   for a remote agent reads them to mark or hide configurations that cannot run there
   (see the [launch rules](./nodes.md#placement-across-machines)).
   `providers:profiles-changed` invalidates them; its `profile` summary does not carry
@@ -806,8 +802,8 @@ interface DefaultConfig {
 }
 type DefaultRemoteLaunch =
   | "send"             // marked: its overrides are sent (none saved: nothing is sent)
-  | "machine-sign-in"  // not marked, machine sign-in on: nothing is sent; the machine's own sign-in runs it
-  | "refused";         // not marked, machine sign-in off: refused with profile-not-remote-compatible
+  | "machine-sign-in"  // not marked: nothing is sent; the machine's own sign-in runs it (refused on E2B)
+  | "refused";         // its saved environment cannot be read: launches fail closed
 ```
 
 | Method | Params | Result |
@@ -836,8 +832,7 @@ type DefaultRemoteLaunch =
   `remote-account-folder`). Omitting it keeps the saved value, except for the
   credential auto-mark below. A Default may be marked with no overrides; a remote
   launch then sends nothing. Removing every override does not unmark it.
-  `remoteLaunch` is recomputed on every read from this choice and
-  [machine sign-in](#machine-sign-in-on-remote-machines).
+  `remoteLaunch` is recomputed on every read from this choice.
 - <a id="default-credential-auto-mark"></a>**Credential auto-mark.** An
   `updateDefault` that **adds a credential** marks the Default in the same commit,
   so the credential is used on remote machines without a second step. A
@@ -932,10 +927,7 @@ one event, with a `revision` one higher than the previous event, in three cases:
   carries no count; clients re-run `providers.profiles.list` to read it.
 - **A Default configuration change** ([Default configuration overrides](#default-configuration-overrides)).
   A committed `providers.profiles.updateDefault` has `change: "default-updated"`
-  with `baseProviderId` and `envChanged`. A committed write of the
-  [machine sign-in](#machine-sign-in-on-remote-machines) setting also emits one
-  `default-updated` per base provider that advertises `supportsProfiles`, with
-  `envChanged: false`, because a Default's `remoteLaunch` may have changed. A change in the Default configuration's
+  with `baseProviderId` and `envChanged`. A change in the Default configuration's
   `activation.runningProcesses` has `change: "default-activation"` with
   `baseProviderId`. Neither carries `profileId` or `profile`; clients re-run
   `providers.profiles.list` (and `providers.catalog` for a new name).
@@ -962,35 +954,36 @@ See [provider credentials](../node-link.md#provider-credentials-profile-environm
 Only a configuration the user marked [remote-compatible](#remote-compatibility)
 is sent. The [launch rules](./nodes.md#placement-across-machines) decide every
 remote launch: placement, sub-agents, `agent.setModel` and quota failover. An
-unmarked profile, or an unmarked Default while machine sign-in is off, fails
-before any write with `-32602` `profile-not-remote-compatible`
+unmarked profile, or an unmarked Default on E2B, fails before any write with
+`-32602` `profile-not-remote-compatible`
 ([remote machine errors](./nodes.md#remote-machine-errors)). A remote agent can
 switch to another allowed configuration or model that its machine offers; see
 [switching a remote agent's model](./nodes.md#switching-a-remote-agents-model).
 Quota failover on a remote agent passes over candidates the launch rules refuse.
 
-##### Machine sign-in on remote machines
+##### Which providers a machine offers
 
-The setting [`providers.remoteMachineSignIn`](settings.md#machine-sign-in-on-remote-machines)
-on the **sending backend** holds one boolean per base provider that advertises
-`supportsProfiles` (`codex`, `claude-code`). A missing entry is **on**. It applies
-only when the bare reference (the Default configuration) is chosen for a remote
-agent and the Default is not marked:
+For each remote machine and base provider, the backend uses, in order:
 
-- **On.** Nothing is sent. The machine runs the provider with its own sign-in, if
-  the provider is detected and not disabled there. A machine whose sign-in status is
-  `unknown` is still tried; a launch that then fails on authentication is reported
-  as `node-provider-signed-out`
-  ([machine codes](../node-link.md#machine-start-failure-codes)). A machine known to be
-  `signed-out` or `auth-failed` is refused before launch with
-  `machine-not-signed-in`.
-- **Off.** The launch is refused with `profile-not-remote-compatible`,
-  `reason: "not-marked"` and `machineSignIn: false`.
+1. **The machine's own sign-in, when it has one.** The provider's CLI is detected
+   there and its sign-in status is `signed-in` or `unknown` (an `unknown` one is
+   still tried). An unmarked Default sends nothing and runs this way.
+2. **Otherwise, or when one is picked, a remote-compatible profile from this
+   backend** (a marked profile, or a marked Default with overrides). The provider's
+   CLI must be installed on the machine; its own sign-in does not matter.
 
-The setting never applies to a profile, to a marked Default, or on
-[E2B](./nodes.md#placement-on-e2b). Providers without profiles always run with the
-machine's own sign-in, as before. The result for each base provider is read as
-`DefaultConfig.remoteLaunch` and the catalog's `defaultRemoteLaunch`.
+When neither applies, the provider is **not offered** for that machine: it is left
+out of the agent-facing machine list (`ws.agent.create` and `ws.help("agent")`),
+out of placement's automatic choice, and is refused at admission; clients hide it
+from their pickers for that machine. A provider that is signed out there and has no
+remote-compatible profile on this backend is refused with `machine-not-signed-in`
+([remote machine errors](./nodes.md#remote-machine-errors)). A machine whose sign-in
+was `unknown` and then fails on authentication reports `node-provider-signed-out`
+([machine codes](../node-link.md#machine-start-failure-codes)).
+
+There is no setting to stop a machine using its own sign-in. On
+[E2B](./nodes.md#placement-on-e2b) the CLIs are never signed in, so only the
+second rule applies. Providers without profiles have only the first.
 
 #### Compatibility
 
@@ -1018,10 +1011,8 @@ absent, they treat every configuration as compatible and rely on the
 `remoteIncompatibility` and `defaultRemoteIncompatibility`, and surface the refusal's
 message.
 
-Clients detect the **saved choice** and machine sign-in by the presence of
-`remoteLaunch` on `DefaultConfig` (and `defaultRemoteLaunch` on the catalog), and
-show the machine sign-in control only when `providers.remoteMachineSignIn` is in
-`settings.list`. Without them, the daemon computes `remoteCompatible` from the
+Clients detect the **saved choice** by the presence of `remoteLaunch` on
+`DefaultConfig` (and `defaultRemoteLaunch` on the catalog). Without them, the daemon computes `remoteCompatible` from the
 account-folder rule: clients show it read-only and never send `remoteCompatible`,
 which such a daemon ignores. Older clients keep working unchanged:
 
@@ -1033,11 +1024,11 @@ which such a daemon ignores. Older clients keep working unchanged:
   not mark it again, though today that edit makes it compatible; an older client
   cannot mark it, so the user marks it in a newer client. This is an accepted
   degradation: marking is consent.
-- `defaultRemoteIncompatibility` lists only Defaults that cannot run, so an older
-  picker still offers an unmarked Default that runs through machine sign-in.
+- `defaultRemoteIncompatibility` is not sent, so an older picker offers every
+  Default, which every machine with the provider signed in can run.
 - An older Settings page reads an unmarked Default as `remoteCompatible: false`
-  (`not-marked`) and may describe it as not remote-ready even when machine sign-in
-  lets it run. This is an accepted, display-only degradation.
+  (`not-marked`) and may describe it as not remote-ready even though the machine's
+  own sign-in runs it. This is an accepted, display-only degradation.
 - New refusals (`not-marked`, `machine-not-signed-in`, `node-provider-signed-out`)
   reach older clients as ordinary errors with a full message.
 
