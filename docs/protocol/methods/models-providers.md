@@ -77,9 +77,9 @@ snapshot written by an older daemon cannot resurface the pseudo-row.
 
 **Codex and Claude runtime selection.** Both require the canonical `codex` or `claude` executable on the execution host (the daemon/worker host for remote workspaces). Enhanced executable discovery also checks supported installer/version-manager directories and captured login-shell PATH, so a GUI/service PATH need not contain the CLI directory. Shell aliases/functions do not qualify. The daemon supplies the selected absolute path to its reviewed ACP adapter; bundled npm dependencies are never a runtime fallback. Upgrade the installed CLI, then refresh the picker to discover its advertised models without changing the adapter. Adapter/CLI protocol compatibility is still required, and catalog membership does not prove account entitlement. Automatic catalog probes send no prompts. Running sessions keep their current process; new launches select the current installed CLI. Missing or incompatible CLIs produce a warning/launch failure, not an alternate runtime or model; a missing CLI on `models.list` is labeled `warningKind: "cli-missing"`.
 
-**Antigravity discovery and selection.** The daemon starts the user-managed official ACP server in a private temporary profile. It reads exact model IDs, labels, and the default from the ACP session response. It does not add static models or derive an effort slider from model names. Cached and forced-refresh responses follow the generic rules above.
+**Antigravity discovery and selection.** The daemon runs the user's `agy` CLI as `agy acp --app-data-dir antigravity-intent-probe`, so catalog sessions stay out of the user's agy history. Rows are the base models of the session's `configOptions[id="model"]` select, with the `thought_level` select as effort levels; the select's `currentValue` is the default. A model refresh first updates an agy older than 1.5.0 (see the `antigravity` CLI fields under `host.providerDiscovery`, §5.14). Cached and forced-refresh responses follow the generic rules above.
 
-Normal sessions use persistent private profiles under `<data-dir>/antigravity/`. They receive the assembled instructions and canonical permitted MCP server set. They do not import global Gemini MCP configuration. After fresh creation, load, or recreation, Intent selects permission mode `default` and reapplies the saved model. A rejected or unconfirmed model stops setup before the prompt. The user must refresh models and select an available ID. Native subagents remain denied regardless of Intent's permission policy. The verified ACP build emits no usage events, so missing usage is not measured zero.
+Sessions run `agy acp` with the user's own agy settings, hooks and MCP servers, plus the workspace MCP servers. After session open the daemon applies the saved model with `session/set_config_option` (agy accepts a base id or an effort variant such as `gemini-3.8-flash-low`); a rejected model fails setup before any prompt. The daemon never sends `authenticate`, which opens a browser; sign in on the daemon host with `agy acp --login`. Role tool restrictions are prompt-only, because `agy acp` has no tool-removal flag.
 
 **Cursor discovery and selection** *([intent-hq/intentd#3073](https://github.com/intent-hq/intentd/pull/3073))*. The daemon runs the user-installed `cursor-agent` (resolved as described for `host.providerDiscovery`, §5.14) as `cursor-agent acp` and asks for `cursor/list_available_models` straight after `initialize`. No ACP session is opened, so a catalog probe adds no chat to the user's Cursor history. Rows are Cursor's **base** model ids (`value`, e.g. `gpt-5.2`) with Cursor's display names; the `default` row is Cursor's **Auto** model and is marked `isDefault: true`. A signed-out CLI answers the extension request with an authentication-required error, which degrades like any failed probe (empty or last-good list plus `warning`, no `warningKind`). Cached and forced-refresh responses follow the generic rules above.
 
@@ -194,7 +194,7 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
 - `command` is the registry's **logical CLI name** (the `ACP_PROVIDERS` `command` field, e.g. `claude-agent-acp` for `claude-code`) — provider metadata, **not** necessarily the binary the daemon spawns. Launch resolution belongs to `host.providerDiscovery` (§5.14), whose `command` reports what the daemon actually resolves and launches — so the two can differ: an npx-only provider like `claude-code` launches via `npx <npxPackage>` and reports `command: "npx"` there. Clients must not assume the values match across the two methods.
 - `visible` is the **daemon-evaluated** gating verdict: `requiresEnvVar` is checked for **presence** against the **daemon's** process environment (an empty-string value counts as set), and a configured `requiresFeatureCode` **always** gates the row off (**default-deny** — the daemon stores no feature-code enablement; no registered provider currently carries one, but the mechanism remains for future providers). `cortex` and `droid` carry `requiresEnvVar` (`INTENTD_ENABLE_CORTEX` / `INTENTD_ENABLE_DROID`) and are hidden by default — not yet well-tested; setting the env var in the daemon's environment restores the provider. The raw gating fields pass through when set, so clients can either trust the verdict or re-derive it. This is the single env-var/feature-code gate shared with `host.providerDiscovery`'s `gatedOff` (§5.14).
 - The optional fields (`legacyAliases`, `loginCommandHint`, `loginDocsUrl`, `authErrorPatterns`, `requiresEnvVar`, `requiresFeatureCode`) are **omitted when unset, never null** — clients detect by presence.
-- `supportsTestPrompt` *(v9.3; [intent-hq/intentd#1657](https://github.com/intent-hq/intentd/pull/1657))* is **always present**: whether the provider can be exercised by the live `host.providerTestPrompt` probe (§5.14). `false` for `unsloth`, whose first prompt can trigger a long model download, and `antigravity`, which requires a private guarded profile; `true` for every other row, including `cursor`. For the opt-out providers, the RPC returns `unsupported` without resolution or spawn.
+- `supportsTestPrompt` *(v9.3; [intent-hq/intentd#1657](https://github.com/intent-hq/intentd/pull/1657))* is **always present**: whether the provider can be exercised by the live `host.providerTestPrompt` probe (§5.14). `false` for `unsloth`, whose first prompt can trigger a long model download; `true` for every other row, including `antigravity` (since 18.0) and `cursor`. For the opt-out providers, the RPC returns `unsupported` without resolution or spawn.
 - `supportsProfiles` and the top-level `profiles` list are prepared additive
   fields for [named provider profiles](provider-profiles.md#catalog-models-and-status).
   `providers` keeps one row per provider type. `models.list` accepts a profile
@@ -210,96 +210,10 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
   keep their existing meanings.
 - **No default designation, no model metadata ([intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)).** Rows carry no `isDefault` flag, the payload carries no top-level `defaultProviderId`, and the former per-row `modelTiers` (`{ fast, balanced, smart }` tier→model-id map) is gone — the static tier tables were removed with the model-tier concept. Model discovery is fully dynamic via `models.list` (§5.30). Clients derive the **effective default provider** from settings: `model.defaultProvider` when it names a registered provider (§5.12; [intent-hq/intentd#1648](https://github.com/intent-hq/intentd/pull/1648)), else it is unset — there is no positional fallback to the first registered provider ([intent-hq/monorepo#3044](https://github.com/intent-hq/monorepo/issues/3044)) — the same derivation the daemon applies (§5.5 "Creation-time default-model resolution").
 
-Antigravity is an opt-in catalog entry: `id: "antigravity"`, `command: "antigravity-acp"`, and `canBeDisabled: true`. Discovery does not enable it or change the active provider. Initial verification covers macOS Apple Silicon with personal Google OAuth. Other platforms and authentication methods are not certified by this integration.
+Antigravity is an opt-in catalog entry: `id: "antigravity"`, `command: "agy"` (launched as `agy acp`, agy 1.5.0 or later), `canBeDisabled: true`, `loginCommandHint: "agy acp --login"`, and `supportsTestPrompt: true`. Discovery does not enable it or change the active provider.
 
 Cursor is an opt-in provider that the user enables in Settings *([intent-hq/intentd#3073](https://github.com/intent-hq/intentd/pull/3073))*: `id: "cursor"`, `displayName` and `shortName` `"Cursor"`, `command: "cursor-agent"` (never the bare `agent` alias), `canBeDisabled: true`, `loginCommandHint: "cursor-agent login"`, `loginDocsUrl: "https://cursor.com/docs/cli/reference/authentication"`, `authErrorPatterns: ["authentication required"]`, `supportsTestPrompt: true`, and `supportsProfiles: false`. It carries no `requiresEnvVar` or `requiresFeatureCode`, so `visible` is `true`. Like the other opt-in providers it stays off until the user enables it: discovery, a successful auth probe, or a served model list never enables it automatically or changes the active provider. Auth is described under `host.providerAuthStatus` and the CLI fields under `host.providerDiscovery` (§5.14).
 
 ### 5.44 Guided Antigravity setup
 
-Protocol 9.8 adds four local-app fast-path methods. These methods are not part
-of `WorkspaceApi` or the agent tool surface.
-
-| Method | Params | Result |
-| --- | --- | --- |
-| providers.setup.status | providerId: "antigravity" | SetupStatus |
-| providers.setup.start | providerId: "antigravity" | SetupStatus |
-| providers.setup.login | providerId: "antigravity", operationId: string | SetupStatus |
-| providers.setup.cancel | providerId: "antigravity", operationId: string | SetupStatus |
-
-`SetupStatus` contains `operationId: string | null`, `supported: boolean`,
-`cliDetected: boolean`, `runtimeInstalled: boolean`, and `phase`.
-`cliDetected` reports the `agy` executable, not ACP readiness or authentication.
-`runtimeInstalled` reports an executable bridge, not a successful login.
-
-| Phase | Additional fields | Meaning |
-| --- | --- | --- |
-| idle | none | No operation on this connection |
-| checking | none | Guarded saved-session or model check |
-| downloading | received: number, total: number | Download bytes received and pinned archive size |
-| verifying | none | Bundle integrity and publisher signature checks |
-| signInRequired | none | Explicit personal Google sign-in is needed |
-| signingIn | none | Explicit sign-in is running |
-| connected | modelCount: positive integer | Fresh guarded session and nonempty models verified |
-| cancelled | none | The user cancelled the operation |
-| failed | code: string | Safe failure code; no raw subprocess output |
-
-Failure codes are `unsupportedHost`, `downloadFailed`, `invalidArchive`,
-`integrityFailed`, `signatureFailed`, `diskError`, `cancelled`, `timedOut`,
-`invalidCustomPath`, `authenticationCheckFailed`, `signInFailed`,
-`browserUnavailable`, and `modelsUnavailable`.
-
-**Authorization and ownership.** Only UDS connections can use these methods.
-The connection must first complete `client.hello` with
-`capabilities: { antigravitySetup: 1 }`. The server advertises
-`server.capabilities.antigravitySetup: 1`. This is capability negotiation inside
-the existing same-user UDS trust boundary, not cryptographic app attestation.
-An agent's ordinary workspace API cannot call this surface. The desktop app
-uses a dedicated connection for the initiating settings window and accepts
-setup actions only from that window's main frame.
-
-All WSS requests and connections without that handshake receive `-32001`:
-`Antigravity setup requires an authorized local app connection`.
-This check uses the actual transport, never a configured locality override.
-Notifications never start work. Invalid providers or foreign operation IDs
-receive `-32602` with `error.data.code: "invalid-params"`.
-A second connection cannot sign in or cancel another connection's operation.
-A new hello revokes the previous operation; disconnect cancels it.
-
-**Consent.** `status` performs bounded metadata discovery only. It never
-installs software, reads credentials, or opens a browser. A deliberate Connect
-click calls `start`; repeated calls join pending work. Setup reuses a configured
-executable without changing its path. A broken explicit path reports
-`invalidCustomPath`; it does not authorize a replacement. Otherwise, setup can
-acquire the pinned official Google bridge for Apple Silicon macOS. Downloads
-are HTTPS-only, size-limited, hash-checked, and staged privately. Both required
-executables must pass integrity and Google Apple-signature checks before atomic
-activation. Concurrent downloads are serialized with validated cache reuse.
-No provider defaults or workspace model selections change.
-
-**Sign-in.** The first session check suppresses browser launch. Only a deliberate
-Sign in with Google click calls `login` in `signInRequired`. Google owns its
-credential store; Intent does not copy tokens. The login service verifies a new
-noninteractive session before reporting success, then checks the models again.
-Download/setup and login have bounded deadlines. Cancellation reaches child
-processes and temporary profiles.
-
-The daemon sends at most one `providers.setup.openLogin` reverse request per
-explicit login, only on the initiating connection:
-
-```json
-{"jsonrpc":"2.0","id":"rev-1","method":"providers.setup.openLogin","params":{"operationId":"operation-id","url":"https://accounts.google.com/o/oauth2/v2/auth?..."}}
-```
-
-The client accepts only the current explicit login operation. It validates
-HTTPS, the exact `accounts.google.com` host, port 443, no user information or
-fragment, and `/o/oauth2/auth` or `/o/oauth2/v2/auth`. It opens the system browser
-and returns `{ "opened": true }`; rejection returns `{ "opened": false }`.
-The reverse response deadline is 30 seconds. The URL must never enter shared
-events, renderer state, persistent storage, diagnostics, or telemetry.
-
-**Client compatibility.** Detect the capability, not a package version.
-When the capability is absent, show an Intent update requirement. Unsupported
-platforms and remote backends show a limitation without an install button.
-After connected, refresh models and provider readiness before enabling
-Antigravity. Never change the default provider or an existing workspace model.
-The advanced custom-path control and terminal login command remain available.
+Retired in 18.0. Protocol 18.0 removed the guided setup surface: `providers.setup.status`, `providers.setup.start`, `providers.setup.login` and `providers.setup.cancel` return `-32601 Method not found`, the `providers.setup.openLogin` reverse RPC is never sent, and `server.capabilities.antigravitySetup` is no longer advertised. Antigravity is a plain CLI provider backed by the user's `agy acp` ([intent-hq/intentd#3267](https://github.com/intent-hq/intentd/pull/3267)). See the 9.8 and 18.0 entries in [versioning.md](../versioning.md).

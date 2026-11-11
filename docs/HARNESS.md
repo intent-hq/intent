@@ -151,7 +151,7 @@ All rows use the same conditional daemon prompt-text path above:
 | Auggie CLI 0.7.0+ | `--rules` file | `--mcp-config` remains the initial tool channel; native acceptance is separate. |
 | OpenCode / Unsloth through OpenCode | Generated environment configuration | Installed versions are not globally pinned; Unsloth's generic test prompt is unsupported. |
 | Grok agent stdio | First-turn prepend | Installed version is not globally pinned; no new native discovery or loop claim. |
-| Antigravity private profile | First-turn prepend | Original private-profile setup/confirmation remains required; generic test prompt is unsupported. |
+| Antigravity `agy acp` (agy 1.5.0+) | First-turn prepend | User's own agy settings, hooks and MCP servers; role tool limits are prompt-only. |
 | Droid, environment-gated | `--append-system-prompt-file` | No feature/default activation or native acceptance follows. |
 | Cortex, environment-gated | First-turn prepend | No workspace MCP delivery channel, hence no workspace-tool-result claim. |
 

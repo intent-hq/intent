@@ -133,7 +133,7 @@ The owner can record its frames with
 | §5.41 Voice transcription — `voice.transcribe` / `voice.getWorkspaceVocabulary` | [methods/voice.md](./methods/voice.md) |
 | §5.42 Centralized PR monitoring — `prMonitor.*` | [methods/pr.md](./methods/pr.md) |
 | §5.43 Daemon stack sampling — `debug.sampleStacks` | [methods/system-observability.md](./methods/system-observability.md) |
-| §5.44 Guided Antigravity setup — `providers.setup.*` | [methods/models-providers.md](./methods/models-providers.md#544-guided-antigravity-setup) |
+| §5.44 Guided Antigravity setup — `providers.setup.*` (retired in 18.0) | [methods/models-providers.md](./methods/models-providers.md#544-guided-antigravity-setup) |
 | §5.45 Browser tab registry — `browser.listTabs` / `upsertTab` / `removeTab` / `syncTabs` / `navigateTab` / `closeTab` | [methods/files-terminal-browser.md](./methods/files-terminal-browser.md) |
 | §5.46 Connection principal — `principal.me` | [methods/client-hello.md](./methods/client-hello.md) |
 | §5.47 Presence — `presence.*` / `note.presence.*` (ephemeral workspace roster + per-note viewer channel) | [methods/presence.md](./methods/presence.md) |
