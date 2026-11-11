@@ -25,8 +25,9 @@ When an agent's provider (e.g. auggie) wants to run a tool that requires approva
 > heuristic, outcome shape, and 5-minute timeout are implemented as described.
 >
 > **Default policy.** The shipped default is **`AllowAll`** for reference parity with the TS
-> acp-provider, selectable at runtime via **`INTENTD_PERMISSION_POLICY`**
-> (`interactive|auto|allow|deny`, default `AllowAll`). Under `AllowAll`,
+> acp-provider, selectable through the **`agents.permissionPolicy`** setting or the
+> overriding **`INTENTD_PERMISSION_POLICY`** env var (`interactive|auto|allow|deny`), and
+> per chat (see [Per-agent permission policy](#per-agent-permission-policy)). Under `AllowAll`,
 > `AgentManager::start_session` additionally issues a best-effort
 > `session/set_mode { modeId: "bypassPermissions" }` after `session/new`,
 > `session/load`, and the recreate fallback on providers that advertise
@@ -39,6 +40,25 @@ When an agent's provider (e.g. auggie) wants to run a tool that requires approva
 > bounded by the 5-minute timeout when left unanswered). **`AutoByRisk`** and
 > **`DenyAll`** remain available for headless-with-guardrails deployments and
 > never issue the bypass mode change.
+
+### Per-agent permission policy
+
+The **daemon default** is the `agents.permissionPolicy` setting
+([§5.12](./methods/settings.md), default `allow`, read live at each turn start); a set
+`INTENTD_PERMISSION_POLICY` overrides that setting daemon-wide. A client can override
+the default for one chat with `agent.update { agentId, changes: { permissionPolicy } }`
+([§5.5](./methods/agents.md)): `"interactive"`, `"allow"` (`AllowAll`), `"auto"`
+(`AutoByRisk`) or `"deny"` (`DenyAll`); `null` clears the override.
+
+- `AgentLite.permissionPolicy` is the override (`null` = default) and
+  `AgentLite.effectivePermissionPolicy` is the policy the agent's next process start
+  uses.
+- The override applies at the next turn start. A live process started under another
+  effective policy is restarted and resumes its provider session. The bypass mode
+  change above follows the effective policy, so an `"interactive"` agent never issues
+  it.
+- Sub-agents do not inherit it; they use the daemon default unless overridden.
+- Remote agents refuse it: their machine applies `remoteAgents.permission`.
 
 The normalized permission request payload is:
 
