@@ -2955,8 +2955,19 @@ title, else `"Imported session"`, marked explicitly set. Its stored ACP session 
 is the imported session, and its last-turn provider is set to the provider, so the
 first `agent.sendMessage` resumes the session with the ordinary `session/load`
 path. `metadata.importedSession` records `{ provider, sourceSessionId,
-sessionId, forked }`. No prompt is sent. It emits `agent:created` and then
+sessionId, forked, sourceCwd?, handoffPending? }`. No prompt is sent. It emits `agent:created` and then
 `agent:updated` with `{ agentId, replacedCount }`.
+
+**First-turn handoff.** The import sets `metadata.importedSession.handoffPending: true`
+(with `sourceCwd`). The first prompt the agent sends after the import carries one hidden
+`<system>` block: for providers that receive the system prompt as a first-turn prepend
+(codex, pi, grok, cortex), the assembled Intent system prompt, because the resume path never
+sends it; for every provider, an import note that names the source CLI and folder, maps
+paths under the source folder to the checkout, and tells the agent to follow the Intent
+instructions and use the workspace tools. The block is not part of the visible user message.
+The flag is cleared once that prompt is accepted. The current tool list (including the
+workspace MCP server) is passed on every `session/load`, so earlier tool calls stay only as
+history.
 
 Result: `{ agent: AgentLite, sessionId, forked, messageCount }` — `sessionId` is
 the id the agent resumes, `messageCount` the number of imported history messages.
