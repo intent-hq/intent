@@ -1660,10 +1660,13 @@ At `creating-sandbox`, the backend makes two resources, with the same name
    `/home/user`. The image therefore installs intentd, tailcat, the provider
    CLIs and every tool outside `/home/user` (for example under `/usr/local`
    or `/opt`), and puts nothing it needs at run time in the home folder;
-   the backend's start script creates the folders it needs there. The image
-   runs as root, so every command the backend runs there sets
-   `HOME=/home/user` and `IS_SANDBOX=1` (the provider CLIs refuse to run
-   unattended as root outside a declared sandbox).
+   the backend's start script creates the folders it needs there. The
+   image's default user is the unprivileged `user` (uid 1000, home
+   `/home/user`). Only one setup step runs as root: when the service is
+   ready, at create and again before each dial, it makes the volume owned
+   by `user` (a no-op once it is). intentd, tailcat, the provider CLIs and
+   every agent command run as `user`, with `HOME=/home/user`; nothing runs
+   as root after the setup step.
 2. A deployment service: `POST /projects/{projectId}/services/deployment`,
    with `billing.deploymentPlan` set to the size's plan,
    `deployment.instances: 1`,
@@ -1691,7 +1694,8 @@ backend speaks the same protocol, as Northflank's published JavaScript client
 
 1. Open `wss://api.northflank.com/v1/command-exec/projects/{projectId}/services/{serviceId}`.
 2. Send the first frame, a JSON text message:
-   `{ "type": "init", "data": { "auth": { "type": "apiToken", "apiToken": <token> }, "context": { "command": [<argv>], "shell": "none", "user"?: … } } }`.
+   `{ "type": "init", "data": { "auth": { "type": "apiToken", "apiToken": <token> }, "context": { "command": [<argv>], "shell": "none", "user": "user" | "root" } } }`
+   (`"root"` only for the setup step).
    The token goes in this frame, never in the URL. `shell: "none"` runs the
    argv directly; without it Northflank tries several shells in turn.
 3. Northflank answers `{ "type": "init", "data": { "auth": "successful" } }`;
