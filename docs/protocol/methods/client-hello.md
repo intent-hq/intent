@@ -127,6 +127,12 @@ contract: the `agentId` param of `skill.list` with its `stale` / `unavailable` r
 fields, `agentId` on `skills:changed`, and the `skill_unavailable` system notice. Clients send `agentId` only for exact integer
 `1`; older daemons omit it, and clients keep the workspace-only call.
 
+**Provider session import (additive).** Exactly integer
+`server.capabilities.sessionImport: 1`, also returned by `system.capabilities`, advertises
+[§5.5 Importing provider sessions](./agents.md#importing-provider-sessions):
+`agent.importableSessions.list` and `agent.importSession`. Clients offer the import option only
+for exact integer `1`; older daemons omit it and return `-32601` for both methods.
+
 **Workspace labels (additive).** Exactly integer `server.capabilities.workspaceLabels: 1`,
 also returned by `system.capabilities`, advertises the
 [§5.1 workspace label contract](./workspace.md#workspace-labels): the optional

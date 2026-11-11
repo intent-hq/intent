@@ -25,6 +25,17 @@ apps hide it against an 18.0 daemon. No store migration. The documented surface 
 **497 / 443 / 54** (dispatchable / router / fast path), four fast-path methods fewer, and
 the reverse-RPC list drops to five names.
 
+Also within 18.0 (additive methods and capability; capability-gated, so no version
+bump): **provider session import**. The owner-only router methods
+`agent.importableSessions.list` and `agent.importSession` list the sessions that the
+daemon host's enabled providers can list and load over ACP, and import one into a
+workspace as a new agent with its history
+([§5.5 Importing provider sessions](./methods/agents.md#importing-provider-sessions)).
+Support is detected by exact integer `sessionImport: 1` on `client.hello`
+`server.capabilities` and `system.capabilities`; older daemons omit it and return
+`-32601` for both methods, and clients hide the import option. No store migration.
+The documented surface is **499 / 445 / 54** (dispatchable / router / fast path).
+
 **Version 17.0 — CoW isolation setting retirement (breaking).**
 Copy-on-write is now used only to hydrate checkouts from the repo cache.
 `workspace.create` from a local repository always provisions a linked worktree

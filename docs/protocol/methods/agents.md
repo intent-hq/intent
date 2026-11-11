@@ -2878,10 +2878,17 @@ it; each holds one `agents.maxConcurrentAdapters` slot while it runs. Neither is
 the collaborator or member allowlists (`-32003` for guests and members): the
 sessions are the host account's files.
 
+**Support detection.** A daemon that implements both methods advertises the exact
+integer `sessionImport: 1` on `client.hello` `server.capabilities` and on
+`system.capabilities`. Older daemons omit it and return `-32601` for both methods;
+clients hide the import option unless the capability is present.
+
 **Importable provider.** A provider is importable when it is enabled and
 runnable on the host, and its `initialize` advertises
-`agentCapabilities.sessionCapabilities.list` **and** either
-`agentCapabilities.loadSession: true` or `sessionCapabilities.fork`.
+`agentCapabilities.sessionCapabilities.list` **and**
+`agentCapabilities.loadSession: true`. `sessionCapabilities.fork` is optional: the
+first turn resumes the session with `session/load`, so a provider without it could
+not continue an imported session.
 
 **`agent.importableSessions.list { provider?, query?, cursor?, limit? }`**
 
@@ -2935,12 +2942,12 @@ brought there by the first rule that applies:
 3. Otherwise the original id is used and `forked` is `false`: the provider's own
    session continues in Intent, and the client should say so.
 
-When the adapter supports `loadSession`, the daemon then loads the session once
+The daemon then loads the session once
 in the checkout and stores its `session/load` replay as the agent's history:
 `user_message_chunk` text becomes user messages; agent text, thoughts and tool
 calls become assistant messages with the same `text` / `thinking` / `tool_use` /
 `tool_result` blocks a live turn stores. Plans, modes, usage and notices are not
-kept. With `fork` but no `loadSession` the history is empty.
+kept.
 
 The agent is a top-level agent on the provider's Default configuration
 (`provider` = the provider id, default model). Its name is `name`, else the listed
@@ -2954,7 +2961,7 @@ sessionId, forked }`. No prompt is sent. It emits `agent:created` and then
 Result: `{ agent: AgentLite, sessionId, forked, messageCount }` — `sessionId` is
 the id the agent resumes, `messageCount` the number of imported history messages.
 
-Errors: an unknown provider, a provider that can neither load nor fork, a blank
+Errors: an unknown provider, a provider that is not importable, a blank
 `sessionId`, or a workspace without a checkout folder is `-32602`; a session the
 provider does not have is `-32602 { code: "not-found" }`. Phase 1 imports only
 sessions on the daemon host; uncommitted changes from where the session ran are
