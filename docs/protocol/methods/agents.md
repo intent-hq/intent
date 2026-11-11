@@ -32,6 +32,8 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | agent.stop | agentId (req), workspaceId? | { success: true } |
 | agent.setModel | agentId (req), modelId (req), workspaceId (req), providerId? | service result — details below the table. |
 | agent.getModels | workspaceId? | { models: [{ id, name, provider, description? }] } (from auggie CLI; an unavailable CLI yields an **empty** list — no static fallback catalog, [intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)) |
+| agent.importableSessions.list | provider?, query?, cursor?, limit? (1–200, default 50) — daemon-global, owner-only | { sessions: ImportableSession[], providers: ImportProviderStatus[], nextCursor? } — existing sessions of the daemon host's enabled providers that can be imported, newest first. See [Importing provider sessions](#importing-provider-sessions) |
+| agent.importSession | workspaceId (req), provider (req), sessionId (req), name? — owner-only | { agent: AgentLite, sessionId, forked, messageCount } — import one listed session as a new top-level agent with its history. See [Importing provider sessions](#importing-provider-sessions) |
 | agent.rename | agentId (req), name (req, non-empty), skipIfExplicitlySet?, workspaceId? | { success: true, name } — an applied rename emits `agent:renamed` with data `{ agentId, name, nameExplicitlySet }` (§6.5). With `skipIfExplicitlySet: true`, a session whose name was already explicitly set is left untouched and the result is { success: true, name: <existing>, skipped: true } (no event) |
 | agent.delete | agentId (req), workspaceId?, undoDelayMs? *(v6.7)* | { success: true } — **Delete grace window (v6.7, [intent-hq/intentd#1096](https://github.com/intent-hq/intentd/pull/1096)):** `undoDelayMs > 0` (non-negative integer; a non-integer value is `-32602`; values above the 60 000 ms cap are silently clamped, never rejected — `deleteAt` reflects the clamped value) schedules an **in-memory** pending deletion instead of committing — returns `{ success: true, scheduled: true, deleteAt }` (ISO commit deadline), emits `agent:delete-scheduled { agentId, workspaceId, deleteAt }` (§6.5), and serves `pendingDeleteAt` on the `AgentLite` / `AgentSession` projections until the deadline commits the real delete or `agent.cancelDelete` cancels it. Scheduling does NOT stop the agent — only the deadline commit does. Absent, `null`, or `0` keeps the immediate-delete behavior byte-identical. Pending deletions are never persisted (a daemon restart drops them; the session survives); re-scheduling is idempotent under the registry lock (returns the existing deadline, no second timer); a workspace delete — immediate or committed-from-pending — supersedes pending agent deletes inside it |
 | agent.cancelDelete *(v6.7)* | agentId (req), workspaceId? | { cancelled: boolean } — cancels a pending (grace-window) deletion scheduled by `agent.delete` with `undoDelayMs`. A caller-declared `workspaceId` is validated against the session row BEFORE touching the registry (mirroring `agent.delete`), so a stale or cross-workspace-scoped cancel returns NotFound instead of cancelling another workspace's pending deletion. `true` clears the pending deletion, emits `agent:delete-cancelled { agentId, workspaceId }` (§6.5), and drops `pendingDeleteAt` from the projections; `false` is the race-safe non-error when no deletion is pending (never scheduled, already cancelled, or already committed) |
@@ -2871,6 +2873,115 @@ Unknown fields → `-32602`; unknown agent → `-32602 "Agent not found"`
   Reuses the spawn-retry/backoff machinery, so a retry that fails again lands back in the `error` state with the full event sequence (`agent:stream:status` retry hints, terminal `agent:failed` + `agent:stream:end`, `agent:status-changed` persisting `error`).
 - **Poisoned-session recreate ([monorepo#940](https://github.com/intent-hq/monorepo/issues/940)):** when the parked session classifies as corrupted/poisoned (the same classification that emits `sessionCorrupted: true` — session-fatal provider block, deterministic `session/prompt` 400 `invalidArgument` rejection, or the identical-failure streak at threshold), the retry arms the forced-recreate flag (same mechanism as `agent.editAndRegenerate`) BEFORE clearing the streak, so the redrive's session setup SKIPS the `session/load` resume — which would replay the exact context the provider deterministically rejects — and opens a fresh `session/new` with the prior history prepended as `<supervisor>` XML.
   Retry also clears the identical-failure streak and failure-wake dedup records (the deliberate quarantine escape hatch, monorepo#840)
+
+### Importing provider sessions
+
+Two owner-only methods bring a session the user ran in a provider's own CLI
+(Claude Code, Codex, …) **on the daemon host** into a workspace. Both talk to the
+provider's ACP adapter through a short-lived adapter process with no agent behind
+it; each holds one `agents.maxConcurrentAdapters` slot while it runs. Neither is in
+the collaborator or member allowlists (`-32003` for guests and members): the
+sessions are the host account's files.
+
+**Support detection.** A daemon that implements both methods advertises the exact
+integer `sessionImport: 1` on `client.hello` `server.capabilities` and on
+`system.capabilities`. Older daemons omit it and return `-32601` for both methods;
+clients hide the import option unless the capability is present.
+
+**Importable provider.** A provider is importable when it is enabled and
+runnable on the host, and its `initialize` advertises
+`agentCapabilities.sessionCapabilities.list` **and**
+`agentCapabilities.loadSession: true`. `sessionCapabilities.fork` is optional: the
+first turn resumes the session with `session/load`, so a provider without it could
+not continue an imported session.
+
+**`agent.importableSessions.list { provider?, query?, cursor?, limit? }`**
+
+- Without `provider`, every enabled, runnable provider is asked in parallel, each
+  bounded by 15 s (start-up plus all of its `session/list` pages). With `provider`
+  only that one; an unknown provider id (or a profile reference) is `-32602`.
+- Each adapter is asked `session/list` with no `cwd` filter, following its
+  `nextCursor` (up to 40 pages). The rows are merged and sorted by `updatedAt`,
+  newest first (rows without `updatedAt` last).
+- `query` keeps rows whose `title`, `cwd` or `sessionId` contains it,
+  case-insensitively. `limit` is 1–200 (default 50; out of range is `-32602`).
+- `nextCursor` is opaque (an offset into the merged, filtered list); pass it back
+  with the same `provider` and `query`. A cursor this method did not mint is
+  `-32602`. The list is read fresh on every call, so a page boundary can shift
+  when a session changes between calls.
+- A provider failure never fails the call: it is reported in `providers`.
+
+```ts
+type ImportableSession = {
+  provider: string;      // bare provider id, e.g. "claude-code"
+  sessionId: string;     // the provider's session id
+  title: string;         // the provider's title; the sessionId when it has none
+  cwd: string;           // the folder the session ran in
+  updatedAt: string | null; // ISO-8601, from the provider
+  gitBranch?: string;    // when the adapter reports `_meta.gitBranch`
+  messageCount?: number; // when the adapter reports `_meta.messageCount`
+};
+type ImportProviderStatus = {
+  id: string;
+  label: string;         // provider display name
+  status: "ok" | "error" | "unsupported";
+  error?: string;        // status "error": start-up, listing or timeout failure
+};
+```
+
+**`agent.importSession { workspaceId, provider, sessionId, name? }`**
+
+Requires workspace operator rights (as `agent.create`) and a workspace with a
+checkout folder. The adapter is started in the checkout, and the session is
+brought there by the first rule that applies:
+
+1. **Relocation (Claude Code).** Claude Code stores a session under the folder it
+   ran in (`<claude config dir>/projects/<folder slug>/<id>.jsonl`; the config
+   dir is `CLAUDE_CONFIG_DIR` of the Default configuration, else of the daemon,
+   else `~/.claude`). The daemon copies the transcript to the checkout's project
+   folder under a new id, rewriting each row's top-level `sessionId` and every
+   top-level `cwd` at or under the session's first folder. Paths inside messages
+   and tool calls stay as history text. The source file is never written.
+2. **`session/fork { sessionId, cwd: checkout, mcpServers: [] }`** when the
+   adapter advertises `sessionCapabilities.fork`.
+3. Otherwise the original id is used and `forked` is `false`: the provider's own
+   session continues in Intent, and the client should say so.
+
+The daemon then loads the session once
+in the checkout and stores its `session/load` replay as the agent's history:
+`user_message_chunk` text becomes user messages; agent text, thoughts and tool
+calls become assistant messages with the same `text` / `thinking` / `tool_use` /
+`tool_result` blocks a live turn stores. Plans, modes, usage and notices are not
+kept.
+
+The agent is a top-level agent on the provider's Default configuration
+(`provider` = the provider id, default model). Its name is `name`, else the listed
+title, else `"Imported session"`, marked explicitly set. Its stored ACP session id
+is the imported session, and its last-turn provider is set to the provider, so the
+first `agent.sendMessage` resumes the session with the ordinary `session/load`
+path. `metadata.importedSession` records `{ provider, sourceSessionId,
+sessionId, forked, sourceCwd?, handoffPending? }`. No prompt is sent. It emits `agent:created` and then
+`agent:updated` with `{ agentId, replacedCount }`.
+
+**First-turn handoff.** The import sets `metadata.importedSession.handoffPending: true`
+(with `sourceCwd`). The first prompt the agent sends after the import carries one hidden
+`<system>` block: for providers that receive the system prompt as a first-turn prepend
+(codex, pi, grok, cortex), the assembled Intent system prompt, because the resume path never
+sends it; for every provider, an import note that names the source CLI and folder, maps
+paths under the source folder to the checkout, and tells the agent to follow the Intent
+instructions and use the workspace tools. The block is not part of the visible user message.
+The flag is cleared once that prompt is accepted. The current tool list (including the
+workspace MCP server) is passed on every `session/load`, so earlier tool calls stay only as
+history.
+
+Result: `{ agent: AgentLite, sessionId, forked, messageCount }` — `sessionId` is
+the id the agent resumes, `messageCount` the number of imported history messages.
+
+Errors: an unknown provider, a provider that is not importable, a blank
+`sessionId`, or a workspace without a checkout folder is `-32602`; a session the
+provider does not have is `-32602 { code: "not-found" }`. Phase 1 imports only
+sessions on the daemon host; uncommitted changes from where the session ran are
+not carried.
 
 ### Node placement
 
