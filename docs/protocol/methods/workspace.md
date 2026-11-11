@@ -406,6 +406,12 @@ state. It is never `null`.
   placement, while one after a success or a `launch-failed` replays the first outcome
   whatever placement it sends. A `launch-failed` resolves the card as described in
   "Proposal origin" below.
+  **Backend fallback:** when the client lists no other place to start (no remote
+  machine and no E2B entry), it may skip the choice and start the initial agent on the
+  backend: it sends no `initialAgent.placement` and drops any placement in
+  `payload.params.initialAgent`, so the stamp cannot win. When it falls back from a stamp
+  that names a machine or entry the client no longer lists, the card must tell the user
+  before Apply that the proposed place is gone and the agent starts on the backend.
 - **`ws.workspace.applyProposal`** passes the stamp as `initialAgent.placement`, and
   sends none when the proposal has no stamp. The agent cannot override it: `placement`
   is not an allowed option. A pre-side-effect refusal (`placement-unavailable`,

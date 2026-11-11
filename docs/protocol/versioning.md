@@ -962,7 +962,8 @@ On a backend with `remoteInitialAgent: 1`, `ws.workspace.proposeSibling` stamps 
 optional top-level `placement` on the `workspace-create` proposal: the proposing
 agent's location at propose time, as the closed placement object
 ([proposer placement](./methods/workspace.md#51-workspace)). Card Apply may send it, or
-the user's choice, as `initialAgent.placement`; `ws.workspace.applyProposal` sends it
+the user's choice, as `initialAgent.placement` (or start on the backend when the client
+lists no other place, telling the user when the stamped place is gone); `ws.workspace.applyProposal` sends it
 unchanged. It sits outside `payload.params`, so older clients ignore it and still create
 a local initial agent. No method, event, capability or error code is added, and the
 public protocol version is unchanged; clients detect it by the field's presence.
