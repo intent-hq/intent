@@ -8,8 +8,22 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `17.0` — CoW isolation setting retirement, on top of 16.0's per-agent CoW sandbox retirement and 15.5's Agent Plugins, 15.4's bounded object reads, 15.3's plain-folder workspaces, 15.2's retired workspaces and 15.1's discussions, guest roles, scoped repository pages and GitLab child Git policy (intentd advertises all four at protocol 15.2); 15.4 is not a shipped-version claim.
+**Documented version:** `18.0` — guided Antigravity setup retirement, on top of 17.0's CoW isolation setting retirement, 16.0's per-agent CoW sandbox retirement and 15.5's Agent Plugins, 15.4's bounded object reads, 15.3's plain-folder workspaces, 15.2's retired workspaces and 15.1's discussions, guest roles, scoped repository pages and GitLab child Git policy (intentd advertises all four at protocol 15.2); 15.4 is not a shipped-version claim.
 Every extension retains its independent support gate.
+
+**Version 18.0 — guided Antigravity setup retirement (breaking).**
+Antigravity now runs the user's `agy` CLI as `agy acp` (agy 1.5.0 or later;
+[intent-hq/intentd#3267](https://github.com/intent-hq/intentd/pull/3267)). The fast-path
+methods `providers.setup.status`, `providers.setup.start`, `providers.setup.login` and
+`providers.setup.cancel` now return `-32601 Method not found`, the daemon no longer sends the
+`providers.setup.openLogin` reverse RPC, and `server.capabilities.antigravitySetup` is no
+longer advertised ([§5.44](./methods/models-providers.md#544-guided-antigravity-setup)).
+The `intentd provider login antigravity` command is removed; sign in with `agy acp --login`.
+The `antigravity` catalog row reports `command: "agy"`, `loginCommandHint: "agy acp --login"`
+and `supportsTestPrompt: true`. Clients gated the setup surface on the capability, so older
+apps hide it against an 18.0 daemon. No store migration. The documented surface is
+**497 / 443 / 54** (dispatchable / router / fast path), four fast-path methods fewer, and
+the reverse-RPC list drops to five names.
 
 **Version 17.0 — CoW isolation setting retirement (breaking).**
 Copy-on-write is now used only to hydrate checkouts from the repo cache.
