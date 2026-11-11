@@ -1675,10 +1675,11 @@ only tags that exist in the team, so the backend adds the two tags to the team
 when they are missing; a token that cannot is `permission-denied`. When the
 volume is made but the service is not, the backend deletes the volume.
 
-At `starting-daemon`, the image's own command starts `intentd serve` with the
-tunnel on. The backend waits for the deployment status `COMPLETED`, then runs
-`executor.mint` over the container's local socket through
-[command execution](#northflank-command-execution), as on E2B. Northflank
+At `starting-daemon`, the backend waits until the service is ready: the
+deployment status `COMPLETED` and a running container. The image only idles,
+so the backend then starts `intentd serve` with the tunnel on, with `HOME` on
+the volume, and runs `executor.mint` over the container's local socket, both
+through [command execution](#northflank-command-execution), as on E2B. Northflank
 failing to pull the image, or the container exiting before intentd answers, is
 `bootstrap-failed`.
 
@@ -1726,8 +1727,8 @@ A Northflank machine pauses and resumes from its disk only:
 | --- | --- |
 | Sandbox busy | Nothing: a Northflank service has no timeout. |
 | Sandbox idle for `idlePauseMinutes`, or `cloudMachines.pause` | `POST /projects/{projectId}/services/{serviceId}/pause`, which scales the service to 0. The link drops and the container stops. The volume stays; compute billing stops, and the volume is still billed. |
-| New message for an agent on a paused machine | `POST .../resume`, which scales it back to 1. The container starts from the image and intentd starts from the volume, with the same daemon id, certificate, tailcat key and executor credential, so the machine row and `nodeId` stay. The backend redials with a new generation. |
-| Northflank restarts the container itself (for example a crash or a node move) | The same as a resume, without the pause. |
+| New message for an agent on a paused machine | `POST .../resume`, which scales it back to 1. The container starts from the image; once it is ready, the backend starts intentd again from the volume, with the same daemon id, certificate, tailcat key and executor credential, so the machine row and `nodeId` stay. The backend redials with a new generation. |
+| Northflank restarts the container itself (for example a crash or a node move) | The same as a resume, without the pause: before each dial the backend starts intentd when it does not answer. |
 | Agent ends for good, `cloudMachines.kill` or `remove`, or paused for `pausedDeleteDays` | As on E2B: resume when paused, final stop, then delete the service and volume. |
 | The service or volume is removed outside Intent | `cloud-machine-unavailable` reason `sandbox-lost`, as on E2B. |
 
