@@ -348,6 +348,6 @@ ws.workspace.proposeSibling({ title, initialPrompt, specialist?, baseRef? }) →
 ws.workspace.setAgentName(name) → { ok, name }
 ws.workspace.setStatusImage({ data, mimeType, originalName? } | null) → { ok, statusImageAssetId, url? }
 ws.workspace.setStatusMessage(message) → { ok, statusMessage }
-ws.workspace.setTitle(title) → { ok, title, branch, skipped? }
+ws.workspace.setTitle(title, { userRequested? }?) → { ok, title, branch, skipped? }
 ws.workspace.unarchive() → { ok, status }
 ```
