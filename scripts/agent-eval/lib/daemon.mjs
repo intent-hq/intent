@@ -27,6 +27,13 @@ export const PROVIDERS = {
         return !/not logged in|logged out/i.test(out);
       }
     },
+    // The CLI fetches the signed-in claude.ai account's MCP connectors (Gmail,
+    // Drive, Claude Docs, ...) at session start, from the account rather than the
+    // config dir; any falsy value turns that off. The adapter inherits the
+    // daemon's whole environment, so setting it on the daemon reaches the CLI;
+    // the connector check (connectorTraces) catches it if it ever stops working.
+    env: { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' },
+    connectors: true,
     forbidden: ['CLAUDE.md', 'skills', 'plugins', 'agents', 'commands', 'hooks'],
     // Claude Code re-syncs the signed-in claude.ai account's skills and plugins
     // into skills/synced and plugins/synced on a timer during a run. An empty
@@ -56,9 +63,11 @@ export const PROVIDERS = {
     tomlTables: { 'config.toml': ['mcp_servers'] },
   },
   // The scripted smoke agent gets a config dir too, so the isolation checks run
-  // in CI; its "sync" control writes skills the way Claude Code does.
+  // in CI; its "sync" control writes skills the way Claude Code does, and its
+  // connector control records and calls a claude.ai connector tool.
   mock: {
     configEnv: 'EVAL_MOCK_CONFIG_DIR',
+    connectors: true,
     signedIn: () => true,
     forbidden: ['skills', 'plugins'],
     blockers: ['skills', 'plugins'],
@@ -109,7 +118,7 @@ export function preflightProvider(provider, configDir, runRoot) {
     err.exitCode = 2;
     throw err;
   }
-  return { env: { [spec.configEnv]: dir }, dir, sourceDir, baseline };
+  return { env: { ...spec.env, [spec.configEnv]: dir }, dir, sourceDir, baseline };
 }
 
 /** The credential bytes as copied, keyed by file name. */
@@ -273,6 +282,101 @@ export function configLeaks(dir, spec) {
     for (const t of tables) if (new RegExp(`^\\s*\\[\\s*${t}\\b|^\\s*${t}\\s*=|^\\s*${t}\\.`, 'm').test(text)) leaks.push(`${file}:[${t}]`);
   }
   return leaks;
+}
+
+/**
+ * A claude.ai connector tool name: the CLI's `mcp__claude_ai_<Connector>__<tool>`,
+ * or intentd's derived `claude_ai_<Connector>_<tool>` (agent:tool:call toolName).
+ */
+export const CONNECTOR_TOOL = /^(?:mcp__)?claude_ai_[\w-]+$/;
+
+export const isConnectorTool = (name) => typeof name === 'string' && CONNECTOR_TOOL.test(name);
+
+function sessionFiles(dir, out = []) {
+  let kids;
+  try {
+    kids = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const k of kids) {
+    const p = path.join(dir, k.name);
+    if (k.isDirectory()) sessionFiles(p, out);
+    else if (k.isFile() && k.name.endsWith('.jsonl')) out.push(p);
+  }
+  return out;
+}
+
+/**
+ * Connector tool names in one session record: the tools the CLI offered the
+ * agent (`deferred_tools_delta` attachments) and those it called (`tool_use`).
+ * Only these fields, never free text: a Bash command or file read that merely
+ * mentions a connector name must not taint a clean run.
+ */
+function recordConnectorTools(line) {
+  let rec;
+  try {
+    rec = JSON.parse(line);
+  } catch {
+    return [];
+  }
+  const names = [];
+  const a = rec?.attachment;
+  if (rec?.type === 'attachment' && a?.type === 'deferred_tools_delta') {
+    for (const key of ['addedNames', 'readdedNames', 'surfacedNames']) if (Array.isArray(a[key])) names.push(...a[key]);
+  }
+  const content = rec?.message?.content;
+  if (rec?.type === 'assistant' && Array.isArray(content)) for (const b of content) if (b?.type === 'tool_use') names.push(b.name);
+  return names.filter(isConnectorTool);
+}
+
+/**
+ * claude.ai connectors the provider loaded, from its own records in the run's
+ * config dir: each session file lists the tools the agent was offered (whether
+ * or not it called them), and .claude.json the connectors it ever connected.
+ * `seen` (file -> bytes already scanned, plus the connector list) is updated so
+ * each call reports only what appeared since the last one. Sorted, unique.
+ * Attribution is by time: a session still writing after its task-run's check
+ * (a timed-out run, a background subagent) is reported against the next one;
+ * the report still fails either way.
+ */
+export function connectorTraces(dir, spec, seen = new Map()) {
+  if (!spec?.connectors || !dir) return [];
+  const found = new Set();
+  for (const file of sessionFiles(path.join(dir, 'projects'))) {
+    let from = seen.get(file) ?? 0;
+    let text;
+    try {
+      const fd = fs.openSync(file, 'r');
+      try {
+        const size = fs.fstatSync(fd).size;
+        // Shorter than what was scanned: rewritten, so read it again.
+        if (size < from) from = 0;
+        if (size <= from) continue;
+        const buf = Buffer.alloc(size - from);
+        fs.readSync(fd, buf, 0, buf.length, from);
+        text = buf.toString('utf8');
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      continue;
+    }
+    // Only whole lines: a record still being written is read next time.
+    const end = text.lastIndexOf('\n') + 1;
+    if (!end) continue;
+    seen.set(file, from + Buffer.byteLength(text.slice(0, end)));
+    for (const line of text.slice(0, end).split('\n')) for (const name of recordConnectorTools(line)) found.add(name);
+  }
+  let connected = [];
+  try {
+    const list = JSON.parse(fs.readFileSync(path.join(dir, '.claude.json'), 'utf8')).claudeAiMcpEverConnected;
+    if (Array.isArray(list)) connected = list.filter((n) => typeof n === 'string');
+  } catch {}
+  const known = seen.get('.claude.json') ?? [];
+  for (const name of connected) if (!known.includes(name)) found.add(`connected: ${name}`);
+  seen.set('.claude.json', [...new Set([...known, ...connected])]);
+  return [...found].sort();
 }
 
 export function isolatedBaseEnv(home) {

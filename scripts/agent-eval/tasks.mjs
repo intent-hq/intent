@@ -282,7 +282,11 @@ const CONTROL_SUFFIX = ' [eval control]';
  * Smoke-only negative controls; each must come out the way `expect` says:
  * - `fail`: a task's `mockControl` non-solution, so its checker must fail;
  * - `leak`: the mock CLI syncs account skills and plugins into its config dir
- *   mid-run, the way Claude Code does, so the isolation check must flag it.
+ *   mid-run, the way Claude Code does, so the isolation check must flag it;
+ * - `connector-offered`: the mock's session record offers a claude.ai connector
+ *   tool it never calls, so the session-record scan alone must flag it;
+ * - `connector-called`: the mock calls one with no session record, so the
+ *   tool-call check alone must flag it.
  */
 export function mockControls(tasks) {
   const controls = tasks
@@ -296,13 +300,25 @@ export function mockControls(tasks) {
     mock: [],
     mockSyncSkills: true,
   });
+  for (const how of ['offered', 'called']) {
+    controls.push({
+      id: `claude-ai-connector-${how}:control`,
+      control: `connector-${how}`,
+      prompt: `Reply with just the word: ${how}` + CONTROL_SUFFIX,
+      check: () => verdict(true, 'no state to check'),
+      mock: [],
+      mockConnector: how,
+    });
+  }
   return controls;
 }
 
 /** Did a control come out as expected? */
 export function controlHeld(result) {
   if (result.error || result.timedOut) return false;
-  if (result.control === 'fail') return !result.pass && !result.isolationLeaks?.length;
+  if (result.control === 'fail') return !result.pass && !result.isolationLeaks?.length && !result.connectorTools?.length;
+  if (result.control === 'connector-offered') return Boolean(result.connectorOffered?.length) && !result.connectorCalled?.length && !result.isolationLeaks?.length;
+  if (result.control === 'connector-called') return Boolean(result.connectorCalled?.length) && !result.connectorOffered?.length && !result.isolationLeaks?.length;
   if (result.control === 'leak') return Boolean(result.isolationLeaks?.length);
   return false;
 }
@@ -324,6 +340,12 @@ export function mockSolutions(tasks) {
     MOCK_FIRST_TURN,
     ...ordered
       .filter((t) => t.mock)
-      .map((t) => ({ match: t.prompt, steps: t.mock, reply: t.mockReply ?? 'Done.', ...(t.mockSyncSkills ? { syncSkills: true } : {}) })),
+      .map((t) => ({
+        match: t.prompt,
+        steps: t.mock,
+        reply: t.mockReply ?? 'Done.',
+        ...(t.mockSyncSkills ? { syncSkills: true } : {}),
+        ...(t.mockConnector ? { connector: t.mockConnector } : {}),
+      })),
   ];
 }
