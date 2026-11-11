@@ -1,88 +1,116 @@
 # PR Description Guide
 
-## 1. Purpose
+The reviewer reads the diff. The body gives only what the diff cannot show: the
+change in behavior and the reason for it. Text that repeats git or CI hides
+those two facts. Do not write it.
 
-PR descriptions are the primary artifact for reviewers to understand scope, risk, and verification.
+The cloudlands-fe
+[`pr-description` skill](../../packages/cloudlands-fe/.agents/skills/pr-description/SKILL.md)
+gives agents the same rules. Change the two files together.
 
-## 2. Required Sections
+## Title
 
-All sections below are required unless noted as optional.
+`type(scope): imperative subject`
 
-### Summary
+- CI accepts only these types: `feat`, `fix`, `chore`, `docs`, `refactor`,
+  `test`, `ci`, `perf`. The scope is optional.
+- Name the result in 5 to 10 words. Do not end with a period.
+- Use `docs` only when the diff changes documentation and nothing else.
 
-Write one paragraph explaining what the PR does and why it exists. Include the diff stats line in this section: `**N files changed, +X / −Y**`.
+Example: `fix(agent): keep deleted agents out of the sidebar`
 
-### Results (optional)
+## Body
 
-Use a before/after metrics table when the PR has measurable impact, such as line counts, IPC call counts, render counts, or bundle size changes. Omit this section when there is no meaningful metric to report.
+Write two parts. No other part is mandatory.
 
-### What Changed
+1. **What changed.** State the new behavior that a user or a developer sees.
+2. **Why.** State the problem and its cause. If a reviewer can expect a
+   different solution, state why you did not use it.
 
-List all changes grouped by category: new files, modified files, deleted files, renamed files, new slices, new modules, new components, migrations, and docs updates. Be specific: name every new module, slice, component, utility, or handler and give each a one-line description.
+- A small change needs one to three sentences and no headings.
+- A large change gets one bullet for each change in behavior.
 
-### Architecture
+## Add only when it applies
 
-Explain how the changes fit into the existing architecture, ownership boundaries, and data flow. Link to relevant docs in `docs/` when they help reviewers understand the design.
+| Condition                                 | Add                                                   |
+| ----------------------------------------- | ----------------------------------------------------- |
+| The PR fixes a filed issue                | `Fixes intent-hq/intent#N`                            |
+| The PR changes UI                         | Before and after screenshots, in a table              |
+| The PR changes what a user sees or does   | The assistant app guide section, or why none applies  |
+| The PR claims a performance result        | The measured before and after table, and its command  |
+| The PR depends on another PR              | The link and the merge order                          |
+| You ran a check that CI does not run      | One line: the check and its result                    |
+| You did not run a check that is necessary | One line: the check and the reason                    |
+| The reviewer must make a decision         | One line: the question and the option that you prefer |
 
-### Testing
+Omit a row that does not apply. Do not write "None" or "N/A".
 
-List exactly what you verified and how: typechecks, unit tests, builds, manual scenarios, and any targeted commands. Use exact command names and note manual validation steps when applicable.
+## Screenshots
 
-### What's NOT Changed
+A PR that changes UI shows the change in a table. The reviewer can then compare
+the two states directly.
 
-Call out what is intentionally out of scope. This sets reviewer expectations and prevents assumptions about adjacent systems.
-
-## 3. Risk Analysis Rule
-
-**Every PR description MUST include a risk analysis section.** This section identifies features and code paths that could break due to the changes, organized by risk level.
+- Put the `Before` image and the `After` image in the same row.
+- Use one row for each state that the PR changes: default, hover, empty, error,
+  long text, narrow width, dark theme. Name the state in the first column.
+- Capture the two images of a row with the same size, theme, and data.
+- Capture the component, not the full window, unless the PR changes the layout.
+- Use `pnpm sandbox:shot` when the component has a sandbox scene.
+- New UI has no `Before` image. Use one column for each theme or width.
+- Do not add a screenshot for a change that has no visible result.
 
 ```markdown
-## Risk Analysis
-
-### 🔴 P0 — Critical (core user flows affected)
-- **Feature name** — what changed and why it's risky
-  - [ ] Test: specific manual test step
-
-### 🟠 P1 — High (important flows affected)
-- ...
-
-### 🟡 P2 — Medium (secondary flows affected)
-- ...
-
-### 🟢 P3 — Low (minor/cosmetic changes)
-- ...
+| State   | Before  | After   |
+| ------- | ------- | ------- |
+| Default | (image) | (image) |
+| Error   | (image) | (image) |
 ```
 
-End each risk analysis with a summary table:
+## Do not write
 
-| Risk Level | Areas | Items |
-| --- | --- | --- |
-| P0 | Core flows | N |
-| ... | ... | ... |
+- Diff statistics, file counts, or lists of changed, new, or deleted files.
+- Lists of commits, symbols, modules, or components.
+- Results of checks that CI runs: lint, type checks, unit tests, builds.
+- An explanation of how the code works. Put that in the code or in the docs.
+- A list of things that the PR does not change.
+- Risk levels, risk tables, or checklists.
+- Empty sections, placeholders, or a summary of the body.
+- The steps that you took, or the solutions that you tried and removed.
+- Claims that you did not verify.
+- The literal breaking-change footer token, unless the change is a breaking
+  change (see [Conventions](../../AGENTS.md#conventions)).
 
-Rules for risk analysis:
+## Language: Simplified Technical English
 
-- Every modified component, IPC handler, or state migration must be mapped to a user-facing feature.
-- Each risk item must have at least one concrete test step, manual or automated.
-- P0 items must be tested before the PR is marked ready for review.
-- Include a summary table at the bottom: `| Risk Level | Areas | Items |`.
-- If a PR touches more than 20 files, full risk analysis is mandatory.
-- If a PR touches fewer than 20 files, a simplified version that lists affected features is acceptable.
+Write the title and the body in Simplified Technical English (ASD-STE100).
+These rules are mandatory:
 
-Place the risk analysis in the PR description body. For very large PRs (50+ files) where the risk analysis exceeds ~100 lines, post it as a separate pinned PR comment instead and add a link from the description: `See [Risk Analysis](#issuecomment-XXXX)`.
+- Write one idea in each sentence. Use a maximum of 20 words.
+- Use the active voice. Name the thing that does the action.
+- Use the present tense for the new behavior and the past tense for the old.
+- Use one word for one thing. Do not change the word to prevent repetition.
+- Use the specific name: the control, the setting, the method, the error.
+- Use a verb for an action: "the saga retries the call", not "retry logic was
+  implemented".
+- Remove each word that gives no fact: "comprehensive", "robust", "seamless",
+  "leverage", "This PR", "in order to".
+- Do not use idioms or metaphors.
 
-## 4. Style Rules
+Identifiers, commands, and names from the app stay as they are, in code format.
 
-- Use exact numbers, not approximations; run `git diff --stat` to get real counts.
-- List every new file, module, slice, component, and utility by name.
-- Use tables for before/after comparisons.
-- Keep bullet points to one line each.
-- Use code formatting for file paths, function names, and commands.
+| Do not write                                                                                     | Write                                                    |
+| ------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| This PR introduces comprehensive improvements to the robustness of the session handling layer.   | The agent list drops rows that carry `pendingDeleteAt`.  |
+| Retry logic with exponential backoff has been implemented in order to handle transient failures. | The saga retries a failed `agent.list` call three times. |
+| All tests pass.                                                                                  | (nothing: CI shows this)                                 |
 
-## 5. Anti-patterns
+## Example
 
-- ❌ `Various improvements and fixes` — be specific.
-- ❌ Approximate numbers like `~200 files` — use exact counts.
-- ❌ Missing `What's NOT Changed` — reviewers need scope boundaries.
-- ❌ No risk analysis on large PRs — always assess what could break.
-- ❌ `All tests pass` without listing commands — specify the exact verification steps.
+```markdown
+A deleted agent came back in the sidebar after the workspace list refreshed.
+
+The refresh read rows that the daemon had not removed yet. The agent list now
+drops rows that carry `pendingDeleteAt`.
+
+Fixes intent-hq/intent#N
+```
