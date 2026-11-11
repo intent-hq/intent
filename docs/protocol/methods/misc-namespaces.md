@@ -7,13 +7,13 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 | Method | Params | Result |
 | --- | --- | --- |
 | crossWorkspace.listSiblings | workspaceId (req), includeRetired?: boolean (default false, protocol 15.2) | sibling workspaces of the given workspace; retired workspaces only with `includeRetired: true` ([Retired workspaces](./workspace.md#retired-workspaces)). Siblings are workspaces with the same non-empty GitHub `repositoryOwner`/`repositoryName` (case-insensitive, trailing `.git` tolerated) OR an identical non-empty source `repositoryPath`; a caller with neither errors as not associated with a repository |
-| crossWorkspace.readNote | targetWorkspaceId (req), noteId (req) | note from a sibling workspace (same sibling rule as `listSiblings`; a non-sibling target is denied) |
+| crossWorkspace.readNote | targetWorkspaceId (req), noteId (req), startLine?: int, maxLines?: int, startOffset?: int *(bounded reads)* | `{ id, title, content, numberedContent, sourceWorkspaceId, sourceWorkspaceTitle, branch, lineCount }` for a note in a sibling workspace (same sibling rule as `listSiblings`; a non-sibling target is denied). Bounded: see "Bounded `crossWorkspace.readNote`" below |
 | crossWorkspace.listNotes | targetWorkspaceId (req) | notes in a sibling workspace (same sibling rule as `listSiblings`; a non-sibling target is denied) |
 | primitive.addReference | noteId (req), semanticId (req), description (req), snapshot? | { ok, primitiveId, noteId } |
 | primitive.addCli | noteId (req), command (req), description (req), workingDirectory? | { ok, primitiveId, noteId } |
 | primitive.addPatch | noteId (req), filePath (req), diff (req), description (req) | { ok, primitiveId, noteId } |
 | primitive.addAgentAction | noteId (req), agentId (req), goal (req), description (req) | { ok, primitiveId, noteId } |
-| specialist.list | provider?, workspaceId?, includeProject?: boolean | { specialists: SpecialistDef[], importDiagnostics?: ImportDiagnostic[] } (user files override bundled; explicit project scope overrides user) — each entry may carry the additive `resolvedModel`/`resolvedProvider` preview fields (below); unknown `provider` → -32602 |
+| specialist.list | provider?, workspaceId?, includeProject?: boolean, limit? (default and max 500), nextToken? *(paged — see [Catalog list pages](#catalog-list-pages))* | { specialists: SpecialistDef[], importDiagnostics?: ImportDiagnostic[], nextToken: string\|null } (user files override bundled; explicit project scope overrides user) — each entry may carry the additive `resolvedModel`/`resolvedProvider` preview fields (below); `importDiagnostics` rides the first page only; unknown `provider` → -32602 |
 | specialist.get | id (req), workspacePath?, provider?, workspaceId? | { specialist: SpecialistDef } — resolved view, with the `resolvedModel`/`resolvedProvider` preview fields when applicable; -32602 if not found; unknown `provider` → -32602 |
 | specialist.create | id (req), spec (req): SpecialistDef, workspacePath?, scope?: "project"\|"user" (default "user"), workspaceId? (routing for explicit project scope only) | { specialist: SpecialistDef } |
 | specialist.edit | id (req), spec (req): SpecialistDef, workspacePath?, scope (req): "project"\|"user", workspaceId? (routing for explicit project scope only) | { specialist: SpecialistDef } |
@@ -22,15 +22,77 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 | repo.remove | path (req) — no workspaceId | { removed: bool } — deletes one known-repo registry entry; `false` when the path was not registered (not an error) |
 | repo.warmCache *(v6.10)* | githubUrl (req) — no workspaceId | { started: true, owner, repo } — opportunistic **background** refresh of the daemon-managed repo cache (`.repo-cache/<owner>/<repo>`; [intent-hq/intentd#1105](https://github.com/intent-hq/intentd/pull/1105)): the RPC returns immediately while the fetch (the same `ensure_cached_repo` pipeline `workspace.create` hydrates from — fetch + prune + hard reset + recursive submodule sync, self-healing by re-clone; token resolution matching `workspace.create`) runs as a detached task. Deliberately **silent**: no `git:clone:*` frames and no events are emitted — the outcome is only logged daemon-side. **Global single-flight (never queued):** at most one opportunistic warm runs daemon-wide; a second call while one is in flight is rejected with `-32603` (`"repo cache warm already in flight for <owner>/<repo>"`) carrying machine-readable `error.data = { code: "warm-in-flight", owner, repo }` naming the repo currently being warmed, so clients key off `error.data.code` instead of prose. A missing/non-string `githubUrl`, a URL with no owner/repo pair, or an invalid owner/repo path segment (empty, `.`/`..`, leading `-`, separators) is `-32602` and never claims the single-flight slot, so a malformed URL can never block valid warms. **Never blocks `workspace.create`:** the create path is not gated by the in-flight flag — its cache ensure simply serializes behind an in-flight warm for the same repo on the existing per-repo cache lock |
 
+**Bounded `crossWorkspace.readNote`** *(behaviour change; bounded reads, see §5.2 "Bounded note and comment reads")*. Every read
+fits the 500 KiB read payload budget. `content` and `numberedContent` carry a window of the
+note's lines (split on `\n`, numbered from 1 like `ws.note.read` and `note.editLines`):
+from `startLine` (default 1; resumed at byte `startOffset` of that line when given), at
+most `maxLines` lines (default: as many as fit), and
+together at most 480,000 JSON-escaped bytes. `lineCount` is always the note's total line
+count.
+
+- A note that fits, read without `startLine` / `maxLines` / `startOffset`, answers exactly as before
+  (no page fields).
+- Otherwise the reply adds `startLine` and `endLine` (the served lines), `truncated`
+  (`true` when the page is less than the whole note), `nextStartLine` (the
+  `startLine` to read the next page, or `null` at the end) and `nextStartOffset`.
+- A line larger than the budget is served in pieces. The page ends inside the line:
+  `nextStartLine` is that same line and `nextStartOffset` is the UTF-8 byte offset
+  (always on a character boundary) where the rest begins; pass both as `startLine` /
+  `startOffset`. `nextStartOffset` is `null` when the page ends at a line end. A page
+  read with a `startOffset` echoes it as `startOffset`, and its `numberedContent`
+  repeats the line's number.
+- Following the cursor rebuilds the note byte for byte: append a page that carries
+  `startOffset` directly to the previous page's `content`; join any other page with `\n`.
+- `startLine` / `maxLines` / `startOffset` that are not positive integers are `-32602`
+  (`<name> must be a positive integer`); a `startLine` past the last line is `-32602`
+  (`startLine (<n>) exceeds total lines in note (<total>)`); a `startOffset` that is not
+  a character boundary strictly inside the start line is `-32602`
+  (`startOffset (<n>) is not a character boundary inside the start line (<len> bytes)`).
+
 ```json
 // → request — `provider` is the optional resolution context for the preview fields
 { "jsonrpc":"2.0","id":50,"method":"specialist.list","params":{ "provider":"codex" } }
 // ← response — resolvedModel/resolvedProvider omitted when the provider CLI default applies
 { "jsonrpc":"2.0","id":50,"result":{ "specialists": [
-  { "id":"implementor","name":"Implementor","description":"...","source":"bundled",
+  { "id":"developer","name":"Developer","description":"...","source":"bundled",
     "reasoningEffort":"high",
     "resolvedModel":"gpt-5.3-codex","resolvedProvider":"codex" } ] } }
 ```
+
+#### Catalog list pages
+
+**Behaviour change (bounded reads, advertised in the [`client.hello`](./client-hello.md) server capabilities).** `specialist.list`,
+`rules.list` and `skill.list` return one **page** of their catalog, sized so no
+reply exceeds the 500 KiB read budget (512,000 bytes). Before this change they
+returned the whole catalog. A catalog that fits in one page is still returned
+whole, with `nextToken: null`.
+
+- `limit?` — rows per page, clamped into `[1, 500]`; default **500** (the maximum).
+- **Byte budget** — a page also ends before the row that would take the serialized
+  result past **480,000 bytes**, so the frame stays under 512,000. Every page holds
+  at least one row.
+- `nextToken?` — the opaque token from the previous page; `nextToken: null` marks
+  the end. A token is scoped to its method and resource (the workspace for
+  `rules.list` and `skill.list`); a malformed token or one from another method or
+  resource is `-32602`. Tokens are offsets into the current catalog: a catalog that
+  changes between pages can skip or repeat rows, so refetch from the first page on
+  the method's changed event.
+- **Reply shapes** — `specialist.list` adds `nextToken` and sends
+  `importDiagnostics` on the first page only; `rules.list` adds a top-level
+  `nextToken` and pages `RuleSet.rules`. `skill.list` keeps its bare array (the
+  first page, with no token) when called without paging params; send `limit` or
+  `nextToken` to get `{ skills, nextToken }` and continue.
+- **Oversized row** — a row that alone is larger than the byte budget is sent
+  without its body: the field is removed and replaced with `<field>Omitted: true`
+  and `<field>Bytes` (UTF-8 length). The body field is `behaviorPrompt` (and
+  `prompt`) for `specialist.list`, `content` for `rules.list`, and `description`
+  for `skill.list`. An oversized `specialist.list` row also drops its `bundled`
+  baseline and sets `bundledOmitted: true`. Read a specialist body with
+  `specialist.get`; a rule file at its `path`.
+- **Clients** — follow `nextToken` until it is `null` (send `limit` on
+  `skill.list`). A daemon that does not advertise bounded reads ignores both params and returns
+  the whole catalog without a token, so the same loop works against both. Older
+  clients that do not page see only the first page of a large catalog.
 
 **`specialist.*` full CRUD.** Beyond `specialist.list`, the namespace carries
 `get` / `create` / `edit` / `delete`. Definitions resolve in **3 tiers** — **project**
@@ -63,7 +125,7 @@ a hand-written `[specialists] dir` in config.toml; the `--specialists-dir` serve
 the env var pre-runtime, so the flag wins over an inherited env value, and an empty value counts
 as unset — no replacement) wholesale-**replaces** the base tier: the embedded bundle and the
 on-disk bundled `resources/specialists/` directory are both excluded, and the named directory
-becomes the sole base (`bundled`, read-only) tier — shipped ids (`implementor`, `spec-writer`, …)
+becomes the sole base (`bundled`, read-only) tier — shipped ids (`developer`, `pr-reviewer`, …)
 resolve only when present there or in the user/project tiers, which fold on top **unchanged**
 (same precedence, inherit-on-omit folds, and file watching as below; the replacement directory
 itself is static and unwatched, like the bundled tier it replaces). A missing or empty
@@ -76,7 +138,8 @@ never resurrects shipped bundles the operator excluded.
   modelOptions?: [{ model, hint, reasoningEffort? }], teamAgents?: [string],
   aliases?: [string], importedFrom?: "claude-code", unsupportedFields?: [string],
   requiredSkills?: [string], missingSkills?: [string],
-  source: "project"|"user"|"bundled", path?, resolvedModel?, resolvedProvider? }`. The optional
+  source: "project"|"user"|"bundled", path?, resolvedModel?, resolvedProvider?,
+  bundled?: SpecialistBaseline, bundledOmitted?: true }`. The optional
   scalars (`codingAgent`, `model`, `reasoningEffort`, `roleReminder`, `agentType`, `role`,
   `icon`) are first-class **string** fields on the wire, not
   frontmatter-only: `list`/`get` emit each one when its resolved value is non-empty, and
@@ -84,6 +147,16 @@ never resurrects shipped bundles the operator excluded.
   `list`/`get`, `source` is the **winning** tier and `path?` the file it resolved from (omitted
   for `bundled`); on `create`/`edit` the body carries the authored fields and `scope` chooses the
   target tier.
+- **`bundled?` baseline (additive)** — `SpecialistBaseline` is `{ name, description,
+  behaviorPrompt, roleReminder?, reasoningEffort?, modelOptions? }`: the resolved
+  **base-tier** (`bundled`) definition of the same id, read from the embedded bundle and
+  bundled directory, or from the replacement directory in replacement mode. `specialist.list`
+  and `specialist.get` emit it on a `user` or `project` Intent definition whose id also
+  resolves in the base tier, so a client can tell whether an override still matches its
+  built-in without its own copy of the bundle. It never carries `model` or `codingAgent`;
+  the optional fields are omitted when empty, as on `SpecialistDef`. It is absent on
+  `bundled` rows, Claude imports, and ids with no base definition. `create`/`edit` ignore it.
+  The Assistant's `ws.app.specialists.list`/`get` omit it.
 - **Claude agent discovery (additive)** — user agents in `~/.claude/agents/` and
   project agents in `<workspace>/.claude/agents/` are available as read-only
   specialist definitions. A non-empty `CLAUDE_CONFIG_DIR` in the daemon's environment
@@ -240,7 +313,7 @@ never resurrects shipped bundles the operator excluded.
   tool description (the `ws.agent.delegate` docs), and the delegating agent passes its pick as
   the explicit `model` param (resolution step 1).
 - **Picker metadata (`role?` / `teamAgents?` / `icon?`) (additive,
-  [intent-hq/intentd#1477](https://github.com/intent-hq/intentd/pull/1477))** — render-only
+  [intent-hq/intentd#1477](https://github.com/intent-hq/intentd/pull/1477))** —
   metadata for client specialist pickers; none of the three fields is ever consulted at
   delegation time.
   - **`role?`** — the picker-orchestration enum: `"orchestrator"` (powers the team-mode card)
@@ -251,6 +324,9 @@ never resurrects shipped bundles the operator excluded.
     `-32602`. Reads are **lenient**: an out-of-enum on-disk value is normalized to an
     **omitted** key (which inherits), like an unparseable `teamAgents` — `list`/`get` never
     serve a value the strict write validation would reject when a client echoes the def back.
+    `"orchestrator"` applies the spawn-time file-editing tool restrictions, captured
+    in the session's `specialistIsOrchestrator` metadata. Older sessions retain
+    their captured role and harness-pinned defaults.
   - **`icon?`** — names a client-side avatar design. An inherited config scalar (omit
     inherits, explicit `""` clears). Icon names are free-form — no enum — but `create`/`edit`
     reject a non-string value with `-32602`.
@@ -274,6 +350,13 @@ never resurrects shipped bundles the operator excluded.
     `icon`. The picker/routing-metadata keys (including `aliases`, below) are the only
     frontmatter allowed to diverge between the v1 and v1.1 bundled copies (the goldens pin
     every other key to its v1 value).
+    Harness 3.8 no longer bundles `spec-writer` (Coordinator/Lead), `implementor`,
+    or `verifier`. Neither `coordinator` nor `lead` resolves from the current
+    bundled tier. Omit `specialist` when delegating to create a general agent.
+    Historical bundles and user/project definitions remain available in their
+    existing scopes.
+    Harness 3.9 adds the bundled `product-manager` specialist (standard role,
+    `icon: "coordinator"`).
 - **Specialist aliases (`aliases?`) (additive,
   [intent-hq/intentd#1488](https://github.com/intent-hq/intentd/pull/1488))** — a
   specialist's alternate ids: spawn/delegation callers may address the specialist by any
@@ -367,13 +450,14 @@ special-cases) remains internal — no method or shape changes.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| rules.list | workspaceId? | { rules: RuleSet } — all rule sources for the workspace (or global when omitted) |
+| rules.list | workspaceId?, limit? (default and max 500), nextToken? *(paged — see [Catalog list pages](#catalog-list-pages))* | { rules: RuleSet, nextToken: string\|null } — one page of the rule sources for the workspace (or global when omitted); the page applies to `RuleSet.rules` |
 | rules.get | workspaceId (req), ruleType (req): user-override key — "base-system-prompt", a per-agent-type specialization key, "workspace", … | { enabled, content, updatedAt } for that one user-override type |
 | rules.update | workspaceId (req), ruleType (req): user-override key (as in rules.get), content (req): string, enabled?: boolean | { rules: RuleSet } — upserts the user-override body (+ enabled) and re-reads the set |
 
 **RuleSet** — `{ workspaceId?, rules: RuleEntry[] }` where **RuleEntry** =
 `{ ruleType: string, source: string, path?, content, enabled: boolean, updatedAt: number,
-editable: boolean }`. `ruleType` is the user-override key the entry is stored under (e.g.
+editable: boolean }` (`rules.list` replaces an oversized `content` with `contentOmitted: true`
+and `contentBytes`; see [Catalog list pages](#catalog-list-pages)). `ruleType` is the user-override key the entry is stored under (e.g.
 `"base-system-prompt"`, a per-agent-type specialization key, or `"workspace"`); `source` names the
 origin (e.g. `"AGENTS.md"`, `".augment/guidelines.md"`, a specialist id, or `"user-override"`);
 `path?` is the backing file when one exists; `enabled` toggles whether the override is applied and
@@ -438,7 +522,7 @@ All methods require `workspaceId` and map `Error::NotFound` to `-32602 "Workspac
 - `setupScript?: string` — default setup script used when `workspace.create` omits `setupScript`
 - `instructions?: string` — repo-level instructions injected into agent prompts
 - `runScript?: string` — optional run script (reserved, no consumer in v1)
-- `archiveScript?: string` — optional archive script (reserved, no consumer in v1)
+- `archiveScript?: string` — cleanup script run once when a workspace leaves Active: on `workspace.archive` (manual or automatic), and on `workspace.delete` / `workspace.retire` of a workspace that is still Active (§5.1). Deleting or retiring an already archived workspace does not run it again; it waits for a run still in progress. `workspace.unarchive` / `workspace.restore` and the turn-start auto-unarchive also wait for a run still in progress (up to the 10-minute limit) before the workspace becomes Active, so agents never resume during cleanup; the run is never cancelled. Read from the workspace folder's `.intent/config.json`; runs in the workspace folder, before the folder is removed, with the setup script's environment (`MAIN_CHECKOUT`, `WORKTREE_PATH`, `BRANCH_NAME`, `SOURCE_BRANCH`) and a 10-minute limit. Skipped for plain-folder, skip-worktree and remote workspaces. A failure never blocks the lifecycle step; after an archive or retire the workspace `statusMessage` is set to `Archive script failed (exit code N).`, `Archive script timed out after 10 minutes.`, or `Archive script could not start.` (a `workspace:updated` delta). After a run at archive or retire, each agent of the workspace gets a one-time `[SYSTEM NOTICE]` on its next turn (which starts only after unarchive) saying the script ran, with its outcome, and pointing to `.intent/config.json` in case the workspace must be set up again (setup does not rerun on unarchive). The daemon logs `executing archive script` and `archive script finished` with the exit code.
 - `scripts?: Array<{ id, name, command, mode, cwd?, env?, category?, autoStart? }>` — repo script definitions used to bootstrap workspace scripts when none exist
 
 The `defaultAutoCommit` field mentioned in early drafts was **not implemented** in the initial port.

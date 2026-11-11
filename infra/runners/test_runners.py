@@ -4,14 +4,21 @@
 `curl`, `docker`, `systemctl` and friends are replaced by stubs on PATH that
 log their calls, so no network, Docker or root is needed. Needs bash, jq and
 openssl (the GitHub App path signs a real JWT).
+
+`python3 test_runners.py` runs every test in parallel, one test per worker
+process (`-j N` sets the worker count; default every CPU this process may use).
+It takes the usual unittest arguments; `python3 -m unittest test_runners` runs
+the same tests serially.
 """
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 import base64
+import io
 import json
+import multiprocessing
 import re
 import os
 import signal
-import socket
 import shutil
 import stat
 import subprocess
@@ -19,78 +26,51 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 
 HERE = Path(__file__).resolve().parent
 SUPERVISOR = HERE / 'supervisor.sh'
 INSTALL = HERE / 'install.sh'
 HOSTS = HERE / 'hosts'
 INTENT_CI1 = HOSTS / 'intent-ci1.env'
+# The runner-only hosts. Each is a copy of intent-ci1 but its name (see
+# test_twin_hosts_match_but_their_name), so a new copy needs no test edits.
+CI_HOSTS = sorted(HOSTS.glob('intent-ci*.env'))
+TWINS = [path for path in CI_HOSTS if path != INTENT_CI1]
 EPYC_3HEAVY = HOSTS / 'epyc-4545p-3heavy.env'
+EPYC_64G_4HEAVY = HOSTS / 'epyc-4545p-64g-4heavy.env'
 # MemTotal of a 128 GB box (125 GiB after the kernel's share).
 MEMINFO_128G = 'MemTotal:       131890000 kB\nMemFree:        1000 kB\n'
+# MemTotal of a 64 GB box such as the retired intent-ci3 (60 GiB after the kernel's and firmware's share).
+MEMINFO_64G = 'MemTotal:       63370000 kB\nMemFree:        1000 kB\n'
 PAT = 'github_pat_' + 'p' * 40
 JIT = 'jit' + 'j' * 60
 APP_TOKEN = 'ghs_' + 'a' * 36
+
+
+def find_bash3():
+    """BASH3_BIN, then the `make bash3` cache (scripts/find-bash3.sh's first two), if it is Bash 3."""
+    cache = os.environ.get('BASH3_CACHE_DIR') or str(
+        Path(os.environ.get('XDG_CACHE_HOME') or Path.home() / '.cache') / 'intent-bash3')
+    for candidate in (os.environ.get('BASH3_BIN'), str(Path(cache) / 'bash')):
+        if not (candidate and os.access(candidate, os.X_OK)):
+            continue
+        try:
+            if subprocess.run([candidate, '-c', '[ "${BASH_VERSINFO[0]}" -eq 3 ]'], capture_output=True).returncode == 0:
+                return candidate
+        except OSError:
+            pass
+    return None
+
+
+BASH3 = find_bash3()
+# CI's shell-tests-bash3 job sets it: no Bash 3.2 there is a failure, not a skip.
+REQUIRE_BASH3 = bool(os.environ.get('REQUIRE_BASH3'))
 HAVE_TOOLS = all(shutil.which(t) for t in ('bash', 'jq', 'openssl'))
 
-# cgroup v2 memory.stat in the kernel's order (6.8): anon, file, kernel and
-# shmem come first, the slab totals much later.
-MEMORY_STAT = """anon {anon}
-file {file}
-kernel {kernel}
-kernel_stack 68894720
-pagetables 631996416
-sec_pagetables 0
-percpu 5578992
-sock 36864
-vmalloc 978944
-shmem {shmem}
-zswap 0
-zswapped 0
-file_mapped 2346303488
-file_dirty 2346520576
-file_writeback 0
-swapcached 6778880
-anon_thp 41943040
-file_thp 0
-shmem_thp 0
-inactive_anon 24566947840
-active_anon 50463858688
-inactive_file 21759229952
-active_file 28080177152
-unevictable 3145728
-slab_reclaimable 5324700584
-slab_unreclaimable 211739880
-slab 5536440464
-workingset_refault_anon 49956633
-workingset_refault_file 8489198252
-workingset_activate_anon 18829540
-workingset_activate_file 1677394019
-workingset_restore_anon 18471164
-workingset_restore_file 966733016
-workingset_nodereclaim 158589056
-pgscan 29368345210
-pgsteal 27248776726
-pgscan_kswapd 25748349502
-pgscan_direct 3606230337
-pgscan_khugepaged 13765371
-pgsteal_kswapd 24135846844
-pgsteal_direct 3100773642
-pgsteal_khugepaged 12156240
-pgfault 1511163816303
-pgmajfault 391927616
-pgrefill 8241445868
-pgactivate 1379134356
-pgdeactivate 0
-pglazyfree 205343966
-pglazyfreed 1822673
-zswpin 0
-zswpout 0
-thp_fault_alloc 186042
-thp_collapse_alloc 13519
-"""
-
-CURL_STUB = r'''#!/usr/bin/env python3
+# The Python stubs run isolated (-I): nothing on PYTHONPATH, such as an APM
+# tracer a host injects into every Python process, loads in each call.
+CURL_STUB = r'''#!/usr/bin/env -S python3 -I
 import json, os, sys
 args = sys.argv[1:]
 method, out, body, auth, url = 'GET', None, None, None, None
@@ -125,8 +105,8 @@ open(out, 'w').write('' if payload is None else json.dumps(payload))
 sys.stdout.write(str(status))
 '''
 
-DOCKER_STUB = r'''#!/usr/bin/env python3
-import json, os, shutil, signal, sys, time
+DOCKER_STUB = r'''#!/usr/bin/env -S python3 -I
+import json, os, signal, sys, time
 log = os.environ['STUB_LOG']
 pidfile = os.environ['STUB_DIR'] + '/run.pid'
 CONTAINER_ID = 'c0ffee' * 10
@@ -141,34 +121,11 @@ fail = os.environ.get('STUB_DOCKER_FAIL', '')
 if sys.argv[1] == 'run':
     record(jit=os.environ.get('ACTIONS_RUNNER_INPUT_JITCONFIG'))
     open(pidfile, 'w').write(str(os.getpid()))
-    # A cgroup v2 directory like the systemd driver's, removed when the
-    # container exits; cpu.stat grows at STUB_CORES busy cores.
-    cg = None
-    if os.environ.get('STUB_CGROUP'):
-        cg = os.path.join(os.environ['STUB_CGROUP'], 'runners.slice', f'docker-{CONTAINER_ID}.scope')
-        os.makedirs(cg)
-        # memory.peak is mostly page cache: working memory (anon + shmem +
-        # kernel) is 1.5 GiB of the 12 GiB peak.
-        for name, text in {'memory.peak': '12884901888\n', 'pids.peak': '812\n',
-                           'memory.stat': f'anon {1 << 30}\nfile {11 << 30}\nkernel {256 << 20}\n'
-                                          f'kernel_stack 1\npagetables 1\nshmem {256 << 20}\nslab 9\n',
-                           'memory.pressure': 'some avg10=12.50 avg60=3.00 avg300=1.00 total=99\n'
-                                              'full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n',
-                           'memory.events': 'low 0\nhigh 0\nmax 4\noom 2\noom_kill 1\noom_group_kill 0\n',
-                           'io.stat': '259:0 rbytes=1000 wbytes=2000 rios=1 wios=2 dbytes=0 dios=0\n'
-                                      '8:0 rbytes=24 wbytes=48 rios=1 wios=1 dbytes=0 dios=0\n'}.items():
-            open(os.path.join(cg, name), 'w').write(text)
     def done(*_):
-        if cg: shutil.rmtree(cg, ignore_errors=True)
         sys.exit(int(os.environ.get('STUB_RUN_RC', '0')) if not _ else 143)
     signal.signal(signal.SIGTERM, done)
-    start, cores = time.time(), float(os.environ.get('STUB_CORES', '0'))
-    end = start + float(os.environ.get('STUB_RUN_SECONDS', '0'))
+    end = time.time() + float(os.environ.get('STUB_RUN_SECONDS', '0'))
     while time.time() < end:
-        if cg:
-            tmp = os.path.join(cg, '.cpu.stat')
-            open(tmp, 'w').write(f'usage_usec {int((time.time() - start) * cores * 1e6)}\nuser_usec 1\nsystem_usec 1\n')
-            os.replace(tmp, os.path.join(cg, 'cpu.stat'))
         time.sleep(0.01)
     done()
 record()
@@ -176,13 +133,10 @@ if sys.argv[1] == 'stop' or sys.argv[1:3] == ['rm', '-f']:
     kill_run()
 if ' '.join(sub) in fail.split(','): sys.exit(1)
 if sub == ['container', 'inspect']:
-    if '--size' in sys.argv:
-        print(os.environ.get('STUB_SIZE_RW', '21474836480'), os.environ.get('STUB_OOM_KILLED', 'false'))
-    else:
-        print(CONTAINER_ID)
+    print(CONTAINER_ID)
 '''
 
-LOG_STUB = r'''#!/usr/bin/env python3
+LOG_STUB = r'''#!/usr/bin/env -S python3 -I
 import json, os, sys
 with open(os.environ['STUB_LOG'], 'a') as f:
     f.write(json.dumps({'cmd': os.path.basename(sys.argv[0]), 'argv': sys.argv[1:]}) + '\n')
@@ -196,7 +150,7 @@ printf '{"cmd": "%s", "argv": [%s]}\n' "$(basename "$0")" "$args" >> "$STUB_LOG"
 '''
 
 # systemctl: enable/disable maintain the wants/ symlinks like the real one.
-SYSTEMCTL_STUB = r'''#!/usr/bin/env python3
+SYSTEMCTL_STUB = r'''#!/usr/bin/env -S python3 -I
 import json, os, sys
 with open(os.environ['STUB_LOG'], 'a') as f:
     f.write(json.dumps({'cmd': 'systemctl', 'argv': sys.argv[1:]}) + '\n')
@@ -208,27 +162,56 @@ if args and args[0] in ('enable', 'disable'):
         link = os.path.join(wants, unit)
         if args[0] == 'enable' and not os.path.lexists(link): os.symlink('/dev/null', link)
         if args[0] == 'disable' and os.path.lexists(link): os.remove(link)
+# Unit states, only when STUB_UNITS names a JSON file {unit: ActiveState}
+# (otherwise every unit counts as active). A unit in STUB_BUSY ({unit: n})
+# drains: a stop leaves it deactivating for its next n `show` calls.
+if os.environ.get('STUB_UNITS') and args:
+    import fnmatch
+    path = os.environ['STUB_UNITS']
+    with open(path) as f: units = json.load(f)
+    busy = json.loads(os.environ.get('STUB_BUSY') or '{}')
+    left_path = path + '.busy'
+    left = json.load(open(left_path)) if os.path.exists(left_path) else busy
+    if args[0] == 'list-units':
+        if os.environ.get('STUB_LIST_FAIL'): sys.exit(1)
+        for unit in sorted(units):
+            if fnmatch.fnmatch(unit, args[1]): print(f'{unit} loaded {units[unit]} running slot')
+    elif args[0] == 'stop' or (args[0] == 'disable' and '--now' in sys.argv):
+        for unit in args[1:]:
+            if units.get(unit, 'inactive') != 'inactive':
+                units[unit] = 'deactivating' if left.get(unit) else 'inactive'
+    elif args[0] == 'show':
+        if os.environ.get('STUB_SHOW_FAIL'): sys.exit(1)
+        unit = args[-1]
+        print(units.get(unit, 'inactive'))
+        if units.get(unit) == 'deactivating':
+            left[unit] -= 1
+            if left[unit] <= 0: units[unit] = 'inactive'
+    elif args[0] == 'is-active':
+        sys.exit(0 if units.get(args[-1]) == 'active' else 3)
+    with open(path, 'w') as f: json.dump(units, f)
+    with open(left_path, 'w') as f: json.dump(left, f)
 '''
 
 
-# Sampler overhead budget: under 1% of one CPU at the real 2-second interval.
-SAMPLE_INTERVAL_S = 2.0
-SAMPLER_CPU_BUDGET = 0.01
-SAMPLER_MIN_SAMPLES = 20
+# `ufw status verbose` on a host locked down per the runbook (intent-ci1's
+# rules); the intent-cache box adds the public 80/443 rules.
+UFW_LOCKED = '''Status: active
+Logging: on (low)
+Default: deny (incoming), allow (outgoing), deny (routed)
+New profiles: skip
 
-
-def sampler_cpu_share(short, long, interval=SAMPLE_INTERVAL_S, min_samples=SAMPLER_MIN_SAMPLES):
-    """Share of one CPU the sampler uses at `interval`, from (cpu_s, samples) of a
-    short and a long run of the same loop: the difference cancels start-up."""
-    (cpu1, n1), (cpu2, n2) = short, long
-    if n2 - n1 < min_samples:
-        raise ValueError(f'need at least {min_samples} more samples in the long run, got {n2 - n1}')
-    return max(cpu2 - cpu1, 0.0) / (n2 - n1) / interval
-
-
-def sampler_within_budget(share, budget=SAMPLER_CPU_BUDGET):
-    """Strictly under the budget: a share equal to it fails."""
-    return share < budget
+To                         Action      From
+--                         ------      ----
+22/tcp on tailscale0       ALLOW IN    Anywhere
+80/tcp                     ALLOW IN    Anywhere
+443/tcp                    ALLOW IN    Anywhere
+22/tcp (v6) on tailscale0  ALLOW IN    Anywhere (v6)
+80/tcp (v6)                ALLOW IN    Anywhere (v6)
+443/tcp (v6)               ALLOW IN    Anywhere (v6)
+'''
+# Prints $STUB_UFW_STATUS for `ufw status verbose`; logs nothing.
+UFW_STUB = '#!/bin/sh\n[ "$*" = "status verbose" ] || exit 9\ncat "$STUB_UFW_STATUS"\n'
 
 
 def write_exe(path, text):
@@ -245,6 +228,15 @@ def fake_cpus(root, cores, sibling_offset):
             topo.mkdir(parents=True)
             (topo / 'thread_siblings_list').write_text(f'{core},{core + sibling_offset}\n')
     return root
+
+
+# Heavy slots at or above this carry intent-cache-bigmem (supervisor.sh bigmem_min_kib).
+BIGMEM_MIN = 30 * 2 ** 30
+
+
+def memory_bytes(size):
+    """Bytes in a Docker memory size such as 12g, 512m or 1024k (supervisor.sh memory_kib)."""
+    return int(size[:-1]) * {'k': 2 ** 10, 'm': 2 ** 20, 'g': 2 ** 30}[size[-1]]
 
 
 def read_env(path):
@@ -279,6 +271,32 @@ class Stubbed(unittest.TestCase):
         return [r for r in rows if cmd is None or r['cmd'] == cmd]
 
 
+class Stubs(Stubbed):
+    def test_python_stubs_ignore_injected_site_packages(self):
+        # Datadog's APM injector puts its tracer on PYTHONPATH for every Python
+        # process. Loading it in each stub call (~0.4 s, hundreds of calls)
+        # turned a 30 s run of this suite into 12-16 min on intent1 (#8304).
+        site = self.dir / 'site'
+        site.mkdir()
+        marker = self.dir / 'site-loaded'
+        (site / 'sitecustomize.py').write_text(f'open({str(marker)!r}, "a").write("x")\n')
+        responses = self.dir / 'responses.json'
+        responses.write_text('{}')
+        env = {**self.env, 'PYTHONPATH': str(site), 'STUB_RESPONSES': str(responses),
+               'INSTALL_PREFIX': str(self.dir / 'root')}
+        subprocess.run([sys.executable, '-c', 'pass'], env=env, check=True)
+        self.assertTrue(marker.exists(), 'a plain python3 loads the injected sitecustomize')
+        marker.unlink()
+        write_exe(self.bin / 'apt-get', LOG_STUB)
+        write_exe(self.bin / 'systemctl', SYSTEMCTL_STUB)
+        for argv in (['curl', '-o', str(self.dir / 'out'), 'https://api.test/x'], ['docker', 'info'],
+                     ['apt-get', 'update'], ['systemctl', 'daemon-reload']):
+            with self.subTest(stub=argv[0]):
+                subprocess.run(argv, env=env, check=True, capture_output=True)
+                self.assertEqual(self.calls()[-1]['cmd'], argv[0])
+                self.assertFalse(marker.exists(), f'{argv[0]} stub loaded the injected sitecustomize')
+
+
 @unittest.skipUnless(HAVE_TOOLS, 'needs bash, jq and openssl')
 class Supervisor(Stubbed):
     def setUp(self):
@@ -290,6 +308,9 @@ class Supervisor(Stubbed):
         self.creds.chmod(0o600)
         self.config = self.dir / 'runners.env'
         self.config.write_text('GITHUB_ORG=example-org\n')
+        # A 128 GB host, so --host-check does not depend on this machine's RAM.
+        self.meminfo = self.dir / 'meminfo'
+        self.meminfo.write_text(MEMINFO_128G)
         self.responses = {
             'GET /orgs/example-org/actions/runners': [200, {'runners': [
                 {'id': 11, 'name': 'intent-cache-heavy-1-100', 'status': 'offline'},
@@ -309,14 +330,8 @@ class Supervisor(Stubbed):
             'DELETE /orgs/example-org/actions/runners/42': [204, None],
         }
         self.env.update(RUNNERS_CONFIG=str(self.config), RUNNERS_CREDENTIALS=str(self.creds),
-                        RUNNERS_EGRESS=str(self.egress), RUNNERS_RETRY_DELAY='0',
+                        RUNNERS_EGRESS=str(self.egress), RUNNERS_RETRY_DELAY='0', RUNNERS_MEMINFO=str(self.meminfo),
                         STUB_RESPONSES=str(self.dir / 'responses.json'))
-        self.state = self.dir / 'state'
-        self.cgroup = self.dir / 'cgroup'
-        self.tmp = self.dir / 'tmp'
-        self.tmp.mkdir()
-        self.env.update(RUNNERS_STATE_DIR=str(self.state), RUNNERS_CGROUP_ROOT=str(self.cgroup),
-                        RUNNERS_SAMPLE_INTERVAL='0.1', TMPDIR=str(self.tmp))
 
     def start(self, *args, **env):
         (self.dir / 'responses.json').write_text(json.dumps(self.responses))
@@ -349,7 +364,7 @@ class Supervisor(Stubbed):
             self.assertEqual(call['auth'], PAT)
             self.assertNotIn(PAT, ' '.join(call['argv']))
         body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])
-        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache'])
+        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache', 'intent-cache-bigmem', 'intent-host-intent-cache'])
         self.assertEqual(body['runner_group_id'], 3, 'registers into the intent-cache group, never Default')
         self.assertEqual(body['work_folder'], '/home/runner/work')
         self.assertRegex(body['name'], r'^intent-cache-heavy-1-\d+$')
@@ -370,20 +385,15 @@ class Supervisor(Stubbed):
         for forbidden in ('-p', '--publish', '--privileged', '-v', '--volume', '--mount', '/var/run/docker.sock'):
             self.assertNotIn(forbidden, argv)
         self.assertNotIn('host', [argv[i + 1] for i, a in enumerate(argv) if a == '--network'])
-        # No --rm: the disk is measured after the job, then the container removed.
+        # No --rm: the supervisor removes the container itself once the job ends.
         self.assertNotIn('--rm', argv)
-        docker = [c['argv'][:3] for c in self.calls('docker')]
-        after = docker[docker.index(run['argv'][:3]) + 1:]
-        self.assertLess(after.index(['container', 'inspect', '--size']), after.index(['rm', '-f', 'gh-runner-heavy-1']))
+        docker = [c['argv'] for c in self.calls('docker')]
+        self.assertIn(['rm', '-f', 'gh-runner-heavy-1'], docker[docker.index(run['argv']) + 1:])
         self.assertEqual((self.dir / 'egress.log').read_text(), 'egress check gh-runners0\n')
         self.assert_no_secret(out, err)
 
-    def stats_lines(self):
-        path = self.state / 'job-stats.jsonl'
-        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
-
     def assert_cleaned_up(self):
-        """The container is removed, and no sampler or temporary file outlives the supervisor."""
+        """The container is removed, and no supervisor or container process outlives the test."""
         self.assertIn(['rm', '-f', 'gh-runner-heavy-1'],
                       [c['argv'] for c in self.calls('docker')][[c['argv'][0] for c in self.calls('docker')].index('run'):])
         deadline = time.time() + 15
@@ -393,10 +403,9 @@ class Supervisor(Stubbed):
                 break
             self.assertLess(time.time(), deadline, f'processes left behind: {left}')
             time.sleep(0.1)
-        self.assertEqual([p for p in self.tmp.iterdir() if p.name.startswith('tmp.')], [], 'mktemp -d left over')
 
     def ours(self, pid):
-        """The command line of a supervisor, sampler or container stub this test started, else None."""
+        """The command line of a supervisor or container stub this test started, else None."""
         try:
             env = Path(f'/proc/{pid}/environ').read_bytes().split(b'\0')
             cmd = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
@@ -406,342 +415,13 @@ class Supervisor(Stubbed):
             return None
         return cmd if str(SUPERVISOR).encode() in cmd or str(self.bin / 'docker').encode() in cmd else None
 
-    def test_job_stats_line(self):
-        rc, out, err = self.run_supervisor('heavy-1', STUB_CGROUP=str(self.cgroup), STUB_CORES='4',
-                                           STUB_RUN_SECONDS='1.5', STUB_RUN_RC='3')
-        self.assertEqual(rc, 0, err)
-        [line] = self.stats_lines()
-        self.assertEqual(list(line), ['v', 'host', 'pool', 'slot', 'slot_cpus', 'slot_memory_bytes', 'runner_name',
-                                      'started_at', 'ended_at', 'wall_s', 'cpu_s', 'cores_avg', 'cores_p50',
-                                      'cores_p95', 'cores_max', 'saturation', 'mem_peak_bytes',
-                                      'mem_work_peak_bytes', 'mem_file_peak_bytes', 'mem_pressure_some_avg10_max',
-                                      'pids_peak', 'disk_bytes', 'io_read_bytes', 'io_write_bytes', 'oom_kills',
-                                      'exit_code', 'samples'])
-        name = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])['name']
-        self.assertEqual({k: line[k] for k in ('v', 'host', 'pool', 'slot', 'slot_cpus', 'slot_memory_bytes',
-                                               'runner_name', 'mem_peak_bytes', 'mem_work_peak_bytes',
-                                               'mem_file_peak_bytes', 'mem_pressure_some_avg10_max', 'pids_peak',
-                                               'disk_bytes', 'io_read_bytes', 'io_write_bytes', 'oom_kills',
-                                               'exit_code')},
-                         {'v': 1, 'host': socket.gethostname().split('.')[0], 'pool': 'heavy', 'slot': 'heavy-1',
-                          'slot_cpus': 8, 'slot_memory_bytes': 36 << 30, 'runner_name': name,
-                          'mem_peak_bytes': 12884901888, 'mem_work_peak_bytes': 1536 << 20,
-                          'mem_file_peak_bytes': 11 << 30, 'mem_pressure_some_avg10_max': 12.5,
-                          'pids_peak': 812, 'disk_bytes': 21474836480,
-                          'io_read_bytes': 1024, 'io_write_bytes': 2048, 'oom_kills': 1, 'exit_code': 3})
-        for key in ('started_at', 'ended_at'):
-            self.assertRegex(line[key], r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$')
-        self.assertLessEqual(line['started_at'], line['ended_at'])
-        # wall_s also covers the container's start, which is slow for the stub on a loaded host.
-        self.assertGreaterEqual(line['wall_s'], 1.4)
-        self.assertLess(line['wall_s'], 30)
-        self.assertGreaterEqual(line['samples'], 5)
-        self.assertAlmostEqual(line['cpu_s'], 6, delta=1.5)
-        self.assertAlmostEqual(line['cores_p50'], 4, delta=1.5)
-        self.assertGreaterEqual(line['cores_max'], line['cores_p95'])
-        self.assertGreaterEqual(line['cores_p95'], line['cores_p50'])
-        # Sampling jitter can push an interval to the cap now and then.
-        self.assertLess(line['saturation'], 0.25)
-        # cores_avg comes from the unrounded CPU time; cpu_s is rounded to 0.1 s.
-        self.assertAlmostEqual(line['cores_avg'], line['cpu_s'] / line['wall_s'], delta=0.005 + 0.05 / line['wall_s'])
-        # Also in the journal (the unit's stdout), as the same line.
-        self.assertIn('job stats: ' + (self.state / 'job-stats.jsonl').read_text().strip(), out)
-        self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o750)
-        self.assertEqual(stat.S_IMODE((self.state / 'job-stats.jsonl').stat().st_mode), 0o640)
-        self.assert_no_secret(out, err, (self.state / 'job-stats.jsonl').read_text())
-        self.assert_cleaned_up()
-
-    def test_job_stats_without_cgroup_or_size(self):
-        rc, out, err = self.run_supervisor('heavy-3', STUB_DOCKER_FAIL='container inspect', STUB_OOM_KILLED='true')
-        self.assertEqual(rc, 0, err)
-        [line] = self.stats_lines()
-        self.assertEqual((line['slot'], line['slot_cpus'], line['slot_memory_bytes'], line['samples']),
-                         ('heavy-3', 8, 36 << 30, 0))
-        for key in ('cpu_s', 'cores_avg', 'cores_p50', 'cores_p95', 'cores_max', 'saturation', 'mem_peak_bytes',
-                    'mem_work_peak_bytes', 'mem_file_peak_bytes', 'mem_pressure_some_avg10_max', 'pids_peak', 'disk_bytes', 'io_read_bytes', 'io_write_bytes', 'oom_kills'):
-            self.assertIsNone(line[key], key)
-        self.assertIn(['rm', '-f', 'gh-runner-heavy-3'], [c['argv'] for c in self.calls('docker')])
-
-    def test_oom_killed_container_counts_even_between_samples(self):
-        rc, _, err = self.run_supervisor('heavy-1', STUB_CGROUP=str(self.cgroup), STUB_RUN_SECONDS='0.5',
-                                         STUB_OOM_KILLED='true', STUB_RUN_RC='137')
-        self.assertEqual(rc, 0, err)
-        [line] = self.stats_lines()
-        self.assertEqual((line['oom_kills'], line['exit_code']), (1, 137))
-
-    def bash(self, script, *args, **env):
-        return subprocess.run(['bash', '-c', f'source "$SUPERVISOR_SH"; {script}', 'test', *args],
-                              env={**self.env, 'SUPERVISOR_SH': str(SUPERVISOR), **env},
-                              capture_output=True, text=True, timeout=60)
-
-    def test_summary_from_samples(self):
-        # t (us) usage (us) mem pids rbytes wbytes oom_kill work file psi: 10
-        # intervals of 2 s at 1, 2, ..., 10 busy cores on an 8-CPU slot (8, 9
-        # and 10 count as saturated).
-        rows = [f'{2_000_000 * i} {sum(range(1, i + 1)) * 2_000_000} {100 + i} {i} {i} {2 * i} 0 {50 + i} {40 + i} {i}'
-                for i in range(11)]
-        rows[4] = rows[4].replace(' 104 ', ' 900 ')
-        rows[6] = rows[6].replace(' 56 ', ' 700 ')
-        (self.dir / 'samples').write_text('\n'.join(rows) + '\n')
-        r = self.bash('summarize_samples "$1" 8 22.0', str(self.dir / 'samples'))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(json.loads(r.stdout), {
-            'cpu_s': 110.0, 'cores_avg': 5.0, 'cores_p50': 5.0, 'cores_p95': 10.0, 'cores_max': 10.0,
-            'saturation': 0.3, 'mem_peak_bytes': 900, 'mem_work_peak_bytes': 700, 'mem_file_peak_bytes': 50,
-            'mem_pressure_some_avg10_max': 0.1, 'pids_peak': 10, 'io_read_bytes': 10,
-            'io_write_bytes': 20, 'oom_kills': 0, 'samples': 10})
-
-    def test_summary_when_page_cache_fills_the_slot(self):
-        # A 48 GiB slot that an IO-heavy job fills with page cache: memory.peak
-        # sits at the limit, but working memory stays at 2-3 GiB, and reclaim
-        # stalls show up in memory.pressure.
-        gib, limit = 1 << 30, 48 << 30
-        rows = [f'{2_000_000 * i} {2_000_000 * i} {min(limit, (2 + 6 * i) * gib)} 10 0 {i * 7 * gib} 0 '
-                f'{(2 + i % 2) * gib} {min(limit - 3 * gib, 6 * i * gib)} {i * 125}' for i in range(10)]
-        (self.dir / 'samples').write_text('\n'.join(rows) + '\n')
-        r = self.bash('summarize_samples "$1" 8 20.0', str(self.dir / 'samples'))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        m = json.loads(r.stdout)
-        self.assertEqual(m['mem_peak_bytes'], limit)
-        self.assertEqual(m['mem_work_peak_bytes'], 3 * gib)
-        self.assertEqual(m['mem_file_peak_bytes'], 45 * gib)
-        self.assertEqual(m['mem_pressure_some_avg10_max'], 11.25)
-
-    def test_summary_without_memory_stat_or_pressure(self):
-        # -1 marks a file the kernel does not have: the field is null, while
-        # the other fields are still summarized.
-        (self.dir / 'samples').write_text('0 0 5 1 0 0 0 -1 -1 -1\n2000000 2000000 7 1 0 0 0 -1 -1 -1\n')
-        r = self.bash('summarize_samples "$1" 8 2.0', str(self.dir / 'samples'))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        m = json.loads(r.stdout)
-        self.assertEqual(m['mem_peak_bytes'], 7)
-        for key in ('mem_work_peak_bytes', 'mem_file_peak_bytes', 'mem_pressure_some_avg10_max'):
-            self.assertIsNone(m[key], key)
-
-    def test_cores_avg_agrees_with_rounded_cpu_s(self):
-        # cores_avg is computed from the unrounded CPU time and rounded once;
-        # cpu_s is rounded to 0.1 s, so a reader recomputing cpu_s / wall_s can
-        # differ by up to 0.005 + 0.05 / wall_s. Pairs on rounding boundaries,
-        # the first being the merge-queue failure (3.79 vs 3.80).
-        pairs = [(1.5, 5_684_000), (1.5, 5_649_999), (1.4, 5_350_000), (2.0, 7_949_999),
-                 (0.7, 2_750_000), (600.0, 2_399_950_000), (3.3, 26_349_999)]
-        strict_misses = 0
-        for wall, usage in pairs:
-            with self.subTest(wall=wall, usage=usage):
-                (self.dir / 'samples').write_text(f'0 0 0 0 0 0 0 0 0 0\n{int(wall * 1e6)} {usage} 0 0 0 0 0 0 0 0\n')
-                r = self.bash('summarize_samples "$1" 8 "$2"', str(self.dir / 'samples'), str(wall))
-                self.assertEqual(r.returncode, 0, r.stderr)
-                m = json.loads(r.stdout)
-                # jq rounds halves away from zero (Python's round() goes to even).
-                self.assertEqual(m['cpu_s'], (usage + 50_000) // 100_000 / 10)
-                self.assertAlmostEqual(m['cores_avg'], usage / 1e6 / wall, delta=0.005 + 1e-9)
-                self.assertAlmostEqual(m['cores_avg'], m['cpu_s'] / wall, delta=0.005 + 0.05 / wall + 1e-9)
-                strict_misses += abs(m['cores_avg'] - m['cpu_s'] / wall) > 0.01 - 1e-9
-        self.assertGreater(strict_misses, 0, 'the pairs must include a case the old 0.01 check rejected')
-
-    def test_sampler_reads_a_cgroup(self):
-        cg = self.dir / 'cg'
-        cg.mkdir()
-        (cg / 'cpu.stat').write_text('usage_usec 5000000\nuser_usec 1\n')
-        (cg / 'memory.current').write_text('4096\n')
-        (cg / 'pids.current').write_text('7\n')
-        (cg / 'io.stat').write_text('8:0 rbytes=5 wbytes=6 rios=1\n8:16 rbytes=1 wbytes=1\n')
-        (cg / 'memory.events').write_text('oom 1\noom_kill 2\n')
-        r = self.bash('sample_cgroup "$1"', str(cg))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        fields = r.stdout.split()
-        # No memory.stat or memory.pressure: -1, summarized as null.
-        self.assertEqual(fields[1:], ['5000000', '4096', '7', '6', '7', '2', '-1', '-1', '-1'])
-        self.assertAlmostEqual(int(fields[0]) / 1e6, time.time(), delta=5)
-        (cg / 'memory.stat').write_text(MEMORY_STAT.format(anon=3000, file=900000, kernel=200, shmem=40))
-        (cg / 'memory.pressure').write_text('some avg10=7.25 avg60=1.00 avg300=0.10 total=5\n'
-                                            'full avg10=3.00 avg60=0.50 avg300=0.05 total=2\n')
-        fields = self.bash('sample_cgroup "$1"', str(cg)).stdout.split()
-        # Working memory is anon + shmem + kernel; avg10 is in hundredths.
-        self.assertEqual(fields[1:], ['5000000', '4096', '7', '6', '7', '2', '3240', '900000', '725'])
-        (cg / 'cpu.stat').unlink()
-        self.assertNotEqual(self.bash('sample_cgroup "$1"', str(cg)).returncode, 0)
-
-    def test_sampler_working_memory_without_the_kernel_field(self):
-        # Kernels before 6.1 have no "kernel" total: sum its main parts.
-        cg = self.dir / 'cg'
-        cg.mkdir()
-        (cg / 'cpu.stat').write_text('usage_usec 1\n')
-        (cg / 'memory.stat').write_text('anon 1000\nfile 50\nkernel_stack 1\npagetables 2\nsec_pagetables 4\n'
-                                        'percpu 8\nsock 999\nvmalloc 16\nshmem 100\nslab_reclaimable 31\n'
-                                        'slab_unreclaimable 1\nslab 32\npgfault 7\n')
-        fields = self.bash('sample_cgroup "$1"', str(cg)).stdout.split()
-        self.assertEqual(fields[7:], [str(1000 + 100 + 1 + 2 + 4 + 8 + 16 + 32), '50', '-1'])
-
-    def test_sampler_ignores_malformed_memory_files(self):
-        cg = self.dir / 'cg'
-        cg.mkdir()
-        (cg / 'cpu.stat').write_text('usage_usec 1\n')
-        (cg / 'memory.stat').write_text('anon lots\nfile 5x\n')
-        (cg / 'memory.pressure').write_text('some avg10=bogus\n')
-        r = self.bash('sample_cgroup "$1"', str(cg))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(r.stdout.split()[7:], ['-1', '-1', '-1'])
-
-    def test_sampler_overhead_is_under_one_percent_of_a_cpu(self):
-        cg = self.sampler_cgroup()
-        short, long = self.run_sampler(cg, 20), self.run_sampler(cg, 120)
-        share = sampler_cpu_share(short, long)
-        self.assertTrue(sampler_within_budget(share),
-                        f'{share:.2%} of a CPU ({short} -> {long}: cpu_s, samples)')
-
-    def sampler_cgroup(self):
-        cg = self.cgroup / 'runners.slice' / ('docker-' + 'c0ffee' * 10 + '.scope')
-        cg.mkdir(parents=True, exist_ok=True)
-        for name, text in {'cpu.stat': 'usage_usec 1\n', 'memory.peak': '1\n', 'pids.peak': '1\n',
-                           'io.stat': '8:0 rbytes=1 wbytes=1\n', 'memory.events': 'oom_kill 0\n',
-                           'memory.stat': MEMORY_STAT.format(anon=1, file=1, kernel=1, shmem=1),
-                           'memory.pressure': 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n'
-                                              'full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n'}.items():
-            (cg / name).write_text(text)
-        return cg
-
-    def run_sampler(self, cg, samples, deadline_s=120):
-        """(cpu_s, samples) of sample_job sampling until the file holds `samples`
-        lines, then ending the job: the count, not wall time, sets the run's
-        length, so host load cannot shrink it. The job and Bash are always
-        ended and reaped, even when an assertion or timeout cuts the run short."""
-        out, pidfile = self.dir / f'samples-{samples}', self.dir / f'job-{samples}.pid'
-        # find_cgroup runs once per job (a docker call until the cgroup
-        # exists); stub it so only the steady sampling loop is measured.
-        script = ('cgdir="$2"; find_cgroup() { echo "$cgdir"; }; '
-                  'sleep 600 & echo $! > "$3"; sample_job gh-runner-heavy-1 $! "$1"')
-        before = os.times()
-        proc = subprocess.Popen(['bash', '-c', f'source "$SUPERVISOR_SH"; {script}', 'test',
-                                 str(out), str(cg), str(pidfile)],
-                                env={**self.env, 'SUPERVISOR_SH': str(SUPERVISOR), 'RUNNERS_SAMPLE_INTERVAL': '0.05'},
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        self.sampler_pids = [proc.pid]
-        try:
-            deadline = time.time() + deadline_s
-            while not out.exists() or len(out.read_text().splitlines()) < samples:
-                if proc.poll() is not None:
-                    self.fail(f'sampler stopped early: {proc.communicate()}')
-                self.assertLess(time.time(), deadline, 'sampler too slow')
-                time.sleep(0.02)
-        finally:
-            job = int(pidfile.read_text()) if pidfile.exists() and pidfile.read_text().strip() else None
-            if job:
-                self.sampler_pids.append(job)
-                try:
-                    os.kill(job, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-            try:
-                _, err = proc.communicate(timeout=30)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                _, err = proc.communicate()
-        after = os.times()
-        self.assertEqual(proc.returncode, 0, err)
-        cpu = (after.children_user - before.children_user) + (after.children_system - before.children_system)
-        return cpu, len(out.read_text().splitlines())
-
-    def test_sampler_run_cleans_up_when_cut_short(self):
-        # The deadline cuts the run short well after Bash has started the job.
-        with self.assertRaises(AssertionError):
-            self.run_sampler(self.sampler_cgroup(), 10_000, deadline_s=5)
-        pidfile = self.dir / 'job-10000.pid'
-        self.assertTrue(pidfile.exists(), 'the job was started')
-        pids = [self.sampler_pids[0], int(pidfile.read_text())]
-        self.addCleanup(lambda: [os.kill(pid, signal.SIGKILL) for pid in pids if self.running(pid)])
-        deadline = time.time() + 10
-        while any(map(self.running, pids)):
-            self.assertLess(time.time(), deadline, f'left running: {[p for p in pids if self.running(p)]}')
-            time.sleep(0.1)
-
-    @staticmethod
-    def running(pid):
-        try:
-            return Path(f'/proc/{pid}/stat').read_text().split()[2] != 'Z'
-        except (OSError, IndexError):
-            return False
-
-    def test_sampler_cpu_share_boundaries(self):
-        # 100 extra samples costing 2 s of CPU: 20 ms each, 1% of a CPU at 2 s.
-        self.assertAlmostEqual(sampler_cpu_share((0.1, 20), (2.1, 120)), 0.01)
-        # The real test's check: strictly under, so exactly at the budget fails.
-        self.assertFalse(sampler_within_budget(SAMPLER_CPU_BUDGET))
-        self.assertTrue(sampler_within_budget(SAMPLER_CPU_BUDGET - 1e-9))
-        self.assertTrue(sampler_within_budget(sampler_cpu_share((0.1, 20), (2.0, 120))))
-        # Start-up cancels; a long run that measured less CPU clamps to zero.
-        self.assertEqual(sampler_cpu_share((0.5, 20), (0.4, 120)), 0.0)
-        # The minimum sample difference is inclusive.
-        self.assertEqual(sampler_cpu_share((0, 0), (0, SAMPLER_MIN_SAMPLES)), 0.0)
-        with self.assertRaises(ValueError):
-            sampler_cpu_share((0, 0), (0, SAMPLER_MIN_SAMPLES - 1))
-
-    def test_job_stats_rotation(self):
-        script = 'for i in $(seq 1 12); do append_job_stats "{\\"v\\":1,\\"ended_at\\":\\"2026-10-21T14:$(printf %02d "$i"):00Z\\",\\"n\\":$i}"; done'
-        r = self.bash(script, RUNNERS_JOB_STATS_MAX_BYTES='100', RUNNERS_JOB_STATS_KEEP='2')
-        self.assertEqual(r.returncode, 0, r.stderr)
-        files = sorted(p.name for p in self.state.iterdir() if p.name.startswith('job-stats.jsonl'))
-        self.assertEqual(files, ['job-stats.jsonl', 'job-stats.jsonl.1', 'job-stats.jsonl.2'])
-        for name in files:
-            self.assertLessEqual((self.state / name).stat().st_size, 100 + 60)
-            self.assertEqual(stat.S_IMODE((self.state / name).stat().st_mode), 0o640)
-        (self.state / 'job-stats.jsonl').write_text((self.state / 'job-stats.jsonl').read_text() + 'not json\n')
-        rc, out, err = self.run_supervisor('--job-stats')
-        self.assertEqual(rc, 0, err)
-        kept = [json.loads(line)['n'] for line in out.splitlines()]
-        self.assertEqual(kept, list(range(kept[0], 13)), 'oldest first, newest last, garbage skipped')
-        self.assertLess(kept[0], 10)
-        rc, out, err = self.run_supervisor('--job-stats', '--since', '2026-10-21T16:11:00+02:00')
-        self.assertEqual(rc, 0, err)
-        self.assertEqual([json.loads(line)['n'] for line in out.splitlines()], [11, 12])
-        rc, _, err = self.run_supervisor('--job-stats', '--since', 'not a date')
-        self.assertNotEqual(rc, 0)
-        self.assertIn('--since', err)
-
-    def test_job_stats_survive_a_failed_deregistration(self):
-        # The final token refresh (for the deregistration) fails during a GitHub
-        # outage: the finished job's stats must already be on disk.
-        key = self.dir / 'app.pem'
-        subprocess.run(['openssl', 'genrsa', '-out', str(key), '2048'], check=True, capture_output=True)
-        self.creds.write_text(f'GITHUB_APP_ID=12345\nGITHUB_APP_INSTALLATION_ID=678\nGITHUB_APP_PRIVATE_KEY_FILE={key}\n')
-        self.responses['POST /app/installations/678/access_tokens'] = {'seq': [[201, {'token': APP_TOKEN}], [503, {}]]}
-        rc, out, err = self.run_supervisor('heavy-1', STUB_CGROUP=str(self.cgroup), STUB_RUN_SECONDS='0.5')
-        self.assertNotEqual(rc, 0)
-        self.assertIn('HTTP 503', err)
-        self.assertEqual(len(self.stats_lines()), 1)
-        self.assert_no_secret(out, err, (self.state / 'job-stats.jsonl').read_text())
-        self.assert_cleaned_up()
-
-    def test_job_stats_reader_sees_a_rotation_it_waited_for(self):
-        self.state.mkdir(mode=0o750)
-        current = self.state / 'job-stats.jsonl'
-        current.write_text('{"v":1,"ended_at":"2026-10-21T14:01:00Z","n":1}\n')
-        lock = open(self.state / 'job-stats.lock', 'w')
-        self.addCleanup(lock.close)
-        import fcntl
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        reader = self.start('--job-stats')
-        time.sleep(1.0)
-        # A writer rotates while the reader waits for the lock.
-        current.rename(self.state / 'job-stats.jsonl.1')
-        current.write_text('{"v":1,"ended_at":"2026-10-21T14:02:00Z","n":2}\n')
-        fcntl.flock(lock, fcntl.LOCK_UN)
-        out, err = reader.communicate(timeout=30)
-        self.assertEqual(reader.returncode, 0, err)
-        self.assertEqual([json.loads(line)['n'] for line in out.splitlines()], [1, 2])
-
-    def test_job_stats_with_no_file(self):
-        rc, out, err = self.run_supervisor('--job-stats')
-        self.assertEqual((rc, out), (0, ''), err)
-
     def test_early_exit_still_removes_the_container(self):
-        proc = self.start('heavy-1', STUB_RUN_SECONDS='60', STUB_CGROUP=str(self.cgroup))
+        proc = self.start('heavy-1', STUB_RUN_SECONDS='60')
         self.wait_for_container(proc)
         time.sleep(0.5)
         proc.send_signal(signal.SIGHUP)
         proc.communicate(timeout=30)
         self.assert_cleaned_up()
-        self.assertEqual(self.stats_lines(), [])
 
     def test_stale_cleanup_reads_every_page(self):
         page1 = [{'id': 1000 + i, 'name': f'other-{i}', 'status': 'online'} for i in range(99)]
@@ -889,7 +569,7 @@ class Supervisor(Stubbed):
         rc, out, err = self.run_supervisor('heavy-3')
         self.assertEqual(rc, 0, err)
         body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])
-        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache'])
+        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache', 'intent-cache-bigmem', 'intent-host-intent-cache'])
         self.assertRegex(body['name'], r'^intent-cache-heavy-3-\d+$')
         argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][0]['argv'])
         for flag in ('--name gh-runner-heavy-3', '--cpus 8 --cpuset-cpus 8-11,20-23 --memory 36g',
@@ -905,7 +585,7 @@ class Supervisor(Stubbed):
         rc, out, err = self.run_supervisor('small-2')
         self.assertEqual(rc, 0, err)
         body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])
-        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache-small'])
+        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache-small', 'intent-host-intent-cache'])
         self.assertRegex(body['name'], r'^intent-cache-small-2-\d+$')
         argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][0]['argv'])
         for flag in ('--name gh-runner-small-2', '--cpus 1 ', '--cpuset-cpus 10 ', '--memory 3g',
@@ -931,12 +611,28 @@ class Supervisor(Stubbed):
                 ('HEAVY_CPUSETS=0-3,12-15 x 8-11,20-23\n', "bad CPUSETS entry 'x'"),
                 ('HEAVY_MEMORY=lots\n', 'MEMORY must look like 40g'),
                 ('RUNNER_POOLS=heavy extra\n', 'pool extra: SLOTS must be a number'),
-                ('HEAVY_BOGUS=1\n', 'unknown key HEAVY_BOGUS')):
+                ('HEAVY_BOGUS=1\n', 'unknown key HEAVY_BOGUS'),
+                # The supervisor adds the host label itself; a pool must not claim one.
+                ('HEAVY_LABELS=self-hosted,intent-cache,intent-host-intent-ci3\n', 'LABELS must not include a host label'),
+                # The default heavy labels include intent-cache-bigmem, so a small slot must drop it.
+                ('HEAVY_MEMORY=12g\n', 'pool heavy: intent-cache-bigmem needs MEMORY of at least 30g'),
+                ('HEAVY_MEMORY=31457279k\n', 'pool heavy: intent-cache-bigmem needs MEMORY of at least 30g'),
+                ('RUNNER_POOLS=xl\nXL_SLOTS=1\nXL_LABELS=self-hosted,intent-cache-bigmem,x\nXL_CPUSETS=0-3\nXL_MEMORY=29g\n',
+                 'pool xl: intent-cache-bigmem needs MEMORY of at least 30g')):
             with self.subTest(config=config):
                 self.config.write_text(config)
                 rc, _, err = self.run_supervisor('--plan')
                 self.assertNotEqual(rc, 0)
                 self.assertIn(message, err)
+
+    def test_plan_accepts_bigmem_at_30g_and_small_slots_without_it(self):
+        for config in ('HEAVY_MEMORY=30g\n', 'HEAVY_MEMORY=31457280k\n',
+                       'HEAVY_MEMORY=12g\nHEAVY_LABELS=self-hosted,linux,x64,intent-cache\n'):
+            with self.subTest(config=config):
+                self.config.write_text(config)
+                rc, out, err = self.run_supervisor('--plan')
+                self.assertEqual(rc, 0, err)
+                self.assertEqual(out.split(), ['heavy-1', 'heavy-2', 'heavy-3'])
 
     def test_unconfigured_slot(self):
         for slot in ('heavy-4', 'small-1', 'other-1'):
@@ -1027,7 +723,6 @@ class Supervisor(Stubbed):
         self.assertIn(('DELETE', '/orgs/example-org/actions/runners/42'),
                       [(c['method'], c['path']) for c in self.calls('curl')])
         self.assertIn('drained', out)
-        self.assertEqual(self.stats_lines(), [], 'an idle runner ran no job')
         self.assert_cleaned_up()
 
     def test_drain_busy_runner_waits_for_job(self):
@@ -1042,7 +737,6 @@ class Supervisor(Stubbed):
         self.assertNotIn('stop', [c['argv'][0] for c in self.calls('docker')])
         self.assertIn('waiting for the running job', out)
         self.assertIn('drained', out)
-        self.assertEqual(len(self.stats_lines()), 1, 'the drained job is recorded')
         self.assert_cleaned_up()
 
     def test_github_app_credential(self):
@@ -1079,8 +773,9 @@ class Supervisor(Stubbed):
 
     def test_committed_layouts_plan(self):
         for path, slots in ((HERE / 'runners.env', ['heavy-1', 'heavy-2', 'heavy-3']),
-                            (INTENT_CI1, ['xl-1', 'heavy-1', 'heavy-2']),
-                            (EPYC_3HEAVY, ['heavy-1', 'heavy-2', 'heavy-3'])):
+                            *((path, ['xl-1', 'heavy-1', 'heavy-2']) for path in CI_HOSTS),
+                            (EPYC_3HEAVY, ['heavy-1', 'heavy-2', 'heavy-3']),
+                            (EPYC_64G_4HEAVY, ['heavy-1', 'heavy-2', 'heavy-3', 'heavy-4'])):
             with self.subTest(config=path.name):
                 rc, out, err = self.run_supervisor('--plan', RUNNERS_CONFIG=str(path))
                 self.assertEqual((rc, out.split()), (0, slots), err)
@@ -1098,28 +793,64 @@ class Supervisor(Stubbed):
         self.assertIn('\n  RUNNER_NAME_PREFIX=intent-cache\n', text)
 
     def test_xl_pool_slot(self):
-        self.use_host_config(INTENT_CI1)
+        # Every intent-ci host shares this layout: one xl slot and two 30 GB heavy slots.
+        for config, host in ((path, path.stem) for path in CI_HOSTS):
+            with self.subTest(host=host):
+                self.use_host_config(config)
+                self.responses['GET /orgs/example-org/actions/runners'] = [200, {'runners': []}]
+                rc, out, err = self.run_supervisor('xl-1')
+                self.assertEqual(rc, 0, err)
+                body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][-1]['body'])
+                self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache-xl', f'intent-host-{host}'])
+                self.assertEqual(body['runner_group_id'], 3)
+                self.assertRegex(body['name'], rf'^{host}-xl-1-\d+$')
+                argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][-1]['argv'])
+                for flag in ('--name gh-runner-xl-1', f'--hostname {host}-xl-1', '--cpus 16 --cpuset-cpus 0-7,16-23 --memory 52g',
+                             '--memory-swap 52g', '--pids-limit 32768', '--shm-size 2g', '--cap-drop ALL',
+                             '--security-opt no-new-privileges', '--network gh-runners', '--label intent.runner.pool=xl'):
+                    self.assertIn(flag, argv)
+                self.assertNotIn('--privileged', argv)
+                for slot, cpuset in (('heavy-1', '8-11,24-27'), ('heavy-2', '12-15,28-31')):
+                    rc, out, err = self.run_supervisor(slot)
+                    self.assertEqual(rc, 0, err)
+                    body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][-1]['body'])
+                    self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache', 'intent-cache-bigmem', f'intent-host-{host}'])
+                    argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][-1]['argv'])
+                    self.assertIn(f'--cpus 8 --cpuset-cpus {cpuset} --memory 30g', argv)
+
+    def test_four_heavy_slots_on_the_64g_host(self):
+        config, host = EPYC_64G_4HEAVY, read_env(EPYC_64G_4HEAVY)['RUNNER_NAME_PREFIX']
+        self.use_host_config(config)
         self.responses['GET /orgs/example-org/actions/runners'] = [200, {'runners': []}]
-        rc, out, err = self.run_supervisor('xl-1')
-        self.assertEqual(rc, 0, err)
-        body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])
-        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache-xl'])
-        self.assertEqual(body['runner_group_id'], 3)
-        self.assertRegex(body['name'], r'^intent-ci1-xl-1-\d+$')
-        argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][0]['argv'])
-        for flag in ('--name gh-runner-xl-1', '--hostname intent-ci1-xl-1', '--cpus 16 --cpuset-cpus 0-7,16-23 --memory 52g',
-                     '--memory-swap 52g', '--pids-limit 32768', '--shm-size 2g', '--cap-drop ALL',
-                     '--security-opt no-new-privileges', '--network gh-runners', '--label intent.runner.pool=xl'):
-            self.assertIn(flag, argv)
-        self.assertNotIn('--privileged', argv)
-        rc, out, err = self.run_supervisor('heavy-1')
-        self.assertEqual(rc, 0, err)
-        argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][-1]['argv'])
-        self.assertIn('--cpus 8 --cpuset-cpus 8-11,24-27 --memory 30g', argv)
-        rc, out, err = self.run_supervisor('heavy-2')
-        self.assertEqual(rc, 0, err)
-        argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][-1]['argv'])
-        self.assertIn('--cpus 8 --cpuset-cpus 12-15,28-31 --memory 30g', argv)
+        for n, cpuset in enumerate(('0-3,16-19', '4-7,20-23', '8-11,24-27', '12-15,28-31'), 1):
+            with self.subTest(slot=f'heavy-{n}'):
+                rc, out, err = self.run_supervisor(f'heavy-{n}')
+                self.assertEqual(rc, 0, err)
+                body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][-1]['body'])
+                self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache', f'intent-host-{host}'])
+                self.assertRegex(body['name'], rf'^{host}-heavy-{n}-\d+$')
+                argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][-1]['argv'])
+                for flag in (f'--hostname {host}-heavy-{n}', f'--cpus 8 --cpuset-cpus {cpuset} --memory 12g',
+                             '--memory-swap 12g', '--pids-limit 16384', '--shm-size 1g'):
+                    self.assertIn(flag, argv)
+        rc, _, err = self.run_supervisor('xl-1')
+        self.assertNotEqual(rc, 0, f'{host} has no xl slot')
+        self.assertIn('is not a configured slot', err)
+
+    def test_host_label_follows_the_name_prefix(self):
+        # Each slot also registers intent-host-<RUNNER_NAME_PREFIX>, so a job
+        # (the smoke workflow's host input) can target one host; pool labels
+        # stay first and unchanged, so routing by pool label is unaffected.
+        for path, prefix in ((HERE / 'runners.env', 'intent-cache'), *((path, path.stem) for path in CI_HOSTS)):
+            with self.subTest(config=path.name):
+                self.use_host_config(path)
+                self.responses['GET /orgs/example-org/actions/runners'] = [200, {'runners': []}]
+                rc, _, err = self.run_supervisor('heavy-1')
+                self.assertEqual(rc, 0, err)
+                body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][-1]['body'])
+                pool = read_env(path)['HEAVY_LABELS'].split(',')
+                self.assertEqual(body['labels'], [*pool, f'intent-host-{prefix}'])
+                self.assertNotIn(f'intent-host-{prefix}', pool)
 
     def test_stale_cleanup_only_takes_this_hosts_slot(self):
         self.use_host_config(INTENT_CI1)
@@ -1172,11 +903,14 @@ class Supervisor(Stubbed):
         ryzen = fake_cpus(self.dir / 'ryzen', 12, 12)
         small = fake_cpus(self.dir / 'small', 8, 16)
         for config, sysfs, message in (
-                (INTENT_CI1, epyc, None),
+                *((path, epyc, None) for path in CI_HOSTS),
                 (EPYC_3HEAVY, epyc, None),
+                (EPYC_64G_4HEAVY, epyc, None),
                 (HERE / 'runners.env', ryzen, None),
                 (HERE / 'runners.env', epyc, 'slot heavy-1: CPU 0 shares a core with CPU 16'),
-                (INTENT_CI1, ryzen, 'slot xl-1: CPU 0 shares a core with CPU 12'),
+                *((path, ryzen, 'slot xl-1: CPU 0 shares a core with CPU 12') for path in CI_HOSTS),
+                (EPYC_64G_4HEAVY, ryzen, 'slot heavy-1: CPU 0 shares a core with CPU 12'),
+                (EPYC_64G_4HEAVY, small, 'slot heavy-3: CPU 8 does not exist'),
                 (EPYC_3HEAVY, ryzen, 'slot heavy-1: CPU 0 shares a core with CPU 12'),
                 (EPYC_3HEAVY, small, 'slot heavy-3: CPU 8 does not exist')):
             with self.subTest(config=config.name, host=sysfs.name):
@@ -1192,6 +926,85 @@ class Supervisor(Stubbed):
         self.assertIn('only 3 entries in CPUSETS', err)
         self.assertEqual(self.calls(), [])
 
+    def host_check(self, config, sysfs, meminfo):
+        self.meminfo.write_text(meminfo)
+        return self.run_supervisor('--host-check', RUNNERS_CONFIG=str(config), RUNNERS_SYSFS_CPU=str(sysfs))
+
+    def test_host_check_passes_committed_configs_on_their_hosts(self):
+        epyc = fake_cpus(self.dir / 'epyc', 16, 16)
+        ryzen = fake_cpus(self.dir / 'ryzen', 12, 12)
+        hosts = {HERE / 'runners.env': (ryzen, MEMINFO_128G), **{path: (epyc, MEMINFO_128G) for path in CI_HOSTS},
+                 EPYC_3HEAVY: (epyc, MEMINFO_128G), EPYC_64G_4HEAVY: (epyc, MEMINFO_64G)}
+        self.assertEqual(sorted(hosts), sorted([HERE / 'runners.env', *HOSTS.glob('*.env')]))
+        for config, (sysfs, meminfo) in hosts.items():
+            with self.subTest(config=config.name):
+                rc, _, err = self.host_check(config, sysfs, meminfo)
+                self.assertEqual(rc, 0, err)
+
+    def test_host_check_refuses_slots_over_the_memory_cap(self):
+        # intent-hq/intent#7865: 4 x 13g was planned for the 64 GB intent-ci3
+        # (since retired), whose 60 GiB of RAM leaves runners.slice 51 GiB.
+        epyc = fake_cpus(self.dir / 'epyc', 16, 16)
+        small_13g = self.dir / '64g-13g.env'
+        small_13g.write_text(EPYC_64G_4HEAVY.read_text().replace('HEAVY_MEMORY=12g', 'HEAVY_MEMORY=13g'))
+        self.assertIn('HEAVY_MEMORY=13g', small_13g.read_text())
+        for config, meminfo, message in (
+                (small_13g, MEMINFO_64G, 'slots need 52 GiB in total (heavy 4 x 13g) but runners.slice allows 51 GiB '
+                                       'on this host (60 GiB RAM minus 9 GiB reserve); lower HEAVY_MEMORY or HEAVY_SLOTS'),
+                (INTENT_CI1, MEMINFO_64G, 'slots need 112 GiB in total (xl 1 x 52g, heavy 2 x 30g) but runners.slice '
+                                          'allows 51 GiB on this host (60 GiB RAM minus 9 GiB reserve); '
+                                          'lower XL_MEMORY, XL_SLOTS, HEAVY_MEMORY or HEAVY_SLOTS'),
+                (EPYC_3HEAVY, MEMINFO_64G, 'slots need 96 GiB in total (heavy 3 x 32g)')):
+            with self.subTest(config=config.name):
+                rc, _, err = self.host_check(config, epyc, meminfo)
+                self.assertNotEqual(rc, 0)
+                self.assertIn('runner-slot-host: error: ' + message, err)
+        self.assertEqual(self.calls(), [])
+
+    def test_host_check_memory_boundary_and_units(self):
+        # Three heavy slots on a 60 GiB host (51 GiB cap): 51 GiB fits, any more does not.
+        ryzen = fake_cpus(self.dir / 'ryzen', 12, 12)
+        for memory, total in (('17g', None), ('17408m', None), ('17825792k', None),
+                              ('17409m', '51.01'), ('18g', '54'), ('17825793k', '51.01')):
+            with self.subTest(memory=memory):
+                # 17g slots are below the bigmem floor, so they carry only intent-cache.
+                self.config.write_text(f'GITHUB_ORG=example-org\nHEAVY_MEMORY={memory}\nHEAVY_LABELS=self-hosted,linux,x64,intent-cache\n')
+                rc, _, err = self.host_check(self.config, ryzen, MEMINFO_64G)
+                if total is None:
+                    self.assertEqual(rc, 0, err)
+                else:
+                    self.assertNotEqual(rc, 0)
+                    self.assertIn(f'slots need {total} GiB in total (heavy 3 x {memory}) but runners.slice allows 51 GiB', err)
+        self.config.write_text('GITHUB_ORG=example-org\nRUNNER_POOLS=heavy xl\nXL_SLOTS=0\nXL_LABELS=x\nXL_MEMORY=900g\n')
+        rc, _, err = self.host_check(self.config, ryzen, MEMINFO_128G)
+        self.assertEqual(rc, 0, 'a pool with no slots needs no memory: ' + err)
+        # 2^43 GiB is 2^63 KiB: unbounded digits would wrap the sum negative and pass.
+        for memory in ('8796093022208g', '1000000000k'):
+            with self.subTest(memory=memory):
+                self.config.write_text(f'GITHUB_ORG=example-org\nHEAVY_MEMORY={memory}\n')
+                rc, _, err = self.host_check(self.config, ryzen, MEMINFO_128G)
+                self.assertNotEqual(rc, 0)
+                self.assertIn('MEMORY must look like 40g (at most 9 digits)', err)
+
+    def test_host_check_needs_host_ram(self):
+        ryzen = fake_cpus(self.dir / 'ryzen', 12, 12)
+        for meminfo, message in (('MemFree: 1 kB\n', 'cannot read MemTotal'), ('MemTotal: 8000000 kB\n', 'host has 7 GiB')):
+            with self.subTest(meminfo=meminfo):
+                rc, _, err = self.host_check(self.config, ryzen, meminfo)
+                self.assertNotEqual(rc, 0)
+                self.assertIn(message, err)
+
+    def test_memory_cap(self):
+        for meminfo, cap in ((MEMINFO_128G, '116'), (MEMINFO_64G, '51'), ('MemTotal: 263800000 kB\n', '242')):
+            with self.subTest(cap=cap):
+                self.meminfo.write_text(meminfo)
+                rc, out, err = self.run_supervisor('--memory-cap')
+                self.assertEqual((rc, out), (0, cap + '\n'), err)
+        self.meminfo.write_text('MemFree: 1 kB\n')
+        rc, out, err = self.run_supervisor('--memory-cap')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('cannot read MemTotal', err)
+
 
 @unittest.skipUnless(HAVE_TOOLS, 'needs bash, jq and openssl')
 class Installer(Stubbed):
@@ -1205,6 +1018,9 @@ class Installer(Stubbed):
             write_exe(self.bin / name, SH_LOG_STUB)
         write_exe(self.bin / 'systemctl', SYSTEMCTL_STUB)
         write_exe(self.bin / 'id', '#!/bin/sh\necho 0\n')
+        write_exe(self.bin / 'ufw', UFW_STUB)
+        self.ufw_status = self.dir / 'ufw-status'
+        self.ufw_status.write_text(UFW_LOCKED)
         os_release = self.dir / 'os-release'
         os_release.write_text('ID=ubuntu\nVERSION_ID="24.04"\nVERSION_CODENAME=noble\n')
         responses = self.dir / 'responses.json'
@@ -1223,7 +1039,7 @@ class Installer(Stubbed):
         self.env.update(INSTALL_PREFIX=str(self.prefix), OS_RELEASE=str(os_release),
                         INSTALL_OWNER_UID=str(os.getuid()), RUNNERS_OWNER_UID=str(os.getuid()),
                         STUB_RESPONSES=str(responses), MEMINFO=str(self.meminfo),
-                        RUNNERS_SYSFS_CPU=str(self.sysfs),
+                        RUNNERS_SYSFS_CPU=str(self.sysfs), STUB_UFW_STATUS=str(self.ufw_status),
                         STUB_DOCKER_FAIL='network inspect')
         self.creds = self.prefix / 'etc/github-runners/credentials'
         self.env_file = self.prefix / 'etc/github-runners/runners.env'
@@ -1292,9 +1108,24 @@ class Installer(Stubbed):
         create = [a for a in docker if a[:2] == ['network', 'create']][0]
         self.assertIn('com.docker.network.bridge.enable_icc=false', create)
         self.assertIn('com.docker.network.bridge.name=gh-runners0', create)
-        self.assertTrue(any(a[0] == 'build' and 'intent-gh-runner:current' in a for a in docker))
+        [build] = [a for a in docker if a[0] == 'build']
+        self.assertNotIn('intent-gh-runner:current', build, 'current moves only after the image check')
+        tag = build[build.index('-t') + 1]
+        [check] = [i for i, a in enumerate(docker) if a[0] == 'run' and tag in a]
+        self.assertEqual(docker[check + 1], ['tag', tag, 'intent-gh-runner:current'])
         self.assertEqual(self.enabled(), [])
         self.assertIn('credential missing', result.stdout)
+
+    def test_a_failed_image_check_keeps_the_current_image(self):
+        self.place_credential()
+        result = self.install(STUB_RUN_RC='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('image check failed', result.stderr)
+        self.assertIn('slots keep the previous image', result.stderr)
+        docker = [c['argv'] for c in self.calls('docker')]
+        self.assertFalse([a for a in docker if a[0] == 'tag'], 'the unchecked image is never tagged current')
+        self.assertTrue([a for a in docker if a[0] == 'rmi'], 'the unchecked image is removed')
+        self.assertEqual(self.enabled(), [], 'no slot changes after a failed check')
 
     def test_slots_follow_credential_and_config(self):
         self.place_credential()
@@ -1428,8 +1259,23 @@ class Installer(Stubbed):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.enabled(), [f'github-runner@heavy-{n}.service' for n in (1, 2, 3)])
 
+    def test_four_heavy_layout_on_a_64g_epyc(self):
+        for unit in ('lib/systemd/system/caddy.service', 'etc/systemd/system/sccache-webdav.service'):
+            (self.prefix / unit).unlink()
+        self.meminfo.write_text(MEMINFO_64G)
+        fake_cpus(self.sysfs, 16, 16)
+        self.place_credential()
+        result = self.install('--no-build', '--config', str(EPYC_64G_4HEAVY))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.env_file.read_bytes(), EPYC_64G_4HEAVY.read_bytes())
+        self.assertEqual(self.enabled(), [f'github-runner@heavy-{n}.service' for n in (1, 2, 3, 4)])
+        self.assertIn('\nMemoryMax=51G\n', (self.prefix / 'etc/systemd/system/runners.slice.d/memory.conf').read_text())
+
     def test_slice_memory_follows_host_ram(self):
         units = self.prefix / 'etc/systemd/system'
+        # One 36g slot fits even the 53G cap, so --host-check passes at every size.
+        self.env_file.parent.mkdir(mode=0o700, parents=True)
+        self.env_file.write_text('HEAVY_SLOTS=1\n')
         for kb, cap in ((65_800_000, '53G'), (263_800_000, '242G'), (131_890_000, '116G')):
             with self.subTest(kb=kb):
                 self.meminfo.write_text(f'MemTotal: {kb} kB\n')
@@ -1453,9 +1299,221 @@ class Installer(Stubbed):
         self.log.write_text('')
         result = self.install('--no-build')
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("does not fit this host's CPUs", result.stderr)
+        self.assertIn("does not fit this host's CPUs or memory", result.stderr)
         self.assertEqual(self.enabled(), before)
         self.assertFalse(any(a[0] in ('disable', 'enable') and 'runner@' in a[-1] for a in self.systemctl()))
+
+    def test_config_that_does_not_fit_the_memory_changes_nothing(self):
+        for unit in ('lib/systemd/system/caddy.service', 'etc/systemd/system/sccache-webdav.service'):
+            (self.prefix / unit).unlink()
+        self.meminfo.write_text(MEMINFO_64G)
+        fake_cpus(self.sysfs, 16, 16)
+        self.place_credential()
+        self.assertEqual(self.install('--no-build', '--config', str(EPYC_64G_4HEAVY)).returncode, 0)
+        before = self.enabled()
+        self.assertEqual(before, [f'github-runner@heavy-{n}.service' for n in (1, 2, 3, 4)])
+        # intent-hq/intent#7865: the 4 x 13g layout first planned for intent-ci3.
+        self.env_file.write_text(EPYC_64G_4HEAVY.read_text().replace('HEAVY_MEMORY=12g', 'HEAVY_MEMORY=13g'))
+        self.log.write_text('')
+        result = self.install('--no-build')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('slots need 52 GiB in total (heavy 4 x 13g) but runners.slice allows 51 GiB', result.stderr)
+        self.assertIn("does not fit this host's CPUs or memory", result.stderr)
+        self.assertEqual(self.enabled(), before)
+        self.assertFalse(any(a[0] in ('disable', 'enable', 'start', 'stop') and 'runner@' in a[-1] for a in self.systemctl()))
+        self.assertIn('\nMemoryMax=51G\n', (self.prefix / 'etc/systemd/system/runners.slice.d/memory.conf').read_text())
+
+    def retire_host(self, units, busy=None, **env):
+        """An installed host: `units` {slot: ActiveState}, enabled unless
+        started by hand ('xl-1'). Returns the path of the unit-state file."""
+        wants = self.prefix / 'etc/systemd/system/multi-user.target.wants'
+        wants.mkdir(parents=True, exist_ok=True)
+        for slot in units:
+            if slot != 'xl-1':
+                (wants / f'github-runner@{slot}.service').symlink_to('/dev/null')
+        state = self.dir / 'units.json'
+        state.write_text(json.dumps({f'github-runner@{s}.service': st for s, st in units.items()}))
+        self.env.update(STUB_UNITS=str(state), RETIRE_POLL_SECONDS='0',
+                        STUB_BUSY=json.dumps({f'github-runner@{s}.service': n for s, n in (busy or {}).items()}))
+        self.env_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.env_file.write_text((HERE / 'hosts/intent-ci3.env').read_text())
+        return state
+
+    def test_retire_drains_every_slot_then_removes_the_credential_and_app_key(self):
+        # The intent-ci3 retirement (PR #8293): one slot still runs a job, one
+        # was started by hand, so it is not in the wants directory.
+        state = self.retire_host({'heavy-1': 'active', 'heavy-2': 'active', 'heavy-3': 'inactive', 'xl-1': 'active'},
+                                 busy={'heavy-2': 3})
+        key = self.prefix / 'etc/github-runners/app.pem'
+        key.write_text('-----BEGIN PRIVATE KEY-----\n')
+        self.place_credential()
+        self.creds.write_text('GITHUB_APP_ID=1\nGITHUB_APP_INSTALLATION_ID=2\n'
+                              'GITHUB_APP_PRIVATE_KEY_FILE=/etc/github-runners/app.pem\n')
+        result = self.install('--retire')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        slots = [f'github-runner@{s}.service' for s in ('heavy-1', 'heavy-2', 'heavy-3', 'xl-1')]
+        self.assertIn(['disable', '--now', '--no-block', *slots], self.systemctl(),
+                      'one non-blocking disable names every unit (systemctl does not expand globs)')
+        self.assertEqual(self.enabled(), [])
+        self.assertEqual(set(json.loads(state.read_text()).values()), {'inactive'})
+        self.assertIn('waiting for running slots to finish their job: github-runner@heavy-2.service (deactivating)',
+                      result.stdout)
+        self.assertFalse(self.creds.exists())
+        self.assertFalse(key.exists())
+        self.assertIn('deleted GitHub App key /etc/github-runners/app.pem', result.stdout)
+        self.assertIn('may merge now', result.stdout)
+        for step in ('select(.name | startswith("intent-ci3-"))', 'gh api -X DELETE orgs/intent-hq/actions/runners/<id>',
+                     'tailscale logout', 'Tailscale admin console', 'Cancel the server'):
+            self.assertIn(step, result.stdout)
+        self.assertFalse(self.calls('docker') + self.calls('apt-get') + self.calls('sysctl'),
+                         'retiring installs nothing')
+
+    def test_retire_keeps_the_credential_while_a_slot_drains(self):
+        self.retire_host({'heavy-1': 'active', 'heavy-2': 'active'}, busy={'heavy-1': 3})
+        self.place_credential()
+        result = self.install('--retire', RETIRE_TIMEOUT_SECONDS='0')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('github-runner@heavy-1.service (deactivating)', result.stderr)
+        self.assertNotIn('heavy-2', result.stderr)
+        self.assertIn('keeping the credential', result.stderr)
+        self.assertTrue(self.creds.exists(), 'a draining slot needs the credential to deregister')
+        self.assertNotIn('may merge now', result.stdout)
+        self.assertEqual(self.enabled(), [])
+
+        # Re-running resumes: the slot is disabled but still loaded.
+        result = self.install('--retire')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.creds.exists())
+        self.assertIn('may merge now', result.stdout)
+
+    def test_retire_keeps_the_credential_when_slot_states_are_unreadable(self):
+        # A failing systemctl must not read as "no slot running".
+        for fail in ('STUB_SHOW_FAIL', 'STUB_LIST_FAIL'):
+            with self.subTest(fail=fail):
+                self.retire_host({'heavy-1': 'active'}, busy={'heavy-1': 5})
+                self.place_credential()
+                result = self.install('--retire', **{fail: '1'})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('keeping the credential', result.stderr)
+                self.assertTrue(self.creds.exists())
+                self.assertNotIn('drained', result.stdout)
+                (self.dir / 'units.json.busy').unlink(missing_ok=True)
+
+    def test_retire_with_nothing_left(self):
+        # intent-ci3 had no firewall: retiring must not need the lockdown.
+        self.retire_host({})
+        self.ufw_status.write_text('Status: inactive\n')
+        result = self.install('--retire')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('no runner slots on this host', result.stdout)
+        self.assertIn('no credential at', result.stdout)
+        self.assertFalse([a for a in self.systemctl() if a[0] == 'disable'])
+
+    def test_retire_without_a_runner_config(self):
+        # The config may already be gone; the manual steps still print, with
+        # a placeholder rather than the intent-cache default prefix.
+        self.retire_host({})
+        self.env_file.unlink()
+        self.place_credential()
+        result = self.install('--retire')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.creds.exists())
+        self.assertIn('may merge now', result.stdout)
+        self.assertIn('startswith("<host>-")', result.stdout)
+        self.assertNotIn('intent-cache-', result.stdout)
+        self.assertIn('Cancel the server', result.stdout)
+    def assert_refused_untouched(self, result, message):
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn(message, result.stderr)
+        self.assertIn('--skip-lockdown-check', result.stderr, 'names the override')
+        self.assertEqual(self.calls(), [], 'nothing installed, no slot enabled')
+        self.assertFalse((self.prefix / 'usr/local/lib/github-runners').exists())
+        self.assertFalse((self.prefix / 'etc/systemd/system/github-runner@.service').exists())
+        self.assertEqual(self.enabled(), [])
+
+    def test_refuses_a_host_that_is_not_locked_down(self):
+        rules = UFW_LOCKED.split('--                         ------      ----\n')[0] + '--                         ------      ----\n'
+        tailnet = '22/tcp on tailscale0       ALLOW IN    Anywhere\n'
+        cases = {
+            # intent-ci3 (Nov 2026): no firewall at all, sshd on 0.0.0.0:22.
+            'ufw is not active': 'Status: inactive\n',
+            'ufw does not deny incoming traffic by default': UFW_LOCKED.replace('Default: deny (incoming)', 'Default: allow (incoming)'),
+            'no rule allowing SSH on tailscale0': rules + '80/tcp                     ALLOW IN    Anywhere\n',
+        }
+        public = {
+            'port': '22/tcp                     ALLOW IN    Anywhere',
+            'v6 port': '22/tcp (v6)                ALLOW IN    Anywhere (v6)',
+            'tcp and udp': '22                         ALLOW IN    Anywhere',
+            'app profile': 'OpenSSH                    ALLOW IN    Anywhere',
+            'rate limit': '22/tcp                     LIMIT IN    Anywhere',
+            'range': '20:30/tcp                  ALLOW IN    Anywhere',
+            'list': '80,22,443/tcp              ALLOW IN    Anywhere',
+            'every port from an address': 'Anywhere                   ALLOW IN    203.0.113.7',
+            'other interface': '22/tcp on eth0             ALLOW IN    Anywhere',
+            'to an address': '203.0.113.5 22/tcp         ALLOW IN    Anywhere',
+            'long interface name': 'Anywhere (v6) on enp1s0f0np0 ALLOW IN    Anywhere (v6)',
+            # PR #8304 review: a comment must not supply the action, a verbose
+            # profile annotation must not hide the port, and every-port TCP counts.
+            'comment with another action': '22/tcp                     ALLOW IN    Anywhere                   # was DENY IN',
+            'comment with an outbound action': '22/tcp                     ALLOW IN    Anywhere                   # not ALLOW OUT',
+            'profile annotation': '22/tcp (RemoteAdmin)       ALLOW IN    Anywhere',
+            'profile list annotation': '80,22/tcp (Admin Tools)    ALLOW IN    Anywhere',
+            'every tcp port': 'Anywhere/tcp               ALLOW IN    Anywhere/tcp',
+            'every tcp port v6': 'Anywhere/tcp (v6)          ALLOW IN    Anywhere/tcp (v6)',
+            'every tcp port to an address': '203.0.113.0/24/tcp         ALLOW IN    Anywhere',
+            'action without direction': '22/tcp                     ALLOW       Anywhere',
+        }
+        for name, rule in public.items():
+            cases[f'ufw allows SSH outside tailscale0: [{rule}]'] = rules + tailnet + rule + '\n'
+        for message, status in cases.items():
+            with self.subTest(message=message):
+                self.ufw_status.write_text(status)
+                self.place_credential()
+                self.log.write_text('')
+                result = self.install('--no-build')
+                self.assert_refused_untouched(result, message)
+        with self.subTest('ufw missing'):
+            if shutil.which('ufw', path='/usr/bin:/bin'):
+                self.skipTest('ufw installed in /usr/bin or /bin on this machine')
+            (self.bin / 'ufw').unlink()
+            result = self.install('--no-build', PATH=f'{self.bin}:/usr/bin:/bin')
+            self.assert_refused_untouched(result, 'ufw is not installed')
+            self.assertIn('apt-get install -y ufw', result.stderr)
+
+    def test_lockdown_ignores_rules_that_do_not_open_ssh(self):
+        rules = UFW_LOCKED + ''.join(r + '\n' for r in (
+            '22/udp                     ALLOW IN    Anywhere',
+            '22/tcp                     DENY IN     Anywhere',
+            '22/tcp                     ALLOW OUT   Anywhere',
+            '2200:2300/tcp              ALLOW IN    Anywhere',
+            'Nginx Full                 ALLOW IN    Anywhere',
+            'Anywhere on tailscale0     ALLOW IN    Anywhere',
+            'Anywhere (v6) on tailscale0 ALLOW IN    Anywhere (v6)',
+            'Anywhere/udp               ALLOW IN    Anywhere/udp',
+            'Anywhere/esp               ALLOW IN    Anywhere/esp',
+            '80/tcp (WWW)               ALLOW IN    Anywhere                   # not ssh: ALLOW IN',
+            '443/tcp                    DENY IN     Anywhere                   # was ALLOW IN',
+        ))
+        self.ufw_status.write_text(rules.replace('Default: deny (incoming)', 'Default: reject (incoming)'))
+        self.place_credential()
+        result = self.install('--no-build')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('lockdown: ufw active, incoming denied, SSH only on tailscale0', result.stdout)
+        self.assertEqual(len(self.enabled()), 3)
+
+    def test_skip_lockdown_check_installs_an_open_host(self):
+        self.ufw_status.write_text('Status: inactive\n')
+        self.place_credential()
+        result = self.install('--no-build')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.enabled(), [])
+        result = self.install('--no-build', '--skip-lockdown-check')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('WARNING: --skip-lockdown-check', result.stdout)
+        self.assertEqual(len(self.enabled()), 3)
+        (self.bin / 'ufw').unlink()
+        result = self.install('--no-build', '--skip-lockdown-check')
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_refuses_non_ubuntu_and_bad_args(self):
         other = self.dir / 'debian'
@@ -1464,7 +1522,7 @@ class Installer(Stubbed):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("expected Ubuntu, found 'debian'", result.stderr)
         self.assertEqual(self.calls(), [])
-        for args in (['--slots', '2'], ['--bogus'], ['--config']):
+        for args in (['--slots', '2'], ['--bogus'], ['--config'], ['--retire', '--no-build'], ['--no-build', '--retire']):
             with self.subTest(args=args):
                 self.assertEqual(self.install(*args).returncode, 2)
 
@@ -1499,9 +1557,142 @@ class Static(unittest.TestCase):
         self.assertRegex(text, r'FROM ubuntu:24\.04@sha256:[0-9a-f]{64}')
         self.assertRegex(text, r'ARG RUNNER_VERSION=\d+\.\d+\.\d+')
         self.assertRegex(text, r'ARG RUNNER_SHA256=[0-9a-f]{64}')
-        for tool in ('RUNNER', 'RUSTUP', 'GH', 'NODE', 'PWSH'):
+        for tool in ('RUNNER', 'RUSTUP', 'GH', 'NODE', 'PWSH', 'PYTHON_3_11', 'PYTHON_3_12'):
             self.assertRegex(text, rf'ARG {tool}_SHA256=[0-9a-f]{{64}}')
-        self.assertEqual(text.count('sha256sum -c'), 5)
+        self.assertEqual(text.count('sha256sum -c'), 8)
+
+    @staticmethod
+    def setup_action_versions(action, key, root=None):
+        # (workflow path, requested version or None) for every `uses: actions/<action>@` step
+        # in the monorepo and each checked-out component. In CI a missing intentd or
+        # cloudlands-fe .github fails, so a version only they request cannot slip past.
+        root = root or HERE.parents[1]
+        if os.environ.get('GITHUB_ACTIONS') == 'true':
+            missing = [c for c in ('intentd', 'cloudlands-fe')
+                       if not any((root / 'packages' / c / '.github/workflows').glob('*.y*ml'))]
+            assert not missing, f'check out the .github of packages/{", ".join(missing)} before this test'
+        workflows = [p for d in [root, *sorted((root / 'packages').glob('*'))]
+                     for p in sorted((d / '.github').rglob('*.y*ml')) if p.is_file()]
+        assert any(p.parent.name == 'workflows' and p.parents[2] == root for p in workflows)
+        for path in workflows:
+            for block in re.split(rf'uses: actions/{action}@', path.read_text())[1:]:
+                match = re.search(rf"{key}:\s*(\S+)", block.split('- ', 1)[0])
+                yield path, match.group(1).strip('\'"') if match else None
+
+    def test_setup_action_versions_requires_component_workflows_in_ci(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for d in (root, root / 'packages/intentd', root / 'packages/cloudlands-fe'):
+                (d / '.github/workflows').mkdir(parents=True)
+            (root / '.github/workflows/ci.yml').write_text('- uses: actions/setup-node@v7\n  with:\n    node-version: 24\n')
+            fe = root / 'packages/cloudlands-fe/.github/workflows/ci.yml'
+            fe.write_text('- uses: actions/setup-node@v7\n  with:\n    node-version: 26\n')
+            versions = lambda: sorted(v for _, v in self.setup_action_versions('setup-node', 'node-version', root))
+            with unittest.mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}):
+                with self.assertRaisesRegex(AssertionError, r'packages/intentd'):
+                    versions()
+                (root / 'packages/intentd/.github/workflows/ci.yml').write_text('on: push\n')
+                self.assertEqual(versions(), ['24', '26'])
+                fe.unlink()
+                with self.assertRaisesRegex(AssertionError, r'packages/cloudlands-fe'):
+                    versions()
+            with unittest.mock.patch.dict(os.environ, {'GITHUB_ACTIONS': ''}):
+                self.assertEqual(versions(), ['24'])
+
+    def test_image_bakes_every_setup_python_version(self):
+        # A job asking setup-python for a minor the tool cache lacks downloads it from a
+        # GitHub release; a 504 there failed cloudlands-fe run 42578945801.
+        text = (HERE / 'Dockerfile').read_text()
+        baked = {}
+        for minor in re.findall(r'^ARG PYTHON_(\d+_\d+)_VERSION=', text, re.M):
+            version = re.search(rf'^ARG PYTHON_{minor}_VERSION=(\S+)$', text, re.M).group(1)
+            self.assertTrue(version.startswith(minor.replace('_', '.') + '.'), version)
+            self.assertRegex(text, rf'(?m)^ARG PYTHON_{minor}_BUILD=\d+$')
+            self.assertIn(f'install_python "$PYTHON_{minor}_VERSION" "$PYTHON_{minor}_BUILD" "$PYTHON_{minor}_SHA256"', text)
+            baked[minor.replace('_', '.')] = version
+        wanted = set()
+        for path, version in self.setup_action_versions('setup-python', 'python-version'):
+            self.assertRegex(version or '', r'^\d+\.\d+$', f'{path}: setup-python without a literal minor')
+            wanted.add(version)
+        self.assertIn('3.11', wanted)
+        self.assertEqual(sorted(w for w in wanted if w not in baked), [], f'baked: {baked}')
+
+    def test_image_bakes_every_setup_node_version(self):
+        # setup-node takes a version from the tool cache before it downloads one.
+        text = (HERE / 'Dockerfile').read_text()
+        baked = [re.search(r'^ARG NODE_VERSION=(\S+)$', text, re.M).group(1)]
+        extra = re.search(r'^ARG NODE_TOOLCACHE="([^"]*)"$', text, re.M)
+        self.assertIsNotNone(extra, 'ARG NODE_TOOLCACHE="<version>=<sha256> ..."')
+        for entry in extra.group(1).split():
+            self.assertRegex(entry, r'^\d+\.\d+\.\d+=[0-9a-f]{64}$')
+            baked.append(entry.split('=')[0])
+        self.assertIn('/opt/hostedtoolcache/node/${NODE_VERSION}/x64', text)
+        wanted = set()
+        for path, version in self.setup_action_versions('setup-node', 'node-version'):
+            self.assertIsNotNone(version, f'{path}: setup-node without node-version')
+            if version.startswith('${{'):
+                continue  # a matrix value; intentd's only one, node: [22, 24], is also requested literally
+            self.assertRegex(version, r'^\d+(\.\d+){0,2}$', path)
+            wanted.add(version)
+        self.assertIn('24', wanted)
+        missing = sorted(w for w in wanted if not any(b == w or b.startswith(w + '.') for b in baked))
+        self.assertEqual(missing, [], f'baked: {baked}')
+
+    def test_image_bakes_the_cargo_tools_intentd_ci_installs(self):
+        # intentd's check and coverage jobs install these with taiki-e/install-action, which
+        # downloads on every run; its cargo-tools action skips that when the runner has them.
+        text = (HERE / 'Dockerfile').read_text()
+        self.assertRegex(text, r'rustup-init -y .*-c llvm-tools-preview')
+        for tool, repo in (('CARGO_NEXTEST', 'nextest-rs/nextest'), ('CARGO_LLVM_COV', 'taiki-e/cargo-llvm-cov'),
+                           ('CARGO_SHEAR', 'Boshen/cargo-shear')):
+            self.assertRegex(text, rf'(?m)^ARG {tool}_VERSION=\d+\.\d+\.\d+$')
+            self.assertRegex(text, rf'(?m)^ARG {tool}_SHA256=[0-9a-f]{{64}}$')
+            self.assertRegex(text, rf'install_cargo_tool {re.escape(repo)} [^;]*"\${tool}_SHA256"')
+        smoke = (HERE.parents[1] / '.github/workflows/intent-cache-smoke.yml').read_text()
+        for command in ('cargo nextest --version', 'cargo llvm-cov --version', 'cargo shear --version', 'llvm-tools'):
+            self.assertIn(command, smoke)
+
+    def test_image_fetches_github_releases_with_api_fallback(self):
+        # github.com/<repo>/releases/download answered 504 for hours for single
+        # assets (python 3.11.18, gh 2.102.0) while the API served them.
+        text = (HERE / 'Dockerfile').read_text()
+        self.assertNotRegex(text, r'github\.com/[^/\s]+/[^/\s]+/releases/download')
+        self.assertIn('COPY --chmod=0755 fetch-release.sh /usr/local/bin/fetch-release', text)
+        for repo in ('actions/runner', 'cli/cli', 'PowerShell/PowerShell', 'actions/python-versions'):
+            self.assertRegex(text, rf'fetch-release {re.escape(repo)} ')
+
+    def test_fetch_release_falls_back_to_the_api_asset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            log = tmp / 'curl.log'
+            curl = tmp / 'curl'
+            curl.write_text(f"""#!/usr/bin/env bash
+echo "$*" >> {log}
+out=""; while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift ;; esac; url="$1"; shift; done
+case "$url" in
+  https://github.com/*) exit 22 ;;
+  */releases/tags/v1) echo '{{"assets":[{{"name":"other","id":1}},{{"name":"tool.tgz","id":42}}]}}' ;;
+  */releases/assets/42) echo payload > "$out" ;;
+  *) exit 22 ;;
+esac
+""")
+            curl.chmod(0o755)
+            out = tmp / 'tool.tgz'
+            env = {**os.environ, 'PATH': f'{tmp}:{os.environ["PATH"]}'}
+            run = subprocess.run(['sh', str(HERE / 'fetch-release.sh'), 'o/r', 'v1', 'tool.tgz', str(out)],
+                                 env=env, capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(out.read_text(), 'payload\n')
+            calls = log.read_text().splitlines()
+            self.assertIn('https://github.com/o/r/releases/download/v1/tool.tgz', calls[0])
+            self.assertIn('Accept: application/octet-stream', calls[-1])
+            self.assertTrue(calls[-1].endswith('https://api.github.com/repos/o/r/releases/assets/42'), calls[-1])
+
+            log.write_text('')
+            run = subprocess.run(['sh', str(HERE / 'fetch-release.sh'), 'o/r', 'v1', 'missing.tgz', str(out)],
+                                 env=env, capture_output=True, text=True)
+            self.assertNotEqual(run.returncode, 0)
+            self.assertNotIn('releases/assets/', log.read_text())
 
     def test_paths_match_hosted_runners(self):
         text = (HERE / 'Dockerfile').read_text()
@@ -1515,32 +1706,277 @@ class Static(unittest.TestCase):
         text = (HERE.parents[1] / '.github/workflows/intent-cache-smoke.yml').read_text()
         self.assertIn('[ "$(ulimit -c)" = 0 ]', text)
         self.assertIn('apt-get install -s', text)
+        self.assertIn('Python/$minor.*/x64.complete', text)
+        self.assertIn('node/$spec.*/x64.complete', text)
 
-    def test_smoke_limits_cover_every_host_config(self):
-        text = (HERE.parents[1] / '.github/workflows/intent-cache-smoke.yml').read_text()
-        rows = re.findall(r'- \{label: ([\w-]+), cpus: (\d+), memory_min: (\d+), memory_max: (\d+)\}', text)
-        smoke = {label: (int(c), int(lo), int(hi)) for label, c, lo, hi in rows}
-        self.assertEqual(set(smoke), {'intent-cache', 'intent-cache-xl'})
-        units = {'k': 2 ** 10, 'm': 2 ** 20, 'g': 2 ** 30}
-        seen = {}
+    def test_bigmem_label_marks_exactly_the_heavy_slots_with_30_gib(self):
+        # runner-route sends gh-linux-16x overflow only to intent-cache-bigmem slots:
+        # one rustc in intentd's check passed 12 GB and was OOM-killed on the retired 64 GB intent-ci3.
+        # One floor: supervisor.sh --plan refuses less, on live hosts as well as here.
+        self.assertIn(f'bigmem_min_kib=$(({BIGMEM_MIN // 2 ** 30} * 1048576))', (HERE / 'supervisor.sh').read_text())
         for path in [HERE / 'runners.env', *sorted(HOSTS.glob('*.env'))]:
             env = read_env(path)
             for pool in env['RUNNER_POOLS'].split():
                 p = pool.upper()
                 with self.subTest(config=path.name, pool=pool):
-                    label = env[f'{p}_LABELS'].split(',')[-1]
-                    cpus, lo, hi = smoke[label]
-                    memory = int(env[f'{p}_MEMORY'][:-1]) * units[env[f'{p}_MEMORY'][-1]]
-                    self.assertTrue(lo <= memory <= hi, f'{label}: {memory} outside {lo}..{hi}')
-                    seen.setdefault(label, []).append(memory)
-                    for entry in env[f'{p}_CPUSETS'].split()[:int(env[f'{p}_SLOTS'])]:
-                        self.assertEqual(len(expand(entry)), cpus)
-        for label, sizes in seen.items():
-            self.assertEqual(smoke[label][1:], (min(sizes), max(sizes)),
-                             f'{label}: the smoke range should match the committed configs exactly, so a stale bound fails')
-        xl = text.split('  isolation-xl:')[1].split('\n  fresh:')[0]
-        self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.xl", xl,
+                    labels = env[f'{p}_LABELS'].split(',')
+                    big = pool == 'heavy' and memory_bytes(env[f'{p}_MEMORY']) >= BIGMEM_MIN
+                    self.assertEqual('intent-cache-bigmem' in labels, big, f'{env[f"{p}_MEMORY"]} per slot')
+                    if big:
+                        self.assertEqual(labels[-2:], ['intent-cache', 'intent-cache-bigmem'])
+
+    def smoke_plan(self, *args):
+        result = subprocess.run([sys.executable, '-S', '-B', str(HERE / 'smoke_plan.py'), *args],
+                                capture_output=True, text=True)
+        outputs = dict(line.split('=', 1) for line in result.stdout.splitlines())
+        return result.returncode, {k: v if k == 'host' or not v else json.loads(v) for k, v in outputs.items()}, result.stderr
+
+    def test_smoke_default_limits_cover_every_host_config(self):
+        # Without a host, each pool's range is exactly the span of every
+        # committed config's slots, computed from the files, so it can never
+        # go stale; CPU counts are per pool. Layout templates (file name not
+        # their RUNNER_NAME_PREFIX) are not hosts and do not count.
+        units = {'k': 2 ** 10, 'm': 2 ** 20, 'g': 2 ** 30}
+        seen = {}
+        for path in [HERE / 'runners.env', *sorted(HOSTS.glob('*.env'))]:
+            env = read_env(path)
+            if path.name != 'runners.env' and path.stem != env['RUNNER_NAME_PREFIX']:
+                continue
+            for pool in env['RUNNER_POOLS'].split():
+                p = pool.upper()
+                memory = int(env[f'{p}_MEMORY'][:-1]) * units[env[f'{p}_MEMORY'][-1]]
+                for entry in env[f'{p}_CPUSETS'].split()[:int(env[f'{p}_SLOTS'])]:
+                    # Keyed by the pool's own label; extra labels (intent-cache-bigmem) may follow it.
+                    label = {'heavy': 'intent-cache', 'xl': 'intent-cache-xl'}[pool]
+                    self.assertIn(label, env[f'{p}_LABELS'].split(','))
+                    seen.setdefault(label, []).append((len(expand(entry)), memory))
+        self.assertEqual(set(seen), {'intent-cache', 'intent-cache-xl'})
+        rc, out, err = self.smoke_plan('--xl', 'true')
+        self.assertEqual(rc, 0, err)
+        legs = out['isolation']['include'] + out['isolation_xl']['include']
+        self.assertEqual(len(legs), 2)
+        for leg in legs:
+            with self.subTest(label=leg['label']):
+                sizes = seen[leg['label']]
+                self.assertEqual({c for c, _ in sizes}, {leg['cpus']})
+                self.assertEqual((leg['memory_min'], leg['memory_max']), (min(m for _, m in sizes), max(m for _, m in sizes)))
+                self.assertEqual(leg['runs_on'], ['self-hosted', leg['label']], 'any host with a free slot')
+        self.assertEqual(out['heavy'], ['self-hosted', 'intent-cache'])
+        self.assertEqual(out['readers'], ['1', '2', '3'])
+        self.assertEqual(out['host'], '')
+        rc, out, err = self.smoke_plan()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out['isolation_xl'], '', 'the xl pool is checked only on request')
+
+    def test_smoke_host_checks_that_hosts_own_config(self):
+        # With a host, every leg targets intent-host-<host> (supervisor.sh
+        # registers it), one leg per slot, and the limits are that host's exactly.
+        gib = 2 ** 30
+        expected = {'intent-cache': (3, 36, 0), **{path.stem: (2, 30, 1) for path in CI_HOSTS}}
+        for host, (heavy, heavy_gib, xl) in expected.items():
+            with self.subTest(host=host):
+                rc, out, err = self.smoke_plan('--host', host)
+                self.assertEqual(rc, 0, err)
+                self.assertEqual(out['host'], host)
+                label = f'intent-host-{host}'
+                legs = out['isolation']['include']
+                self.assertEqual(len(legs), heavy, 'one isolation leg per heavy slot')
+                for leg in legs:
+                    self.assertEqual((leg['cpus'], leg['memory_min'], leg['memory_max']), (8, heavy_gib * gib, heavy_gib * gib))
+                    self.assertEqual(leg['runs_on'], ['self-hosted', 'intent-cache', label])
+                self.assertEqual(out['heavy'], ['self-hosted', 'intent-cache', label])
+                self.assertEqual(out['readers'], [str(n) for n in range(1, heavy + 1)], 'every heavy slot busy at once')
+                if xl:
+                    (leg,) = out['isolation_xl']['include']
+                    self.assertEqual((leg['cpus'], leg['memory_min'], leg['memory_max']), (16, 52 * gib, 52 * gib))
+                    self.assertEqual(leg['runs_on'], ['self-hosted', 'intent-cache-xl', label])
+                else:
+                    self.assertEqual(out['isolation_xl'], '')
+        # Every committed host is reachable by name; the layout template is not a host.
+        names = {read_env(p).get('RUNNER_NAME_PREFIX', 'intent-cache') for p in [HERE / 'runners.env', *HOSTS.glob('*.env')]
+                 if p.name == 'runners.env' or p.stem == read_env(p)['RUNNER_NAME_PREFIX']}
+        self.assertEqual(names, set(expected))
+        for host in ('intent-ci9', read_env(EPYC_3HEAVY)['RUNNER_NAME_PREFIX'],
+                     read_env(EPYC_64G_4HEAVY)['RUNNER_NAME_PREFIX'], 'intent-ci1; rm -rf /'):
+            with self.subTest(host=host):
+                rc, out, err = self.smoke_plan('--host', host)
+                self.assertNotEqual(rc, 0)
+                self.assertIn(f"unknown runner host '{host}'", err)
+                self.assertIn('intent-ci1', err)
+                self.assertEqual(out, {})
+
+    def smoke_plan_in(self, files, *args):
+        # The plan against a scratch config tree: runners.env plus hosts/.
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        (root / 'hosts').mkdir()
+        shutil.copy(HERE / 'smoke_plan.py', root)
+        shutil.copy(HERE / 'runners.env', root)
+        for name, text in files.items():
+            (root / 'hosts' / name).write_text(text)
+        result = subprocess.run([sys.executable, '-S', '-B', str(root / 'smoke_plan.py'), *args],
+                                capture_output=True, text=True)
+        outputs = dict(line.split('=', 1) for line in result.stdout.splitlines())
+        return result.returncode, {k: v if k == 'host' or not v else json.loads(v) for k, v in outputs.items()}, result.stderr
+
+    def test_smoke_plan_edge_cases(self):
+        ci1 = INTENT_CI1.read_text()
+        gib = 2 ** 30
+        # A layout template is not a host: it neither widens nor breaks the fleet range.
+        rc, out, err = self.smoke_plan_in({'intent-ci1.env': ci1, 'template.env': ci1.replace(
+            'RUNNER_NAME_PREFIX=intent-ci1', 'RUNNER_NAME_PREFIX=intent-runner-9').replace(
+            'HEAVY_MEMORY=30g', 'HEAVY_MEMORY=64g').replace('HEAVY_CPUSETS=8-11,24-27 12-15,28-31', 'HEAVY_CPUSETS=8-11 12-15')})
+        self.assertEqual(rc, 0, err)
+        (leg,) = out['isolation']['include']
+        self.assertEqual((leg['cpus'], leg['memory_min'], leg['memory_max']), (8, 30 * gib, 36 * gib))
+        # A drained pool (SLOTS=0) gets no legs instead of an empty matrix.
+        rc, out, err = self.smoke_plan_in({'intent-ci1.env': ci1.replace('XL_SLOTS=1', 'XL_SLOTS=0')}, '--host', 'intent-ci1')
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out['isolation_xl'], '')
+        rc, out, err = self.smoke_plan_in({'intent-ci1.env': ci1.replace('XL_SLOTS=1', 'XL_SLOTS=0'),
+                                           'intent-ci2.env': ci1.replace('intent-ci1', 'intent-ci2')}, '--xl', 'true')
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out['isolation_xl']['include'][0]['memory_min'], 52 * gib, 'other xl hosts still count')
+        rc, out, err = self.smoke_plan_in({'intent-ci1.env': ci1.replace('XL_SLOTS=1', 'XL_SLOTS=0')}, '--xl', 'true')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('no committed host has a xl slot', err)
+        rc, out, err = self.smoke_plan_in({'intent-ci1.env': ci1.replace('HEAVY_SLOTS=2', 'HEAVY_SLOTS=0')}, '--host', 'intent-ci1')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('intent-ci1 has no heavy slot', err)
+        # Asking for xl on a host without an xl slot is an error, not a silent skip.
+        rc, out, err = self.smoke_plan('--host', 'intent-cache', '--xl', 'true')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('intent-cache has no xl slot', err)
+        rc, out, err = self.smoke_plan('--host', 'intent-ci1', '--xl', 'true')
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(len(out['isolation_xl']['include']), 1)
+
+    def fleet_slots_in(self, files, *args, gh_rc=0, path=None):
+        # fleet_slots.py against a scratch config tree, with a gh stub that logs its calls.
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        (root / 'hosts').mkdir()
+        (root / 'bin').mkdir()
+        for name in ('fleet_slots.py', 'smoke_plan.py', 'runners.env'):
+            shutil.copy(HERE / name, root)
+        for name, text in files.items():
+            (root / 'hosts' / name).write_text(text)
+        write_exe(root / 'bin' / 'gh', LOG_STUB + f'sys.exit({gh_rc})\n')
+        log = root / 'gh.jsonl'
+        log.touch()
+        env = {**os.environ, 'PATH': path or f'{root / "bin"}:{os.environ["PATH"]}', 'STUB_LOG': str(log)}
+        result = subprocess.run([sys.executable, '-S', '-B', str(root / 'fleet_slots.py'), *args],
+                                capture_output=True, text=True, env=env)
+        calls = [json.loads(line)['argv'] for line in log.read_text().splitlines()]
+        return result.returncode, result.stdout, result.stderr, calls
+
+    def test_fleet_slots_totals_each_pool(self):
+        # runners.env (3 bigmem heavy) + intent-ci1 (1 xl, 2 bigmem heavy) + a 64 GB
+        # host (4 heavy, too small for bigmem); a layout template is not a host.
+        ci1 = INTENT_CI1.read_text()
+        small = EPYC_64G_4HEAVY.read_text().replace(
+            f"RUNNER_NAME_PREFIX={read_env(EPYC_64G_4HEAVY)['RUNNER_NAME_PREFIX']}", 'RUNNER_NAME_PREFIX=intent-ci9')
+        template = ci1.replace('RUNNER_NAME_PREFIX=intent-ci1', 'RUNNER_NAME_PREFIX=intent-runner-9')
+        files = {'intent-ci1.env': ci1, 'intent-ci9.env': small, 'template.env': template}
+        for args, totals in (((), 'heavy=9\nbigmem=5\nxl=1\n'),
+                             (('--without', 'intent-ci1'), 'heavy=7\nbigmem=3\nxl=0\n'),
+                             (('--without', 'intent-ci9'), 'heavy=5\nbigmem=5\nxl=1\n')):
+            with self.subTest(args=args):
+                rc, out, err, calls = self.fleet_slots_in(files, *args)
+                self.assertEqual((rc, out, calls), (0, totals, []), err)
+        rc, out, err, _ = self.fleet_slots_in({'intent-ci1.env': ci1.replace('XL_SLOTS=1', 'XL_SLOTS=0')})
+        self.assertEqual((rc, out), (0, 'heavy=5\nbigmem=5\nxl=0\n'), 'a drained pool counts no slot')
+        rc, out, err, _ = self.fleet_slots_in(files, '--without', 'intent-ci1', '--without', 'intent-ci1')
+        self.assertEqual((rc, out), (0, 'heavy=7\nbigmem=3\nxl=0\n'), err)
+        # supervisor.sh's HEAVY_LABELS default (pinned to runners.env's) carries intent-cache-bigmem.
+        rc, out, err, _ = self.fleet_slots_in({'intent-ci1.env': ci1.replace(read_env(INTENT_CI1)['HEAVY_LABELS'], '')
+                                               .replace('HEAVY_LABELS=\n', '')})
+        self.assertEqual((rc, out), (0, 'heavy=5\nbigmem=5\nxl=1\n'), err)
+        for host in ('intent-runner-9', 'intent-ci2'):
+            with self.subTest(without=host):
+                rc, out, err, _ = self.fleet_slots_in(files, '--without', host)
+                self.assertNotEqual(rc, 0)
+                self.assertIn(f"unknown runner host '{host}'", err)
+                self.assertIn('intent-cache, intent-ci1, intent-ci9', err)
+                self.assertEqual(out, '')
+
+    def test_fleet_slots_apply_sets_every_repository(self):
+        # runners.env names the org and the repositories that route to the fleet.
+        env = read_env(HERE / 'runners.env')
+        rc, out, err, calls = self.fleet_slots_in({'intent-ci1.env': INTENT_CI1.read_text()}, '--apply')
+        self.assertEqual(rc, 0, err)
+        self.assertTrue(out.startswith('heavy=5\nbigmem=5\nxl=1\n'), out)
+        expected = [['variable', 'set', name, '--repo', f"{env['GITHUB_ORG']}/{repo}", '--body', value]
+                    for repo in env['RUNNER_GROUP_REPOS'].split(',')
+                    for name, value in (('CI_LINUX_HEAVY_SLOTS', '5'), ('CI_LINUX_BIGMEM_SLOTS', '5'),
+                                        ('CI_LINUX_XL_SLOTS', '1'))]
+        self.assertEqual(calls, expected)
+        self.assertEqual(len(calls), 9)
+        for call in calls:
+            self.assertIn(f'{call[4]} {call[2]}={call[6]}', out)
+        rc, out, err, calls = self.fleet_slots_in({'intent-ci1.env': INTENT_CI1.read_text()}, '--apply', gh_rc=1)
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(len(calls), 1, 'the first gh failure stops the run')
+        self.assertIn('gh variable set CI_LINUX_HEAVY_SLOTS', err)
+        self.assertIn('rerun', err, 'the error says how to finish a partial apply')
+        rc, out, err, _ = self.fleet_slots_in({}, '--apply', path='/nonexistent')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('gh not found', err)
+        self.assertNotIn('Traceback', err)
+
+    def test_fleet_slots_reads_the_committed_fleet(self):
+        rc, out, err, _ = self.fleet_slots_in({p.name: p.read_text() for p in HOSTS.glob('*.env')})
+        self.assertEqual(rc, 0, err)
+        # intent-cache's bigmem heavy slots plus each intent-ci twin's xl and two bigmem heavy slots;
+        # the layout templates are not hosts.
+        cache = int(read_env(HERE / 'runners.env')['HEAVY_SLOTS'])
+        n = len(CI_HOSTS)
+        self.assertEqual(out, f'heavy={cache + 2 * n}\nbigmem={cache + 2 * n}\nxl={n}\n')
+
+    def test_smoke_jobs_follow_the_plan(self):
+        text = (HERE.parents[1] / '.github/workflows/intent-cache-smoke.yml').read_text()
+        jobs = dict(re.findall(r'\n  ([\w-]+):\n(.*?)(?=\n  [\w-]+:\n|\Z)', '\n' + text.split('\njobs:\n', 1)[1], re.S))
+        self.assertEqual(set(jobs), {'plan', 'isolation', 'isolation-xl', 'fresh', 'cache-writer', 'cache-reader'})
+        self.assertIn('      host:\n', text.split('\njobs:')[0], 'the dispatch takes an optional host')
+        self.assertIn("if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository",
+                      jobs['plan'], 'never run pull-request code from forks on the self-hosted box')
+        self.assertIn('smoke_plan.py --host "$HOST"', jobs['plan'])
+        # No self-hosted job hard-codes its labels: all of them follow the plan,
+        # so a host input reaches every one, and every one waits for the plan.
+        self.assertNotIn('runs-on: [self-hosted', text)
+        self.assertIn('runs-on: ${{ matrix.runs_on }}', jobs['isolation'])
+        self.assertIn('matrix: ${{ fromJSON(needs.plan.outputs.isolation) }}', jobs['isolation'])
+        self.assertIn('matrix: ${{ fromJSON(needs.plan.outputs.isolation_xl) }}', jobs['isolation-xl'])
+        self.assertIn("if: needs.plan.outputs.isolation_xl != ''", jobs['isolation-xl'],
                       'the xl check runs only on request: with no xl runner online it would wait in the queue')
+        for job in ('fresh', 'cache-reader'):
+            self.assertIn('runs-on: ${{ fromJSON(needs.plan.outputs.heavy) }}', jobs[job])
+        self.assertIn('slot: ${{ fromJSON(needs.plan.outputs.readers) }}', jobs['cache-reader'])
+        guard = "if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository"
+        for name, job in jobs.items():
+            with self.subTest(job=name):
+                if name in ('plan', 'cache-writer'):
+                    # The hosted writer starts at once, without waiting for the plan.
+                    self.assertIn(guard, job)
+                    self.assertNotIn('needs:', job)
+                    self.assertNotIn('SMOKE_HOST:', job)
+                else:
+                    # Every self-hosted job waits for the plan and knows the host.
+                    self.assertRegex(job, r'needs: (plan|\[plan, [\w-]+\])\n')
+                    self.assertIn('      SMOKE_HOST: ${{ needs.plan.outputs.host }}\n', job)
+        # Each self-hosted job proves it ran on the requested host, comparing
+        # the host as a literal prefix of the runner name.
+        check = jobs['isolation'].split('run: &host-check |', 1)[1].split('\n      - ', 1)[0]
+        self.assertIn('slot="${RUNNER_NAME#"$SMOKE_HOST"-}"', check)
+        self.assertNotIn('=~ ^${', check)
+        self.assertIn("if: env.SMOKE_HOST != ''\n        run: *host-check", jobs['fresh'])
+        self.assertIn("if: env.SMOKE_HOST != ''\n        run: *host-check", jobs['cache-writer'])
+        self.assertIn('steps: *cache-build', jobs['cache-reader'])
+        self.assertIn('steps: *isolation-steps', jobs['isolation-xl'])
+        # A host whose label no online runner carries fails in the plan instead
+        # of leaving every job queued.
+        self.assertIn('select(.status == "online")', jobs['plan'])
+        self.assertIn('LABEL: intent-host-${{ steps.plan.outputs.host }}', jobs['plan'])
 
     def test_docker_dns_is_public_and_not_filtered(self):
         # Docker's embedded DNS forwards to these instead of the host's single
@@ -1565,8 +2001,10 @@ class Static(unittest.TestCase):
     def test_image_has_tools_routed_jobs_call_without_setup(self):
         text = (HERE / 'Dockerfile').read_text()
         packages = text.split('apt-get install -y --no-install-recommends')[1].split('&&')[0].split()
-        for package in ('bison', 'build-essential', 'git', 'iproute2', 'jq', 'lsof', 'procps', 'python3-pip', 'python3-venv',
-                        'rsync', 'shellcheck', 'unzip', 'xz-utils', 'zip', 'zstd'):
+        # gcc-mingw-w64-x86-64: intentd's windows-cross-lint (Clippy for
+        # x86_64-pc-windows-gnu) needs the target C compiler and cannot apt-get.
+        for package in ('bison', 'build-essential', 'gcc-mingw-w64-x86-64', 'git', 'iproute2', 'jq', 'lsof', 'procps',
+                        'python3-pip', 'python3-venv', 'rsync', 'shellcheck', 'unzip', 'xz-utils', 'zip', 'zstd'):
             self.assertIn(package, packages)
         for tool in ('GH', 'NODE', 'PWSH'):
             self.assertIn(f'ARG {tool}_VERSION=', text)
@@ -1608,7 +2046,7 @@ class Static(unittest.TestCase):
 
     @staticmethod
     def slice_cap(host_gib):
-        reserve = int(re.search(r'^slice_reserve_gib=(\d+)$', INSTALL.read_text(), re.M)[1])
+        reserve = int(re.search(r'^slice_reserve_gib=(\d+)$', SUPERVISOR.read_text(), re.M)[1])
         return host_gib - reserve
 
     def test_default_pools_fit_the_box(self):
@@ -1640,9 +2078,12 @@ class Static(unittest.TestCase):
         self.assertGreaterEqual(self.slice_cap(125), memory)
 
     def test_host_configs_fit_an_epyc_4545p(self):
-        # 16 cores / 32 threads (CPU n and n+16 share a core), 128 GB (125 GiB).
+        # 16 cores / 32 threads (CPU n and n+16 share a core), 128 GB (125 GiB);
+        # the four-heavy layout is for a 64 GB box (60 GiB).
         configs = sorted(HOSTS.glob('*.env'))
-        self.assertEqual(configs, sorted([INTENT_CI1, EPYC_3HEAVY]))
+        # Host RAM in GiB and, for hosts that pin every core, the slots' total memory.
+        hosts = {**{path: (125, 52 + 2 * 30) for path in CI_HOSTS}, EPYC_3HEAVY: (125, None), EPYC_64G_4HEAVY: (60, 4 * 12)}
+        self.assertEqual(configs, sorted(hosts))
         shape = {'xl': (16, 'intent-cache-xl'), 'heavy': (8, 'intent-cache')}
         for path in configs:
             with self.subTest(config=path.name):
@@ -1653,7 +2094,7 @@ class Static(unittest.TestCase):
                 for pool in env['RUNNER_POOLS'].split():
                     p = pool.upper()
                     cpus_per_slot, label = shape[pool]
-                    self.assertEqual(env[f'{p}_LABELS'], f'self-hosted,linux,x64,{label}')
+                    self.assertIn(env[f'{p}_LABELS'], {f'self-hosted,linux,x64,{label}', f'self-hosted,linux,x64,{label},intent-cache-bigmem'})
                     for entry in env[f'{p}_CPUSETS'].split()[:int(env[f'{p}_SLOTS'])]:
                         cpu_set = set(expand(entry))
                         self.assertEqual(len(cpu_set), cpus_per_slot, entry)
@@ -1665,20 +2106,317 @@ class Static(unittest.TestCase):
                     memory += int(env[f'{p}_SLOTS']) * int(env[f'{p}_MEMORY'].rstrip('g'))
                 self.assertEqual(len(cpus), len(set(cpus)), 'slots must not share CPUs')
                 self.assertTrue(all(c < 32 for c in cpus))
-                if path == INTENT_CI1:
-                    self.assertEqual(sorted(cpus), list(range(32)), 'intent-ci1 pins every core')
-                    self.assertEqual(memory, 52 + 2 * 30)
-                    self.assertGreaterEqual(125 - memory, 10, 'leave about 10 GB for the system and Docker')
+                gib, total = hosts[path]
+                if total is not None:
+                    self.assertEqual(sorted(cpus), list(range(32)), f'{path.stem} pins every core')
+                    self.assertEqual(memory, total)
+                    self.assertGreaterEqual(gib - memory, 10, 'leave about 10 GB for the system and Docker')
                 else:
                     self.assertEqual(set(range(12, 16)) & {c % 16 for c in cpus}, set(), 'cores 12-15 stay unpinned')
-                self.assertLessEqual(memory, self.slice_cap(125))
+                self.assertLessEqual(memory, self.slice_cap(gib))
         ci1 = read_env(INTENT_CI1)
         self.assertEqual((ci1['RUNNER_NAME_PREFIX'], ci1['RUNNER_POOLS'], ci1['XL_SLOTS'], ci1['HEAVY_SLOTS']),
                          ('intent-ci1', 'xl heavy', '1', '2'))
         self.assertEqual(ci1['HEAVY_CPUSETS'].split(), ['8-11,24-27', '12-15,28-31'],
                          'one heavy slot per half of CCD 1, both SMT siblings of each core')
         self.assertEqual(read_env(EPYC_3HEAVY)['HEAVY_SLOTS'], '3')
+        small = read_env(EPYC_64G_4HEAVY)
+        self.assertEqual((small['RUNNER_POOLS'], small['HEAVY_SLOTS'], small['HEAVY_MEMORY']), ('heavy', '4', '12g'))
+        self.assertNotIn('XL_SLOTS', small, 'the 64 GB layout has no xl slot')
+
+    def test_twin_hosts_match_but_their_name(self):
+        # Every hosts/intent-ci*.env is a copy of intent-ci1: same hardware,
+        # same slots; only the runner name prefix (and the host name in
+        # comments) differs. A host with another layout needs another file name.
+        self.assertIn(INTENT_CI1, CI_HOSTS)
+        for twin, twin_name in ((path, path.stem) for path in TWINS):
+            with self.subTest(twin=twin_name):
+                self.assertEqual(read_env(twin)['RUNNER_NAME_PREFIX'], twin_name)
+                self.assertEqual(twin.read_text().replace(twin_name, 'intent-ci1'), INTENT_CI1.read_text())
+        prefixes = [read_env(path).get('RUNNER_NAME_PREFIX', 'intent-cache')
+                    for path in [HERE / 'runners.env', *sorted(HOSTS.glob('*.env'))]]
+        self.assertEqual(len(prefixes), len(set(prefixes)), 'every host has its own name prefix')
+
+# ssh: logs the destination, options and remote command (and, for a piped tar
+# stream, its member names); STUB_SSH_FAIL="HOST:TEXT" fails the call to HOST
+# whose command contains TEXT, as a host error or an SSH timeout would.
+SSH_STUB = r'''#!/usr/bin/env -S python3 -I
+import io, json, os, sys, tarfile
+args, opts, dest = sys.argv[1:], [], None
+while args and args[0].startswith('-'):
+    opts.append(args.pop(0))
+    if opts[-1] == '-o': opts.append(args.pop(0))
+dest = args.pop(0)
+command = ' '.join(args)
+members = None
+if 'tar -x' in command:
+    members = tarfile.open(fileobj=io.BytesIO(sys.stdin.buffer.read())).getnames()
+with open(os.environ['STUB_LOG'], 'a') as f:
+    f.write(json.dumps({'cmd': 'ssh', 'dest': dest, 'opts': opts, 'command': command, 'members': members}) + '\n')
+host, _, text = os.environ.get('STUB_SSH_FAIL', '').partition(':')
+if dest.endswith('@' + host) and text in command: sys.exit(255)
+'''
+
+# docker for --restart-idle and --check-image: containers from STUB_CONTAINERS
+# ({name: {"image": id, "logs": text}}), intent-gh-runner:current is image "new".
+ROLLOUT_DOCKER_STUB = r'''#!/usr/bin/env -S python3 -I
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ['STUB_LOG'], 'a') as f:
+    f.write(json.dumps({'cmd': 'docker', 'argv': args}) + '\n')
+containers = json.load(open(os.environ['STUB_CONTAINERS'])) if os.environ.get('STUB_CONTAINERS') else {}
+if args[0] == 'ps':
+    if os.environ.get('STUB_PS_FAIL'): sys.exit(1)
+    print('\n'.join(containers))
+elif args[:2] == ['image', 'inspect']:
+    if os.environ.get('STUB_NO_IMAGE'): sys.exit(1)
+    print('sha256:new')
+elif args[0] == 'inspect':
+    print(containers[args[-1]]['image'])
+elif args[0] == 'logs':
+    print(containers[args[-1]]['logs'])
+elif args[0] == 'run':
+    sys.exit(int(os.environ.get('STUB_RUN_RC', '0')))
+'''
+
+
+class Rollout(Stubbed):
+    def setUp(self):
+        super().setUp()
+        write_exe(self.bin / 'ssh', SSH_STUB)
+        write_exe(self.bin / 'docker', ROLLOUT_DOCKER_STUB)
+        write_exe(self.bin / 'systemctl', LOG_STUB)
+        self.fleet = ['intent-cache'] + [p.stem for p in sorted(HOSTS.glob('*.env'))
+                                         if read_env(p).get('RUNNER_NAME_PREFIX') == p.stem]
+
+    def rollout(self, *args, bash='bash', **env):
+        result = subprocess.run([bash, str(HERE / 'rollout.sh'), *args], capture_output=True, text=True,
+                                stdin=subprocess.DEVNULL, env={**self.env, **env})
+        return result.returncode, result.stdout, result.stderr
+
+    def steps(self):
+        out = []
+        for call in self.calls('ssh'):
+            self.assertIn('ConnectionAttempts=3', call['opts'], 'every ssh retries the connection')
+            host = call['dest'].removeprefix('root@')
+            if call['members'] is not None:
+                self.assertIn('runners/install.sh', call['members'])
+                self.assertIn('runners/rollout.sh', call['members'])
+                self.assertIn('runners/check-image.sh', call['members'])
+                self.assertFalse(any('__pycache__' in m for m in call['members']))
+                out.append((host, 'copy'))
+            elif '--restart-idle' in call['command']:
+                out.append((host, 'restart'))
+            else:
+                config = f' --config /root/infra/runners/hosts/{host}.env' if host != 'intent-cache' else ''
+                self.assertEqual(call['command'], '/root/infra/runners/install.sh' + config)
+                out.append((host, 'install'))
+        return out
+
+    def test_rollout_runs_every_step_on_each_fleet_host(self):
+        self.assertEqual(len(self.fleet), 6, 'intent-cache and intent-ci1..5')
+        rc, out, err = self.rollout()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.steps(), [(h, s) for h in self.fleet for s in ('copy', 'install', 'restart')])
+
+    def test_rollout_runs_under_bash_3(self):
+        # Operators run it from their own machine; stock macOS has Bash 3.2.
+        if not BASH3:
+            if REQUIRE_BASH3:
+                self.fail('no Bash 3 interpreter found and REQUIRE_BASH3 is set (make bash3, or BASH3_BIN)')
+            self.skipTest('needs Bash 3.2 (make bash3, or BASH3_BIN)')
+        rc, out, err = self.rollout(bash=BASH3)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(len(self.steps()), 3 * len(self.fleet))
+        self.log.write_text('')
+        rc, out, err = self.rollout('intent-cache', 'intent-ci1', bash=BASH3, STUB_SSH_FAIL='intent-ci1:install.sh')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('rollout.sh intent-ci1', err)
+        self.assertNotIn('unbound', err)
+
+    def run_bash3_test(self, **env):
+        # The lookup runs at import, so a fresh interpreter sees this environment.
+        return subprocess.run([sys.executable, '-S', '-B', str(HERE / 'test_runners.py'), '-j1',
+                               'Rollout.test_rollout_runs_under_bash_3'],
+                              capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                              env={**os.environ, 'HOME': str(self.dir), 'XDG_CACHE_HOME': str(self.dir / 'cache'),
+                                   'BASH3_CACHE_DIR': str(self.dir / 'no-bash3'), **env})
+
+    def test_bash_3_test_fails_instead_of_skipping_when_required(self):
+        not_bash3 = self.bin / 'not-bash3'
+        write_exe(not_bash3, '#!/bin/sh\nexit 1\n')
+        for bash3_bin in ('', str(not_bash3), str(self.dir)):
+            with self.subTest(BASH3_BIN=bash3_bin):
+                result = self.run_bash3_test(BASH3_BIN=bash3_bin, REQUIRE_BASH3='')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('skipped=1', result.stderr)
+                result = self.run_bash3_test(BASH3_BIN=bash3_bin, REQUIRE_BASH3='1')
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertIn('REQUIRE_BASH3 is set', result.stderr)
+
+    def test_rollout_takes_a_host_list_in_its_order(self):
+        rc, out, err = self.rollout('intent-ci3', 'intent-cache')
+        self.assertEqual(rc, 0, err)
+        self.assertEqual([h for h, s in self.steps() if s == 'copy'], ['intent-ci3', 'intent-cache'])
+        self.assertEqual(len(self.steps()), 6)
+
+    def test_rollout_rejects_an_unknown_host_before_touching_any(self):
+        rc, out, err = self.rollout('intent-ci1', 'intent-ci9')
+        self.assertNotEqual(rc, 0)
+        self.assertIn("unknown runner host 'intent-ci9'", err)
+        self.assertIn(', '.join(sorted(self.fleet)), err)
+        self.assertEqual(self.calls('ssh'), [])
+
+    def test_rollout_stops_at_the_first_failure(self):
+        for text, step in (('install.sh', 'install'), ('--restart-idle', 'restart'), ('tar -x', 'copy')):
+            with self.subTest(step=step):
+                self.log.write_text('')
+                rc, out, err = self.rollout('intent-ci1', 'intent-ci2', 'intent-ci3', STUB_SSH_FAIL=f'intent-ci2:{text}')
+                self.assertNotEqual(rc, 0)
+                steps = self.steps()
+                self.assertEqual(steps[-1], ('intent-ci2', step), 'nothing runs after the failed step')
+                self.assertEqual(steps[:3], [('intent-ci1', s) for s in ('copy', 'install', 'restart')])
+                self.assertNotIn('intent-ci3', [h for h, _ in steps])
+                self.assertIn('intent-ci2', err)
+                self.assertIn('rollout.sh intent-ci2 intent-ci3', err, 'the error gives the command to resume')
+
+    def test_restart_idle_restarts_only_idle_slots_on_an_old_image(self):
+        containers = self.dir / 'containers.json'
+        containers.write_text(json.dumps({
+            'gh-runner-heavy-1': {'image': 'sha256:new', 'logs': 'Listening for Jobs'},
+            'gh-runner-heavy-2': {'image': 'sha256:old', 'logs': 'Connected to GitHub\nListening for Jobs'},
+            'gh-runner-xl-1': {'image': 'sha256:old', 'logs': 'Listening for Jobs\nRunning job: check'},
+            'sccache': {'image': 'sha256:old', 'logs': ''},
+        }))
+        rc, out, err = self.rollout('--restart-idle', STUB_CONTAINERS=str(containers))
+        self.assertEqual(rc, 0, err)
+        self.assertEqual([c['argv'] for c in self.calls('systemctl')],
+                         [['restart', '--no-block', 'github-runner@heavy-2']])
+        self.assertIn('xl-1', out, 'a busy slot is reported as left to its next job')
+        self.log.write_text('')
+        rc, out, err = self.rollout('--restart-idle', STUB_CONTAINERS=str(containers), STUB_NO_IMAGE='1')
+        self.assertNotEqual(rc, 0, 'no current image: nothing to restart onto')
+        self.assertEqual(self.calls('systemctl'), [])
+        rc, out, err = self.rollout('--restart-idle', STUB_CONTAINERS=str(containers), STUB_PS_FAIL='1')
+        self.assertNotEqual(rc, 0, 'a failed container list fails the step instead of restarting nothing')
+        self.assertIn('docker ps failed', err)
+        self.assertEqual(self.calls('systemctl'), [])
+
+    def test_check_image_runs_the_baked_tools_of_the_dockerfile(self):
+        dockerfile = (HERE / 'Dockerfile').read_text()
+        pythons = re.findall(r'^ARG PYTHON_\d+_\d+_VERSION=(\S+)', dockerfile, re.M)
+        nodes = re.findall(r'^ARG NODE_VERSION=(\S+)', dockerfile, re.M) + re.findall(
+            r'(\d+\.\d+\.\d+)=', re.search(r'^ARG NODE_TOOLCACHE="([^"]*)"', dockerfile, re.M).group(1))
+        self.assertGreaterEqual(len(pythons), 2)
+        self.assertGreaterEqual(len(nodes), 3)
+        check = subprocess.run(['bash', str(HERE / 'check-image.sh'), 'intent-gh-runner:abc'],
+                               capture_output=True, text=True, env=self.env)
+        self.assertEqual(check.returncode, 0, check.stderr)
+        [run] = [c['argv'] for c in self.calls('docker') if c['argv'][0] == 'run']
+        self.assertIn('--rm', run)
+        self.assertIn('intent-gh-runner:abc', run)
+        self.assertIn(f"PYTHONS={' '.join(pythons)}", run)
+        self.assertIn(f"NODES={' '.join(nodes)}", run)
+        script = run[-1]
+        for tool in ('cargo nextest', 'cargo llvm-cov', 'cargo shear', 'llvm-tools'):
+            self.assertIn(tool, script)
+        check = subprocess.run(['bash', str(HERE / 'check-image.sh'), 'intent-gh-runner:abc'],
+                               capture_output=True, text=True, env={**self.env, 'STUB_RUN_RC': '1'})
+        self.assertNotEqual(check.returncode, 0)
+
+
+class _Outcome:
+    """A test or subtest reported by a worker, as the parent's result prints it."""
+    def __init__(self, description):
+        self.description = description
+
+    def __str__(self):
+        return self.description
+
+    def shortDescription(self):
+        return None
+
+
+class _Lines(io.StringIO):
+    def writeln(self, text=''):
+        self.write(text + '\n')
+
+
+_TESTS, _RUNNER = [], None
+
+
+def _run_one(index):
+    """Run _TESTS[index] in a forked worker; return what the parent prints and counts."""
+    test, runner = _TESTS[index], _RUNNER
+    stream = _Lines()
+    result = runner.resultclass(stream, runner.descriptions, runner.verbosity)
+    result.buffer, result.tb_locals = runner.buffer, runner.tb_locals
+    test(result)
+    described = lambda pairs: [(result.getDescription(t), text) for t, text in pairs]
+    return {'progress': stream.getvalue(), 'run': result.testsRun,
+            'failures': described(result.failures), 'errors': described(result.errors),
+            'skipped': described(result.skipped), 'expectedFailures': described(result.expectedFailures),
+            'unexpectedSuccesses': [result.getDescription(t) for t in result.unexpectedSuccesses],
+            'durations': getattr(result, 'collectedDurations', [])}
+
+
+def _tests(suite):
+    for item in suite:
+        if isinstance(item, unittest.TestSuite):
+            yield from _tests(item)
+        else:
+            yield item
+
+
+class ParallelRunner(unittest.TextTestRunner):
+    """TextTestRunner whose tests run in forked workers, one test per task.
+
+    Each Installer test runs install.sh against its own temp INSTALL_PREFIX and
+    stub directory, so tests share no state. Only the report is merged.
+    """
+    jobs = 1
+
+    def run(self, test):
+        global _TESTS, _RUNNER
+        _TESTS, _RUNNER = list(_tests(test)), self
+        if self.jobs < 2 or len(_TESTS) < 2 or 'fork' not in multiprocessing.get_all_start_methods():
+            return super().run(test)
+
+        def run_all(result):
+            # A worker that dies (rather than failing a test) breaks the pool:
+            # the run raises BrokenProcessPool instead of hanging on its test.
+            with ProcessPoolExecutor(min(self.jobs, len(_TESTS)), multiprocessing.get_context('fork')) as pool:
+                pending = [pool.submit(_run_one, index) for index in range(len(_TESTS))]
+                for future in as_completed(pending):
+                    outcome = future.result()
+                    self.stream.write(outcome['progress'])
+                    self.stream.flush()
+                    result.testsRun += outcome['run']
+                    for kind in ('failures', 'errors', 'skipped', 'expectedFailures'):
+                        getattr(result, kind).extend((_Outcome(d), text) for d, text in outcome[kind])
+                    result.unexpectedSuccesses.extend(_Outcome(d) for d in outcome['unexpectedSuccesses'])
+                    if hasattr(result, 'collectedDurations'):
+                        result.collectedDurations.extend(outcome['durations'])
+                    if result.failfast and (result.failures or result.errors):
+                        pool.shutdown(cancel_futures=True)
+                        break
+        return super().run(run_all)
+
+
+def main(argv):
+    """unittest.main over ParallelRunner; -j/--jobs N picks the worker count."""
+    jobs = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count() or 1
+    rest, args = argv[:1], iter(argv[1:])
+    for arg in args:
+        if arg in ('-j', '--jobs'):
+            jobs = int(next(args))
+        elif re.fullmatch(r'-j\d+|--jobs=\d+', arg):
+            jobs = int(re.sub(r'\D', '', arg))
+        else:
+            rest.append(arg)
+    ParallelRunner.jobs = jobs
+    unittest.main(module='__main__', argv=rest, testRunner=ParallelRunner)
 
 
 if __name__ == '__main__':
-    unittest.main()
+    main(sys.argv)

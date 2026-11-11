@@ -36,7 +36,7 @@ jobs:
         [
         {"key":"shell-tests","label":"ubuntu-24.04","minutes":4,"events":["merge_group"]},
         {"key":"shell-tests-bash3","label":"ubuntu-24.04","minutes":3,"events":["merge_group"]},
-        {"key":"python-tests","label":"ubuntu-24.04","minutes":1,"events":["merge_group"]},
+        {"key":"python-tests","label":"ubuntu-24.04","minutes":1},
         {"key":"docs-check","label":"ubuntu-24.04","minutes":1},
         {"key":"pr-title","label":"ubuntu-24.04","events":["pull_request"]},
         {"key":"bridge-test","label":"ubuntu-24.04","events":["merge_group"]},
@@ -105,9 +105,10 @@ jobs:
   # The UDS→WS bridge shim (scripts/uds-ws-bridge.mjs) and the UDS JSON-RPC
   # probe (scripts/uds-rpc.mjs) are zero-dependency Node, so their node:test
   # suites need no submodules and use the shared runner routing policy.
-  # The breaking-token and submodule-pins unit suites also run here: their
-  # own jobs are pull_request-only, so without this the queue never re-tests
-  # them on the merged tree. scripts/test-ci-event-policy.py fails CI when a
+  # The breaking-token, submodule-pins and docs-pr-scope unit suites also run
+  # here: the first two jobs are pull_request-only and docs-pr-scope.yml runs
+  # only in the component repos, so without this the queue never re-tests them
+  # on the merged tree. scripts/test-ci-event-policy.py fails CI when a
   # scripts/*.test.{mjs,cjs} suite is not reached from a merge_group job.
   bridge-test:
     if: github.event_name == 'merge_group'
@@ -122,27 +123,54 @@ jobs:
           node-version: 22
       - run: node --test scripts/uds-ws-bridge.test.mjs
       - run: node --test scripts/uds-rpc.test.mjs
-      - run: node --test scripts/check-breaking-token.test.mjs scripts/check-submodule-pins.test.mjs
+      - run: node --test scripts/agent-context/mine-ws-usage.test.mjs
+      - run: node --test scripts/agent-eval/*.test.mjs
+      - run: node --test scripts/check-breaking-token.test.mjs scripts/check-submodule-pins.test.mjs scripts/check-docs-pr-scope.test.mjs
 
   # Standard-library-only Python suites run without submodules. Use the same
   # entry point locally and in CI; tomllib requires Python 3.11 or newer.
   # Includes offline prerelease retention/deletion tests and a functional check
   # that their failures fail this target. No cleanup credentials or live scan.
+  # Runs on PRs too, so a broken test is not first found in the merge queue
+  # (intent PR 8290). A PR runs it only when a file the tests read changed: the
+  # Python and shell scripts, their fixtures, the vendored tomli (LICENSE and
+  # provenance included), the Makefile or this workflow.
+  # The queue always runs it.
   python-tests:
-    if: github.event_name == 'merge_group'
     needs: [runner-route]
     runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['python-tests'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: false
-      - uses: actions/setup-node@v7
+          fetch-depth: 2
+      - name: Select Python test changes
+        id: select
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          selected=true
+          # A PR checks out its merge commit: parent 1 is the base tip, so the
+          # diff to it is exactly the PR's change. Anything else runs the tests.
+          # The pathspec must cover every tracked file a test-scripts module names
+          # (scripts/test-ci-event-policy.py checks), and scripts/changed-script-tests.sh
+          # reads it as its full-run triggers: keep it on one line ending in `)`.
+          if [ "$EVENT" = pull_request ] && git rev-parse -q --verify HEAD^2 >/dev/null; then
+            changed=$(git diff --name-only HEAD^1 HEAD -- 'scripts/*.py' 'scripts/*.sh' scripts/fixtures scripts/_vendor scripts/check-transfer-selection-contract.mjs docs/protocol/fixtures/transfer-selection Makefile .github/workflows/ci.yml)
+            if [ -z "$changed" ]; then selected=false; fi
+          fi
+          echo "selected=$selected" >> "$GITHUB_OUTPUT"
+      - if: steps.select.outputs.selected == 'true'
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
-      - uses: actions/setup-python@v6
+      - if: steps.select.outputs.selected == 'true'
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-      - run: make test-scripts
+      - if: steps.select.outputs.selected == 'true'
+        run: make test-scripts
 
   # Always prepare on both PR and queue runs. Read the pin from the same
   # tested tree as the local reusable call; a failed diff/read must fail CI,
@@ -209,11 +237,11 @@ jobs:
   # cloudlands-fe must exist at the pins, and the components' own AGENTS.md
   # links must resolve. Bare paths are never looked up in the private
   # packages/ios (`update = none`), so a missing one fails instead of being
-  # skipped. It runs last, even after a failed step, so a red bump still shows
-  # the consumer-checks table. It is deliberately not part of
-  # `make consumer-checks`, so component PRs are never failed by monorepo
-  # docs; a component change that breaks such a link turns the
-  # auto/submodule-bump PR red instead. Rename a linked component
+  # skipped. It runs inside the docs-check row of `make consumer-checks` (a
+  # `make docs-check` prerequisite, so a local run matches this job; PR #8244
+  # passed locally and failed here). The upstream context assumes it old, so
+  # component PRs are never failed by monorepo docs; a component change that
+  # breaks such a link turns the auto/submodule-bump PR red instead. Rename a linked component
   # heading as an addition — keep `<a id="old-slug"></a>` beside it until the
   # bump lands and the monorepo link moves — and if a bump is already red,
   # land a monorepo fix that resolves at both pins (drop the anchor, link a
@@ -227,6 +255,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: false
+          # check-fixture-copies compares component files with every past
+          # fixture version, and the copy checks need lock commit ancestry:
+          # full history, but trees only (no blob downloads).
+          fetch-depth: 0
+          filter: blob:none
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -234,18 +267,9 @@ jobs:
         run: git submodule update --init --depth=1 packages/cloudlands-fe packages/intentd
       - run: node --test scripts/submodule-ref.test.mjs
       - run: node --test scripts/check-protocol-catalog.test.mjs
-      - run: node --test docs/protocol/fixtures/scripts/readiness.test.mjs
-      - run: >-
-          node --test
-          docs/protocol/fixtures/desktop-control/contract.test.mjs
-          docs/protocol/fixtures/event-stream-recovery/contract.test.mjs
-          docs/protocol/fixtures/nodes/checkpoint-capture.test.mjs
-          docs/protocol/fixtures/nodes/enrollment.test.mjs
-          docs/protocol/fixtures/nodes/local-source.test.mjs
-          docs/protocol/fixtures/nodes/platform-routing.test.mjs
-          docs/protocol/fixtures/scripts/active-monitors.test.mjs
-          docs/protocol/fixtures/scripts/compact.test.mjs
-          docs/protocol/fixtures/startup/contract.test.mjs
+      # Every docs/protocol/fixtures/**/*.test.mjs, found by glob; the same
+      # target `make docs-check` depends on, so local and CI runs match.
+      - run: make check-protocol-fixture-tests
       - run: node --test scripts/check-mcp-bindings.test.mjs
       - run: node --test scripts/check-makefile-targets.test.mjs
       - run: node --test scripts/check-protocol-field-parity.test.mjs
@@ -253,11 +277,14 @@ jobs:
       - run: node --test scripts/backend-keychain-contract.test.mjs
       - run: make check-agent-worker-contract
       - run: node --test scripts/check-app-ui-targets.test.mjs
+      - run: node --test scripts/check-agent-feature-toggles.test.mjs
+      - run: node --test scripts/check-keybindings-doc.test.mjs
+      - run: node --test scripts/check-transfer-methods.test.mjs
+      - run: node --test scripts/check-app-guide-sources.test.mjs
       - run: node --test scripts/consumer-checks-ci.test.mjs
+      # Includes the doc link check against the pinned components (a
+      # docs-check prerequisite), so `make docs-check` matches this job.
       - run: make consumer-checks
-      - name: Check doc links against the pinned components
-        if: ${{ !cancelled() && steps.submodules.outcome == 'success' }}
-        run: node scripts/check-doc-links.mjs
 
   # The event-type catalog is vendored on three surfaces (intentd golden,
   # protocol sidecar, iOS test fixture). The public intentd copy is checked out
@@ -319,8 +346,10 @@ jobs:
           bash scripts/auto-bump-submodules.test.sh
           bash scripts/bootstrap-dev-host.test.sh
           bash scripts/ci-gate.test.sh
+          bash scripts/check-dry-run-targets.test.sh
           python3 -S -B scripts/test_hosted_runners.py
           python3 -S -B scripts/test_ci_bash3.py
+          python3 -S -B scripts/test_consumer_checks_shell_suites.py
           python3 -S -B scripts/test_setup_sccache.py
           python3 -S -B scripts/test_local_sccache.py
           bash scripts/consumer-checks.test.sh
@@ -329,14 +358,18 @@ jobs:
           bash scripts/dev-status.test.sh
           python3 scripts/test_github_readiness.py
           bash scripts/docs-check.test.sh
+          bash scripts/fe-verify-changed.test.sh
           bash scripts/lint-fixed-sleeps.test.sh
           bash scripts/lint-workflows.test.sh
           bash scripts/rust-changed-tests.test.sh
           bash scripts/changed-script-tests.test.sh
           python3 -S -B scripts/test_rust_test_policy.py
           bash scripts/shipped-in.test.sh
+          bash scripts/pin-includes.test.sh
           bash scripts/release-status.test.sh
           bash scripts/retry.test.sh
+          bash scripts/rustc-parallel.test.sh
+          bash scripts/workspace-setup.test.sh
           bash scripts/lint-fixed-sleeps.sh
       # sccache cache server (infra/sccache): real Caddy + rclone on loopback,
       # pinned and checksum-verified, so the token access matrix never skips here.
@@ -358,7 +391,12 @@ jobs:
           command -v shellcheck >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q shellcheck; }
           shellcheck infra/sccache/*.sh
       # GitHub runner slots (infra/runners): supervisor and installer against
-      # stubbed curl/docker/systemctl.
+      # stubbed curl/docker/systemctl. The image-bakes tests read every
+      # setup-python/setup-node version the components request, so check out
+      # cloudlands-fe at its pin here, after the other suites (intentd is
+      # already in); without either .github the test fails in CI. The rollout's
+      # Bash 3.2 test skips here and runs in shell-tests-bash3.
+      - run: git submodule update --init --depth=1 packages/cloudlands-fe
       - name: runner slots test
         run: |
           set -euo pipefail
@@ -439,18 +477,9 @@ jobs:
         with:
           python-version: '3.11'
       - run: git submodule update --init --depth=1 packages/intentd
-      - name: Install Bash build prerequisites when absent
-        run: |
-          if ! command -v yacc >/dev/null || ! command -v gcc >/dev/null; then
-            for attempt in 1 2 3; do
-              if sudo -n apt-get -o DPkg::Lock::Timeout=300 update -qq; then break; fi
-              if [ "$attempt" -eq 3 ]; then exit 1; fi
-              sleep $((attempt * 15))
-            done
-            sudo -n apt-get -o DPkg::Lock::Timeout=300 install -y -qq build-essential bison
-          fi
-      - name: Install pinned Bash 3.2
-        run: bash scripts/install-ci-bash3.sh "$RUNNER_TEMP/bash3"
+      # Restores the cached build (filled on main by bash3-cache.yml) or builds it.
+      - name: Set up pinned Bash 3.2
+        uses: ./.github/actions/setup-bash3
       - run: |
           "$BASH3_BIN" --version
           REQUIRE_BASH3=1 bash scripts/ci-gate.test.sh
@@ -460,8 +489,15 @@ jobs:
           REQUIRE_BASH3=1 bash scripts/lint-fixed-sleeps.test.sh
           REQUIRE_BASH3=1 bash scripts/rust-changed-tests.test.sh
           REQUIRE_BASH3=1 bash scripts/shipped-in.test.sh
+          REQUIRE_BASH3=1 bash scripts/pin-includes.test.sh
           REQUIRE_BASH3=1 bash scripts/release-status.test.sh
           REQUIRE_BASH3=1 bash scripts/retry.test.sh
+          REQUIRE_BASH3=1 bash scripts/changed-script-tests.test.sh
+          REQUIRE_BASH3=1 bash scripts/workspace-setup.test.sh
+          REQUIRE_BASH3=1 bash packages/intentd/scripts/test-changed-tests.sh
+          REQUIRE_BASH3=1 python3 -S -B scripts/test_consumer_checks_shell_suites.py
+          REQUIRE_BASH3=1 python3 -S -B infra/runners/test_runners.py -v Rollout.test_rollout_runs_under_bash_3
+          "$BASH3_BIN" scripts/rustc-parallel.test.sh
 
   # Agent-facing documentation links and root hygiene are checked without
   # dependencies or initialized submodules (docs-check reruns the link

@@ -27,10 +27,43 @@ interface SettingDefinition {
   max?: number;           // numeric bound (type === "number")
   defaultValue?: unknown; // value used by settings.reset (informational only for absent-means-auto keys, see below)
   sensitive?: boolean;    // when true, value is redacted in settings.list / settings.get
+  proposable?: boolean;   // whether an Assistant chat settings-change card may change it; see "Chat settings proposals"
   tokenImpact?: string;   // approximate prompt-token cost of the gated feature, e.g. "~620 tokens/session"; presence-detected (absent when unannotated)
 }
 // SettingDefinitionWithValue = SettingDefinition & { value: unknown }  // current value (redacted if sensitive)
 ```
+
+**Chat settings proposals (`proposable`, additive).** The daemon decides which settings an
+Assistant chat settings-change card may change. Daemons that support it emit `proposable` on
+**every** definition, `true` or `false` (unlike the presence-detected flags above). It is `false`
+for every `sensitive` setting, for read-only settings (`server.auth.token`, `specialists.dir`,
+`providers.active`), and for the security-relevant families: `server.*` (listener, auth,
+tunnel), `sharing.*` (guest access), `sourceControl.*` and `identity.provider` (forge
+endpoints, OAuth clients, credential routing, primary identity), `accounts.*`, executables
+and locations (`providers.paths`, `context.auggiePath`, `workspace.defaultShell`,
+`workspace.sshKeyPath`, `storage.dataDir`, `workspaces.root`,
+`workspace.worktreesLocation`), `permissions.rules`, the prompt rules injected into every
+agent (`userRules`, `workspaceRules`), the
+[remote agent settings](#remote-agent-settings)
+(`remoteAgents.permission`, `daemon.mode`), and opaque state
+(`quickActions.providerSettings`, `repos.known`, `workspace.changeHistory`,
+`workspaceInitializer.state`, `hardwareConsole.state`). Every other setting is `true`.
+
+- The Assistant's `ws.app.settings.propose` refuses a path unless `proposable` is `true`, and
+  checks the value against the definition (type, `enumValues`, `min` / `max`; `null` only
+  for a setting without `defaultValue`) before it renders a card.
+- A client applying a card change to a daemon setting outside its own schema reads the
+  definition with `settings.get` (never from the proposal payload) and applies it with
+  `settings.update` only when `proposable` is `true` and the setting is not `sensitive`. An
+  absent flag means an older daemon, and the client refuses. A client refuses a card change
+  to a daemon setting its own schema maps whenever the daemon sends `proposable: false`.
+- `null` in a card change means unset. The client applies it with `settings.reset`, because
+  `settings.update` rejects `null` for absent-means-auto keys such as
+  `agents.memoryBudgetMb` and for string or object keys. Undo restores the previous value
+  exactly, including `null`.
+
+`settings.update` itself is unchanged: `proposable` is advice to the chat proposal path, and
+the Settings UI keeps writing every non-read-only setting.
 
 `changes` entries use the `AppSettingChange` shape `{ path, value, reason? }` (`reason` is an optional free-text audit note). `settings.update` **validates** each change against its definition (type / enum / min / max) and **persists** atomically; an unknown `path` or a value failing validation yields `-32602` and the whole batch is rejected (nothing applied). On success it emits a `settings:changed` notification (§6.5) carrying the applied `{ path, value, origin? }` pairs (sensitive values redacted).
 
@@ -113,15 +146,26 @@ from config.toml and returns `value: null` with `origin: "default"`, and `settin
 never persisted or echoed back as the value. Writing that number explicitly via
 `settings.update` pins it as a `"file"` value that no longer tracks the host's RAM.
 
-**Auto-retire setting (additive, protocol 15.2).** `workspace.autoRetireArchivedAfterDays`
-is a TOML-backed optional positive integer number of days. Absent (or `null`) means
-**off**: the daemon never retires a workspace automatically, and `settings.reset` removes
-the key and returns `value: null`. When set, a periodic daemon sweep retires every
-workspace whose `archivedAt` is older than that many days, skipping remote, guest-shared
-and retire-unsupported workspaces ([Retired workspaces](./workspace.md#retired-workspaces)).
-`settings.update` rejects zero, negative and non-integer values with `-32602`.
-Clients that offer a toggle suggest 7 days when turning it on; the daemon has no implicit
-value.
+**Auto-archive and purge settings (additive, protocol 15.2).** Two TOML-backed
+`[workspace]` settings drive the automatic workspace lifecycle sweeps
+([Automatic archive](./workspace.md#automatic-archive) and
+[automatic purge](./workspace.md#retired-workspaces)):
+
+| Setting | Value | Default / clear |
+| --- | --- | --- |
+| Auto-archive: `workspace.autoArchiveIdleAfterDays` | Optional non-negative integer number of days. `0` turns the sweep off. | Absent means **0**: the sweep is off by default. `defaultValue` advertises `0`, and the absent key reads `value: 0` with `origin: "default"`; `settings.reset` removes the key, returning to that default. Clients that offer a toggle suggest 7 days when turning it on. Daemons before the default-off change advertise and default to `7`, so clients read the advertised `defaultValue` rather than assuming one. |
+| Purge: `workspace.purgeArchivedAfterDays` | Optional positive integer number of days. | Absent (or `null`) means **off**: the daemon never purges a workspace folder automatically. `settings.reset` removes the key and returns `value: null`. Clients that offer a toggle suggest 7 days when turning it on. The purge covers `worktree` checkouts and daemon-owned standalone `cow` / `direct` checkouts, the latter only when nothing in the folder is missing from a remote ([Retired workspaces](./workspace.md#retired-workspaces)). |
+
+`settings.update` rejects negative and non-integer values for both keys, and zero for
+`workspace.purgeArchivedAfterDays`, with `-32602`. Turning auto-archive off is an explicit
+`0`, never `null` (which is the default).
+
+**Deprecated predecessor.** `workspace.autoRetireArchivedAfterDays` is the earlier name of
+`workspace.purgeArchivedAfterDays`, with the same value semantics. Daemons that support
+the new key migrate the old one on boot: an `autoRetireArchivedAfterDays` value in
+config.toml is rewritten as `purgeArchivedAfterDays` (comments and layout preserved), and
+when both keys are present the new key wins and the old one is removed. Such daemons no
+longer list the old key in `settings.list`; older daemons only know the old key.
 
 **Quick-action effort settings (additive).** The following TOML-backed settings live
 under `[quickActions]`, alongside the existing model settings. Model values remain bare
@@ -173,8 +217,8 @@ fields without replacing unaffected siblings or writing defaults back over saved
 (`<baseProviderId>@<profileId>`). `settings.update` rejects a missing-profile
 reference in `model.defaultProvider`, or in a `model.providerDefaults` key that is
 new or whose value changed. Unchanged stored keys round-trip, and deleting a profile
-prunes its key ([rules](provider-profiles.md#references-in-settings)). `providers.enabled`, `providers.paths` and the
-access-token paths stay keyed by base provider id. `providers.fastMode` keys also
+prunes its key ([rules](provider-profiles.md#references-in-settings)). `providers.enabled` and `providers.paths`
+stay keyed by base provider id. `providers.fastMode` keys also
 accept profile references, with no inheritance from the base entry
 ([per-profile Fast mode](provider-profiles.md#per-profile-fast-mode)). Profile metadata and environment
 values are managed only through `providers.profiles.*`, never through `settings.*`.
@@ -297,12 +341,12 @@ settings must name the same authority; for example, `host: "gitlab.example:8443"
 and `instanceBaseUrl: "https://gitlab.example:8443/forge"`. The prefix is part of
 repository and credential identity, not a project namespace. The separate
 `sourceControl.gitlab.apiBaseUrl` transport override cannot supply or change this
-logical identity. The [prepared checkout contract](repository-checkout.md)
+logical identity. The [checkout contract](repository-checkout.md)
 retains the exact instance and credential continuity through browsing, warming
 and native creation; a same-host prefix change is not authority to reuse the
 previous connection.
 
-The [prepared full-instance auth operations](integrations.md#full-instance-gitlab-authentication-prepared-v135)
+The [full-instance auth operations](integrations.md#full-instance-gitlab-authentication-v135)
 accept this root as `instanceBaseUrl`. A successful PAT or device connection
 publishes host and root together; clients must not perform two independent
 settings writes to emulate connection setup.
@@ -311,7 +355,7 @@ settings writes to emulate connection setup.
   `model.defaultReasoningEffort` ([intent-hq/intentd#970](https://github.com/intent-hq/intentd/pull/970)) is an optional string persisted in `config.toml` under the `[model]` table as `defaultReasoningEffort` — the fallback reasoning effort for newly created agents, stored **as-is** (providers own the level vocabulary; the daemon never normalizes it) with a blank or whitespace-only value reading as unset (default: unset).
   It is the last rung of the creation-time reasoning-effort chain (§5.5 "Creation-time reasoning-effort resolution"), applying only when no explicit param / specialist model-option / specialist frontmatter effort decided the level **and** the session's model itself resolved from the settings chain; a level the resolved model's cached `effortLevels` provably does not list is dropped with a daemon warn log rather than rejected (§5.11).
   Agent model resolution walks `model.providerDefaults[provider]` → `model.default` (the settings-chain step of the daemon-side creation-time resolver, §5.5 — specialist frontmatter `model` takes precedence over this chain, and every result is provider-guarded).
-  The `quickActions.*` keys ([intent-hq/monorepo#1729](https://github.com/intent-hq/monorepo/issues/1729)) scope **only** to single-shot quick actions (commit messages, PR descriptions, quick tasks) and are never consulted for an agent session, delegated ones included; they were named `backgroundAgents.*` before that rename, and the old paths are **retired** — gone from the catalog (`settings.list` never advertises them; `settings.get` / `settings.reset` yield `-32602`) but tolerated-and-ignored by `settings.update`, while a `config.toml` still carrying `[backgroundAgents]` has its values carried over once at boot — per member (`defaultModel` / `typeOverrides` / `providerSettings` are applied individually, so one malformed legacy value never discards its valid siblings), into each `quickActions.*` key still at its **schema default**, so an already-migrated or deliberately re-picked value is never clobbered, and a legacy member with no `quickActions.*` counterpart is dropped with a warning — before the legacy table is stripped.
+  The `quickActions.*` keys ([intent-hq/monorepo#1729](https://github.com/intent-hq/monorepo/issues/1729)) scope **only** to single-shot quick actions (commit messages and PR descriptions) and are never consulted for an agent session, delegated ones included; they were named `backgroundAgents.*` before that rename, and the old paths are **retired** — gone from the catalog (`settings.list` never advertises them; `settings.get` / `settings.reset` yield `-32602`) but tolerated-and-ignored by `settings.update`, while a `config.toml` still carrying `[backgroundAgents]` has its values carried over once at boot — per member (`defaultModel` / `typeOverrides` / `providerSettings` are applied individually, so one malformed legacy value never discards its valid siblings), into each `quickActions.*` key still at its **schema default**, so an already-migrated or deliberately re-picked value is never clobbered, and a legacy member with no `quickActions.*` counterpart is dropped with a warning — before the legacy table is stripped.
   The **effective default provider** is the dedicated `model.defaultProvider` key ([intent-hq/intentd#1648](https://github.com/intent-hq/intentd/pull/1648)): registry-validated and whitespace-trimmed on read, so a stale or mistyped value reads as unset.
   The deprecated `providers.active` key is never consulted — a one-time boot migration carries a legacy value into `model.defaultProvider` (only when the target is still unset and the value names a registered provider) and removes `providers.active` from `config.toml` regardless, retrying next boot on a failed write ([intent-hq/intentd#1658](https://github.com/intent-hq/intentd/pull/1658)).
   There is no positional fallback to the first registered provider — with the key unset, resolution that falls through entirely fails loudly at the caller ([intent-hq/monorepo#3044](https://github.com/intent-hq/monorepo/issues/3044); no provider carries a hardcoded default designation).
@@ -322,7 +366,8 @@ settings writes to emulate connection setup.
   `specialists.default` *(optional string, TOML-backed under `[specialists]` as `default`; default: unset)* is the id of the specialist applied when none is chosen — a **client-consumed** setting: the daemon stores and serves it but never consults it when creating agents.
   The desktop FE's task-note **Run** path reads it: Run spawns the note's agent as the configured specialist when the id resolves to a pickable entry in the resolved specialist roster (visible to the client and not `hidden`, §5.11), and falls back to `implementor` when the key is unset or does not resolve.
   `specialists.dir` *(optional string — `settings.update` on it always yields `-32602` (read-only), while `settings.reset` yields `-32602` only when the value is startup-pinned and otherwise clears a file-written value, removing the key from config.toml)* reports the base-tier replacement directory for specialist resolution (§5.11 "Base-tier replacement mode"): it takes a value via the `INTENTD_SPECIALISTS_DIR` startup pin (or the `intentd serve --specialists-dir` flag, which folds into the env var pre-runtime — the flag wins over an inherited env value), else a hand-written `[specialists] dir` in config.toml; unset or empty means no replacement.
-- **Workspace / git:** `workspace.branchPrefix`, `workspace.worktreesLocation`,`workspace.sshKeyPath` *(string — filesystem path to the key, not key material; the real secret is the key file on disk, so the value is read back verbatim by the FE `git`-env consumer)*, `workspace.defaultShell`, `workspace.autoCommit`, `workspace.cowIsolation` *(boolean, default `false` — CoW workspaces + per-agent sandboxes: `workspace.create`/`workspace.duplicate` provision the checkout as a standalone CoW clone instead of a linked worktree (§5.1), and `agent.delegate` defaults `isolation` to `"cow"` when the param is omitted (§5.5); ignored by cache-hydrated creation and by `workspace.duplicate` of a standalone-checkout source, which are always standalone (§5.1); consulted only at provisioning time — the resulting `checkoutMode` is immutable per workspace (§5.1); requires CoW filesystem support on the workspaces root — the FE gates the toggle on `Workspace.cowSupported`)*.
+- **Workspace / git:** `workspace.branchPrefix`, `workspace.worktreesLocation`,`workspace.sshKeyPath` *(string — filesystem path to the key, not key material; the real secret is the key file on disk, so the value is read back verbatim by the FE `git`-env consumer)*, `workspace.defaultShell`, `workspace.autoCommit`.
+  The former `workspace.cowIsolation` key is **retired** (protocol 17.0): it is gone from the catalog (`settings.list` never advertises it; `settings.get` / `settings.reset` yield `-32602`). `settings.update` ignores it rather than failing, so older apps that still write it keep working: it is never applied, persisted or published in `settings:changed`. The daemon strips the key from `config.toml` and deletes its stored row at boot. A create from a local repository now always provisions a linked worktree (§5.1).
 - **MCP:** `mcp.enableUserServers`, `mcp.disabledServers`, `mcp.servers` *(sensitive)*.
 - **Server / transport (new in intentd):** `server.socketPath`,`server.bindAddress` *(string **or** string array ([intent-hq/monorepo#3314](https://github.com/intent-hq/monorepo/issues/3314)): a single IP (`"127.0.0.1"`, the default) or a list of IPs (`["192.168.1.7", "100.64.0.3"]`) — one TCP listener per entry on the same port, bind is all-or-nothing.
   Loopback is **always bound in addition** ([intent-hq/intentd#1695](https://github.com/intent-hq/intentd/pull/1695)): at boot and on every runtime listener (re)start the daemon appends `127.0.0.1` to the effective bind set unless the configured set already carries `127.0.0.1` or an unspecified address (`0.0.0.0`/`::`), so a LAN-only value such as `["192.168.1.7"]` still serves clients on the daemon host and the tunnel sidecar's `127.0.0.1` forward; the persisted value is never rewritten (`settings.get` returns exactly what was written).
@@ -336,6 +381,7 @@ settings writes to emulate connection setup.
   The tunnel requires the WSS listener up, so in a `settings.update` batch the tunnel toggle applies **after** `server.wsApi.enabled` (a batch enabling both starts the listener first).
   The sidecar's stable `tc…` address — derived from a key persisted in the daemon data dir, so it survives daemon and sidecar restarts — rides `pairing.getInfo` / `server.pairingInfo` / `system.status` as the additive `tcAddress` field and the `tc=` pairing-URI param ([intent-hq/intentd#1623](https://github.com/intent-hq/intentd/pull/1623); §5 fast-path catalog).
   The tailcat tunnel is unrelated to the `/tunnel` loopback port-forwarding endpoint, §1.4.
+  When `intentd pair` turns external connections on while every `server.bindAddress` entry is loopback (`127.0.0.1` / `::1`), it pre-checks the tunnel and `pair --yes` saves `true`, even over a saved `false` (additive, docs first; [node setup and pairing](./nodes.md#node-setup-and-pairing)). A bind with any LAN address, or an unspecified bind (`0.0.0.0` / `::`), keeps its saved value, and a never-paired daemon does not start the tunnel.
   **Live-applied**: enabling starts the sidecar as part of the `settings.update` (a sidecar that fails to start fails the update with `-32603`), disabling stops it; disabling `server.wsApi.enabled` also stops a running tunnel, since it forwards to that listener — without touching the persisted `server.tunnel.enabled`, so re-enabling the listener brings the tunnel back (non-fatal, like the boot auto-start; skipped when the batch carries its own tunnel toggle))*,
   `server.tunnel.derpUrl` *(optional string, TOML-backed under `[server.tunnel]` — DERP **map** URL for the tailcat tunnel: passed to the sidecar as `--derpmap-url`, so the value must serve a DERP-map JSON document (which resolves the relay region for a self-hosted relay setup), not a bare relay endpoint; it also feeds key generation so region discovery uses the configured map.
   Empty/unset uses tailcat's default relay.
@@ -350,7 +396,8 @@ settings writes to emulate connection setup.
   Read once at boot: a change applies on daemon restart)*.
   A successfully started daemon always serves UDS; enabled-WSS boot failure exits the daemon (see [WSS port assignment](#wss-port-assignment)).
   The TCP/WSS listener is toggled at runtime by `server.wsApi.enabled` (the former `server.listenMode` key is retired — a config.toml still carrying it boots, is discarded, and is stripped from the file).
-- **Source control (new in intentd, provider-agnostic):** `sourceControl.activeProvider` (enum,**default **`github`; v1 ships only `github`), `sourceControl.github.tokenSource`(`auto`|`env`|`gh-cli`|`explicit`; default `auto` — secrets store → env → `gh` CLI), `sourceControl.github.token` *(sensitive)*,`sourceControl.github.apiBaseUrl` (GitHub Enterprise support), `sourceControl.github.exposeGitCredentialToChildren` *(boolean, default `true` — inject the daemon-managed GitHub credential into child process environments (PTY terminals, agent provider shells) as a scoped github.com-only credential helper; never as a raw `GITHUB_TOKEN`/`GH_TOKEN`)*. Per-provider config is namespaced as`sourceControl.<provider>.*` so future hosts slot in as `sourceControl.gitlab.*`,`sourceControl.bitbucket.*`, etc. (replaces any flat `github.*` keys). **GitLab (v10.5, §5.27 "Provider-generic auth — `sourceControl.*`"):** `sourceControl.gitlab.host` *(string, default `gitlab.com` — the bound instance as a bare `host[:port]`, no scheme; written by a successful `sourceControl.connect { provider: "gitlab" }` and read as the default `host` of every gitlab `sourceControl.*` call)*, `sourceControl.gitlab.oauthClientId` *(string, default `""` — the public OAuth application id used for the device authorization grant against `sourceControl.gitlab.host`; empty ⇒ `deviceGrantSupported: false` unless the host is `gitlab.com` and the daemon's built-in client id is non-empty)*, `sourceControl.gitlab.apiBaseUrl` *(string, optional test seam — overrides the API origin the daemon calls for the bound host, e.g. a mock server; never changes the reported `host`)*, `sourceControl.gitlab.token` *(sensitive — the GitLab credential the device grant or PAT connect persists to the secret store under account `sourceControl.gitlab.token`, the first slot of the GitLab resolution chain ahead of the `GITLAB_TOKEN` env fallback; `sourceControl.revoke { provider: "gitlab" }` deletes it)*.
+- **Source control (new in intentd, provider-agnostic):** `sourceControl.activeProvider` (enum,**default **`github`; v1 ships only `github`), `sourceControl.github.tokenSource`(`auto`|`env`|`gh-cli`|`explicit`; default `auto` — secrets store → env → `gh` CLI), `sourceControl.github.token` *(sensitive)*,`sourceControl.github.apiBaseUrl` (GitHub Enterprise support), `sourceControl.github.exposeGitCredentialToChildren` *(boolean, default `true` — inject the daemon-managed GitHub credential into child process environments (PTY terminals, agent provider shells) as a scoped github.com-only credential helper; never as a raw `GITHUB_TOKEN`/`GH_TOKEN`, except as below)*. Per-provider config is namespaced as`sourceControl.<provider>.*` so future hosts slot in as `sourceControl.gitlab.*`,`sourceControl.bitbucket.*`, etc. (replaces any flat `github.*` keys). **GitLab (v10.5, §5.27 "Provider-generic auth — `sourceControl.*`"):** `sourceControl.gitlab.host` *(string, default `gitlab.com` — the bound instance as a bare `host[:port]`, no scheme; written by a successful `sourceControl.connect { provider: "gitlab" }` and read as the default `host` of every gitlab `sourceControl.*` call)*, `sourceControl.gitlab.oauthClientId` *(string, default `""` — the public OAuth application id used for the device authorization grant against `sourceControl.gitlab.host`; empty ⇒ `deviceGrantSupported: false` unless the host is `gitlab.com` and the daemon's built-in client id is non-empty)*, `sourceControl.gitlab.apiBaseUrl` *(string, optional test seam — overrides the API origin the daemon calls for the bound host, e.g. a mock server; never changes the reported `host`)*, `sourceControl.gitlab.token` *(sensitive — the GitLab credential the device grant or PAT connect persists to the secret store under account `sourceControl.gitlab.token`, the first slot of the GitLab resolution chain ahead of the `GITLAB_TOKEN` env fallback; `sourceControl.revoke { provider: "gitlab" }` deletes it)*.
+  - The one `GH_TOKEN` exception: remote agents on a nodeProtocol 15 machine link get the backend's GitHub token as `GH_TOKEN`, gated by `exposeGitCredentialToChildren` ([forge token on the machine](../node-link.md#forge-token-on-the-machine-nodeprotocol-15)).
 - **Identity (v10.8, §5.48 "Identity model"):** `identity.provider` *(enum `github` | `gitlab`, nullable; default `null`)* — which connected forge is the **primary principal's identity**. `null` ⇒ implied: the one connected forge, or, with both connected, the current identity (else `github`; the FE prompts the user to choose). Writing a value is an **explicit re-key** of the primary principal's identity triple (`GET /user` on GitHub, `GET /api/v4/user` on GitLab) that publishes `principal:identity-changed` (§6.5); a value naming a forge that is not connected leaves the primary unlinked until it connects. Invites already pinned to the old identity are unaffected; new invites default their `pinProvider` / `pinHost` to the new one. Non-secret; `settings:changed` fires as for any key.
 - **Linear (new in intentd):** `linear.token` *(sensitive)* — the Linear API key, persisted to the daemon's file-backed secret store (`~/intent/.secrets.json`, `0600`) under account `linear.token`, the exact entry the `linear.*` namespace's secret-store-first `auto` token resolution reads (§5.28), so `settings.update` on this path is the FE "connect Linear" flow.
 - **Sentry account (new in intentd):** `accounts.sentry.token` *(sensitive)* — the Sentry API tokenused by the `sentry.*` namespace (§5.29); `accounts.sentry.organization` *(string)* — the Sentryorganization slug (non-secret companion).
@@ -396,19 +443,22 @@ settings writes to emulate connection setup.
   Pruning changes only `agent.getMessageBlock`, which serves the retained slim preview plus the additive `inputPruned` / `outputPruned` flags (§5.5); `agent.getConversation` output is unchanged for pruned and unpruned blocks, and a pruned session rebuilds with the same replay tool-block XML as an unpruned one at the same cap)*.
   Both are editable from the desktop FE's Settings → Advanced "Tool Output & Retention" section ([intent-hq/cloudlands-fe#2221](https://github.com/intent-hq/cloudlands-fe/pull/2221)).
 - **Tools:** `rtk.enabled` *(boolean, default `false`)* — enables RTK compressed CLI output mode in agent prompts. When true and the `rtk` binary is detected on the daemon host's PATH, the system-prompt assembly pipeline injects an instruction layer listing RTK-compatible subcommands (filtered exclusion set). The daemon caches detection per run and never blocks prompt assembly; any failure treats `rtk` as unavailable. The flag is opt-in (default off) and gated behind binary availability, so disabling or removing `rtk` restores the original prompt behavior.
-- **Agent features (new in intentd):** `agentFeatures.backgroundHooks`, `agentFeatures.hostExec`, `agentFeatures.scripts`, `agentFeatures.terminalAccess`, `agentFeatures.browserAutomation`, `agentFeatures.richChatBlocks`, `agentFeatures.structuredQuestions`, `agentFeatures.attentionRequests`, `agentFeatures.stateSnapshot`, `agentFeatures.prMonitor` *(v6.1)*, `agentFeatures.taskGraph`, `agentFeatures.peerAgents` *(within v7.5)*, `agentFeatures.mcpTools` — booleans, TOML-backed under an `[agentFeatures]` config.toml section.
-  All default **`true`**, including the peer-agents surface (`ws.agent.create({ topLevel: true })` / `ws.agent.retire`, §5.5 "Peer agents"); an explicit `agentFeatures.peerAgents = false` keeps it disabled for new sessions.
+- **Agent features (new in intentd):** `agentFeatures.backgroundHooks`, `agentFeatures.hostExec`, `agentFeatures.scripts`, `agentFeatures.terminalAccess`, `agentFeatures.browserAutomation`, `agentFeatures.desktopControl`, `agentFeatures.richChatBlocks`, `agentFeatures.structuredQuestions`, `agentFeatures.secretRequests`, `agentFeatures.attentionRequests`, `agentFeatures.stateSnapshot`, `agentFeatures.prMonitor` *(v6.1)*, `agentFeatures.taskGraph`, `agentFeatures.peerAgents` *(within v7.5)*, `agentFeatures.mcpTools` — booleans, TOML-backed under an `[agentFeatures]` config.toml section.
+  All default **`true`** except `agentFeatures.secretRequests`, which defaults to **`false`** (see its entry below). The defaults include the peer-agents surface (`ws.agent.create({ topLevel: true })` / `ws.agent.retire`, §5.5 "Peer agents"); an explicit `agentFeatures.peerAgents = false` keeps it disabled for new sessions.
   Per-feature toggles for what agents see and may call: background hooks (`ws.hook.*`), one-shot host command execution (`ws.host.exec`), saved scripts (`ws.script.*`), terminal read access (`ws.terminal.*`), browser automation (`ws.browser.*`), rich chat block prompt guidance (mermaid / ws-block / nav-link), structured questions (`ws.app.question.ask` — additionally **top-level-only** regardless of this toggle: a sub-agent bridge prunes/denies the binding with the §7 top-level-only redirect error, never the settings error; [intent-hq/intentd#1063](https://github.com/intent-hq/intentd/pull/1063)), attention requests (`ws.agent.reportBlocker` / `ws.agent.requestDiscussion` — `ws.agent.reportToParent` and the rest of `ws.agent.*` stay un-gated), the per-turn agent state snapshot injection (the `current ws.agent.snapshot() => {…}` prompt prefix; §5.5 "Per-turn agent state snapshot"), and centralized PR monitoring (`ws.pr.monitor` / `ws.pr.unmonitor` / `ws.pr.monitors`, §5.42 — `ws.pr.snapshot` stays un-gated, and turning the toggle off also scrubs the "prefer `ws.pr.monitor`" cross-references from the `ws.hook.schedule` and `ws.pr.snapshot` doc entries), and external MCP server tools (`ws.mcp.*` — `listServers` / `listTools` / `callTool`: the user-configured external MCP servers' tools forwarded to agents, from background hooks and the interactive `workspace_api` bridge alike; the `listServers` projection is non-sensitive by construction — `env` / `headers` / `command` never appear; [intent-hq/intentd#1483](https://github.com/intent-hq/intentd/pull/1483));
   `peerAgents` gates exactly independent top-level agent creation and self-retire (`ws.agent.create({ topLevel: true })` / `ws.agent.retire` — the `create` gate is arg-conditional (only `topLevel: true` calls are denied when the toggle is off; plain `create` is never feature-gated), and the top-level path is additionally restricted to foreground top-level callers — sub-agents denied at the dispatch layer like `ws.app.question.ask` above, background callers at the handler layer; §5.5 "Peer agents").
   `taskGraph` gates the task-graph delegation prompt and tool-description guidance; it does not deny dispatch of task-graph parameters.
   Unblocked-wake teaching uses the `taskGraph` value captured when the parent agent session is created, not the effective setting at wake delivery, so flipping the toggle never changes an existing session's wakes.
   Toggles are captured at agent-session creation (system prompt) and at per-agent MCP bridge creation (tool surface) — never live-read per call — so a change applies to **new sessions only** unless noted otherwise below; existing sessions keep the surface they were created with.
+  Background hook runs are not sessions: each run builds a fresh `ws.*` host from the live toggles at run time, so a change reaches an existing hook at its next run; `agentFeatures.secretRequests` is always off there ([§5.40 API surface per run](./hooks.md#540-background-hooks--hook-v210), [§5.56](./secrets.md#storage-and-lifetime)).
   Two deliberate exceptions: `hook.schedule` also checks `agentFeatures.backgroundHooks` live in the services layer, so flipping it off denies **new** hook schedules immediately from all sessions (including pre-flip ones that still advertise `ws.hook.*`); already-active hooks are unaffected and run to their terminal state/TTL.
   `agentFeatures.mcpTools` is the other exception, and it is **both** captured AND live: the `ws.mcp.*` surface (tool docs / JS prelude / dispatch) is captured at bridge creation like every other toggle, and the services layer additionally re-reads the toggle **live on every forwarded call** — so flipping it off denies MCP tool calls immediately from all sessions, including pre-flip ones that still advertise `ws.mcp.*`.
   That live server-side gate also honors the `mcp.enableUserServers` master switch and the per-server disabled state (a server with `enabled: false` or listed in `mcp.disabledServers` is refused), so a `ws.mcp.callTool` only ever reaches a server the user's MCP settings currently allow.
   `agentFeatures.stateSnapshot` follows the same captured-at-creation rule as the other toggles ([intentd#1273](https://github.com/intent-hq/intentd/pull/1273)) — it gates the prompt injection only, and the `ws.agent.snapshot()` MCP tool is never gated and stays callable either way.
   Each `agentFeatures.*` definition carries the optional `tokenImpact` annotation — an approximate, human-readable prompt-token cost of the gated surface (e.g. `"~620 tokens/session"`; `stateSnapshot` is per **turn**: `"~50 tokens/turn"`; `taskGraph` adds `"+ variable per completion wake"`; `mcpTools` is `"~170 tokens/session"`) — measured chars/4 on the daemon and rendered dimmed next to the toggle by the FE; presence-detected like every additive field.
-- **Desktop control agent feature (prepared addition)**: `agentFeatures.desktopControl` *(boolean, default `true`, UI label **Desktop control**, category `agentFeatures`, TOML-backed under `[agentFeatures]`)* — desktop control API availability for newly created agents, including delegated agents. This addition is **not implemented by the current pins**. Missing settings and missing keys in older persisted feature snapshots default to true; explicit false survives session/bridge recreation. Capture and persist each new session's effective value; setting changes apply to **new sessions only**, without live revocation of existing sessions or deletion of remembered consent. The setting controls neither the protocol capability nor user permission: default-on never grants control. When off, omit operational desktop namespace/help exposure and reject acquisition and screenshot/input actions even through forged dispatch; authenticated cleanup and user revoke/Stop remain available. Desktop consent is independent of `agentFeatures.structuredQuestions`, including for delegates. Disabling `agentFeatures.stateSnapshot` suppresses automatic injection only; active start/grant/help release reminders and explicit snapshot calls remain available. See [Desktop control — Agent feature availability](./desktop.md#agent-feature-availability-prepared) for the precise gates and cleanup exception. Settings UI must explain “Applies to new agent sessions”; use Stop/revoke to interrupt an existing desktop session.
+  A new `agentFeatures.*` setting needs a cloudlands-fe Settings → Agent features toggle, or a reasoned `EXEMPT` entry landed first, and a mention in the list above (or, docs first, a prepared-addition entry below); `make check-agent-feature-toggles` enforces both ([docs/README.md](../../README.md)).
+- **Secret requests agent feature:** `agentFeatures.secretRequests` *(boolean, default `false`, UI label **Secret requests**, category `agentFeatures`, TOML-backed under `[agentFeatures]`)* — exposes `ws.secret.*` and the `ws.host.exec` `secretEnv` option to newly created top-level agents. Off by default; it needs `agentFeatures.hostExec` to be useful. Missing settings and missing keys in older persisted feature snapshots default to false. Capture and persist each new session's effective value; setting changes apply to **new sessions only**. When off, omit the namespace and option from discovery/help and reject them at dispatch with the feature-disabled tool failure; the `secret.*` router methods remain callable. See [Secret requests](./secrets.md#agent-feature-availability).
+- **Desktop control agent feature:** `agentFeatures.desktopControl` *(boolean, default `true`, UI label **Desktop control**, category `agentFeatures`, TOML-backed under `[agentFeatures]`)* — desktop control API availability for newly created agents, including delegated agents. Missing settings and missing keys in older persisted feature snapshots default to true; explicit false survives session/bridge recreation. Capture and persist each new session's effective value; setting changes apply to **new sessions only**, without live revocation of existing sessions or deletion of remembered consent. The setting controls neither the protocol capability nor user permission: default-on never grants control. When off, omit operational desktop namespace/help exposure and reject acquisition and screenshot/input actions even through forged dispatch; authenticated cleanup and user revoke/Stop remain available. Desktop consent is independent of `agentFeatures.structuredQuestions`, including for delegates. Disabling `agentFeatures.stateSnapshot` suppresses automatic injection only; active start/grant/help release reminders and explicit snapshot calls remain available. See [Desktop control — Agent feature availability](./desktop.md#agent-feature-availability) for the precise gates and cleanup exception. Settings UI must explain “Applies to new agent sessions”; use Stop/revoke to interrupt an existing desktop session.
 - **PR monitor (v6.1):** `prMonitor.debounceSeconds` *(number, default `60`, minimum `10`)* — the quiet window a changed PR must observe before its consolidated wake is delivered — `prMonitor.pollSeconds` *(number, default `60`, minimum `10`)* — the tick cadence of the centralized loop and the active workspace interval; idle checks use a floor of 120/300/600/900 seconds after 15 minutes/1 hour/6 hours/24 hours without content work, while slower configured intervals still apply (§5.42) — `prMonitor.hourlyRequestBudget` *(number, default `1500`, minimum `60`, maximum `5000`; added within v9.12)* — the forge calls per hour the loop plans to spend across all monitored PRs in the steady state — and `prMonitor.quotaSharePercent` *(number, default `50`, minimum `1`, maximum `100`; added within v10.2, [intent-hq/intentd#1948](https://github.com/intent-hq/intentd/pull/1948))* — the share of the forge's **remaining** PR-read quota (from the shared authoritative quota probe, with a 60-second minimum interval; §5.42) the loop may plan to spend before the window resets.
   Both are cadence **cost models**, not hard ceilings: each distinct-PR poll is costed at 3 calls, and the effective per-PR interval — the minimum time between two polls of one PR; the actual revisit rounds up to the next `pollSeconds` tick at or after it — is the largest of the fastest interested workspace’s idle interval (§5.42), the hourly-budget cadence `max(pollSeconds, ceil(distinctPRs × 3 × 3600 / hourlyRequestBudget))` (before idle delay, at the defaults up to 8 PRs keep 60s; 10 PRs → 72s, revisited at the 120s tick; 20 PRs → 144s, at the 180s tick) and the quota cadence `ceil(distinctPRs × 3 × secondsToReset / allowed)` with `allowed = floor(remaining × quotaSharePercent / 100)` (integer arithmetic; `secondsToReset` capped at 2h), rounded up to whole `pollSeconds` ticks — so the monitor slows down ahead of exhaustion, before the shared rate-limit pause has to stop it, and once `allowed < 3` (the share cannot cover a single 3-call fetch) it polls nothing until the window resets (§5.42).
   A host without the `remaining` / reset signal, or a failed probe, plans on the hourly budget alone.
@@ -588,21 +638,21 @@ preserved, including when there is no working repository connection. Profile
 selection changes neither Intent principal ID nor host/workspace authority.
 Keep generation fencing against an earlier pending refresh/selection.
 
-The desktop `labs:multiplayerEnabled` preference is not a daemon setting or
-permission. It gates the experimental collaboration UI, including the tab and
-direct routes, and cannot grant access or revoke saved memberships when toggled.
+The desktop client no longer has a Multiplayer preference: the retired
+`labs:multiplayerEnabled` key was never a daemon setting or permission, and
+collaboration UI visibility follows server capabilities and role only.
 
-### Prepared GitLab child Git credential policy
+### GitLab child Git credential policy
 
-The prepared [protocol 15.1](../versioning.md) per-connection GitLab policy
+The [protocol 15.1](../versioning.md) per-connection GitLab policy
 controls use of Intent's managed Git credential helper by agents and terminals.
 Only the connected host's owner may
 change it; member access to repositories, checkout or workspace operations does
-not grant permission to enable the helper or manage credentials. This prepared
+not grant permission to enable the helper or manage credentials. This
 policy does not extend the existing GitHub-only `GitCredentialPolicy` projection
 above or imply that older daemons expose a GitLab policy control.
 
-The separate prepared capability is `gitlabChildGitPolicy: 1` on the original
+The separate capability is `gitlabChildGitPolicy: 1` on the original
 connection. `sourceControl.gitlab.childGit.get` accepts an empty params object
 `{}`; `sourceControl.gitlab.childGit.set` accepts exactly `binding` and Boolean
 `enabled`. These operations are not an arbitrary `settings.update` path, a
@@ -635,7 +685,7 @@ The illustrative explicit write is:
 {"jsonrpc":"2.0","id":222,"method":"sourceControl.gitlab.childGit.set","params":{"binding":{"instanceBaseUrl":"https://gitlab.example:8443/gitlab","connection":{"connectionId":"original-connection-example","accountId":"account-example","connectionGeneration":"7"},"revision":"policy-example"},"enabled":true}}
 ```
 
-The prepared response union is `connected` with exactly `binding`, `enabled`
+The response union is `connected` with exactly `binding`, `enabled`
 and `effective`, or `unavailable` with exactly `reason`. Both connected flags
 are Booleans. Display the returned effective state independently of the stored
 choice; do not infer it from connected authentication or an earlier write.
@@ -705,50 +755,33 @@ existing status polling and reconnect path; `null` must clear a cached override.
 There is no new RPC, event or broader guest settings access.
 
 
-#### Optional provider access tokens
+### Remote agent settings
 
-These additive sensitive settings reuse `settings.get`, `settings.list`,
-`settings.update` and `settings.reset`. They are administrator-only, like the
-other global settings. Member and guest callers cannot read or change them.
+These keys belong to [remote machines (§5.50)](./nodes.md#daemon-to-daemon-remote-machines).
+Like the other host settings they are owner-only. Neither is proposable: an
+Assistant chat settings-change card can never change the remote-agent permission
+policy or switch the daemon mode (see "Chat settings proposals" above). No setting
+switches remote agents on or off: a backend advertises `remoteMachines: 1`
+whenever it implements them outside node mode, the frontend offers them behind
+its Labs flag, and a machine serves a backend only once its owner mints an
+executor credential for it.
 
-| Credential kind | Setting path | Type | Storage |
-| --- | --- | --- | --- |
-| Claude setup token | `providers.claude-code.accessToken` | string, sensitive | SecretStore, account equals path |
-| Codex access token | `providers.codex.accessToken` | string, sensitive | SecretStore, account equals path |
+- `remoteAgents.permission` (enum `allowAll` | `autoByRisk` | `denyAll`, default
+  `allowAll`). Machine side: how provider permission prompts of remote agents are
+  answered, since no client is attached. Applies in regular and node mode.
+- `daemon.mode` (enum `regular` | `node`, default `regular`). `node` starts the
+  daemon with its own orchestration off and the node-mode method list.
+  Changeable only over the local UDS seat (WSS updates fail `-32003`); takes
+  effect at the next daemon start. `intentd serve --node` selects node mode for
+  that process without changing the setting.
 
-Clients show token controls only when the corresponding `providers.catalog` row
-advertises `accessToken`, and use its `settingPath`. Unsupported providers and
-unknown paths return `-32602`. Save or replace with
-`settings.update({ changes: [{ path, value: token }] })`; remove with
-`settings.reset({ path })`. Blank/whitespace-only tokens and non-string values
-(including null) are rejected with `-32602`; reset is the removal operation.
+The former switches `remoteAgents.enabled` and `experimental.remoteAgents` are
+**retired**: they have no catalog entry, so `settings.get` and `settings.update`
+on either path fail `-32602` as unknown settings. A settings file that still
+holds them loads; the daemon discards both with one warning at boot and strips
+them from the file.
 
-Reads return `value: "********"` when configured or `value: null` when absent,
-never the token, token prefix or token suffix. Sensitive definition metadata has
-`type: "string"`, `category: "providers"`, `sensitive: true` and no default value.
-The existing placeholder-preserve behavior applies. Update results and
-`settings:changed` events redact tokens; reset returns `{ path, value: null, revision }`. As for other sensitive
-settings, presence reads treat backing-store errors as absent for display and do
-not attest provider authentication. Tokens are kept out of config.toml and the
-ordinary settings database. Existing API-key storage and authentication remain
-available independently.
-
-Token changes apply to subsequent launches. Saving does not check account
-eligibility, renew a token, install a provider CLI or mutate a running process.
-Without a saved token, the target machine must be authenticated separately. A
-supplied token takes precedence in token-aware launch consumers; rejection must
-surface as authentication failure rather than selecting another account.
-
-**Adapter evidence:** the reviewed Claude adapter
-`@agentclientprotocol/claude-agent-acp@0.81.1` merges process environment into the
-SDK query options, including `CLAUDE_CODE_OAUTH_TOKEN`. Obtain the value with
-`claude setup-token`; see [Claude authentication](https://code.claude.com/docs/en/authentication).
-The reviewed `@agentclientprotocol/codex-acp@2.1.1` starts `codex app-server` with
-its inherited environment and reads the account via `account/read`.
-`CODEX_ACCESS_TOKEN` is consumed by a compatible installed Codex CLI, not by a
-new ACP authenticate method. [OpenAI's access-token documentation](https://learn.chatgpt.com/docs/enterprise/access-tokens)
-limits these tokens to ChatGPT Business and Enterprise workspaces and specifies
-CLI/app-server environment support. Use the CLI version required by the token
-creation dialog. These are Codex-scoped workspace access tokens, not arbitrary
-copied interactive OAuth sessions. Synthetic adapter tests can prove forwarding;
-only a live eligible account can establish provider acceptance.
+There is no remote-agent cap. Remote agents count against the machine's
+existing `agents.maxConcurrent` process cap and `agents.memoryBudgetMb`
+aggregate budget, shared with local agents; a launch those limits would deny is
+refused with `no-capacity`, never queued.

@@ -10,7 +10,7 @@ implicit identity lifecycle, rotating returning-credential behavior and global
 event/device restrictions. The existing identity triples, proof engines, guest
 rights and workspace-invitation lifetime rules remain the baseline.
 
-**Prepared guest role extension:** [Workspace guest roles](#workspace-guest-roles-prepared)
+**Guest role extension:** [Workspace guest roles](#workspace-guest-roles)
 add an owner-assigned `manager` role under exact integer `workspaceGuestRoles: 1`.
 The existing `collaborator` wire role is displayed as Participant. This extension
 does not grant host membership or broaden `canManage`.
@@ -36,14 +36,14 @@ Every method below is workspace-scoped unless stated otherwise. Five are **fast 
 | workspace.invite.list | workspaceId (req) | `{ invites: WorkspaceInvite[] }` — the **open** invites (not revoked, not expired, and — pinned only — not redeemed; a reusable invite stays listed across its redemptions) in `createdAt` order; **owner-only**. The raw `secret` is never a field, but each row carries `url?` — the same link `create` returned, rebuilt from the stored secret — so an open link **can** be re-copied from a `list` row (`url` is omitted only when the row predates the stored secret or no link envelope resolves right now — no listener, or the tunnel is down). A row minted before the envelope became tunnel-only is rebuilt tunnel-only too |
 | workspace.invite.revoke | workspaceId (req), inviteId (req) | `{ revoked: boolean }` — **owner-only**; `revoked: false` when the invite was already closed; an `inviteId` unknown to this workspace is `-32602 { code: "not-found" }`. Publishes `workspace:updated { changes: { invites: true } }` when a row changed |
 | invite.inspect *(fast path, `/invite` only)* | inviteId (req), secret (req) | `{ workspaceId, workspaceTitle, hostname, prettyHostname, collaborationName, pinIdentity }` — previews an **open** invite for the consent prompt: the same validation as `challenge` (a miss or closed link answers its § "Errors" kind), no nonce issued, no forge contacted. `pinIdentity` (10.8) is the required identity triple or explicit `null` (§ "Selecting the guest identity"). `hostname` / `prettyHostname` are the host's (same sources as `system.status`), added by the `/invite` transport ([#1963](https://github.com/intent-hq/intentd/pull/1963)) |
-| invite.accept *(fast path, `/invite` only)* | inviteId (req), secret (req), credential (req) | The **returning guest's** join: `credential` is a per-principal bearer this host minted on an earlier join; its hash resolves the principal exactly like the `/ws` bearer gate (unknown or revoked ⇒ `credential-invalid`; the primary's own ⇒ `owner-self-join`). The invite is validated like `inspect`, a pin is checked against the principal's **stored** identity (`invite-pin-mismatch`) and the join commits with that identity — no forge call, no profile refresh → `{ status: "authorized", token, principalId, login, workspaceId }` with a fresh credential ([#1963](https://github.com/intent-hq/intentd/pull/1963)). An archived workspace refuses the commit with `-32602 { code: "workspace-archived" }` (§ "The join commit") |
-| invite.challenge *(fast path, `/invite` only)* | inviteId (req), secret (req) | `{ workspaceId, workspaceTitle, hostname, prettyHostname, collaborationName, pinIdentity, nonce, nonceExpiresAt }` — validates the open invite like `inspect` and issues a **single-use nonce** bound to it: 32 random bytes (base64url, unpadded), valid **10 minutes**, consumed by the first `invite.prove` that names it. `pinIdentity` (10.8) has the same required-triple-or-null semantics as `inspect`. No forge is contacted ([#1965](https://github.com/intent-hq/intentd/pull/1965)). At most 8 outstanding nonces per invite and 256 daemon-wide (`invite-flow-busy` past either cap) |
+| invite.accept *(fast path, `/invite` only)* | inviteId (req), secret (req), credential (req) | The **returning guest's** join: `credential` is a per-principal bearer this host minted on an earlier join; its hash resolves the principal exactly like the `/ws` bearer gate (unknown or revoked ⇒ `credential-invalid`; the primary's own ⇒ `owner-self-join`). The invite is validated like `inspect`, a pin is checked against the principal's **stored** identity (`invite-pin-mismatch`) and the join commits with that identity — no forge call for the guest and no profile refresh; only the owner-forge check (after the invite and secret validate) refuses with `github-identity-required`, or `github-unreachable`, while no owner forge is connected → `{ status: "authorized", token, principalId, login, workspaceId }` with a fresh credential ([#1963](https://github.com/intent-hq/intentd/pull/1963)). An archived workspace refuses the commit with `-32602 { code: "workspace-archived" }` (§ "The join commit") |
+| invite.challenge *(fast path, `/invite` only)* | inviteId (req), secret (req) | `{ workspaceId, workspaceTitle, hostname, prettyHostname, collaborationName, pinIdentity, nonce, nonceExpiresAt }` — validates the open invite like `inspect` and issues a **single-use nonce** bound to it: 32 random bytes (base64url, unpadded), valid **10 minutes**, consumed by the first `invite.prove` that names it. `pinIdentity` (10.8) has the same required-triple-or-null semantics as `inspect`. No forge is contacted for the guest; only the owner-forge check (after the invite and secret validate) refuses with `github-identity-required`, or `github-unreachable`, while no owner forge is connected ([#1965](https://github.com/intent-hq/intentd/pull/1965)). At most 8 outstanding nonces per invite and 256 daemon-wide (`invite-flow-busy` past either cap) |
 | invite.prove *(fast path, `/invite` only)* | inviteId (req), secret (req), nonce (req), login (req), gistId? *(github)*, provider?: `"github"` \| `"gitlab"` *(10.8, default `"github"`)*, host? *(10.8)*, proofId? *(10.8; alias of `gistId` — exactly one of the two is required)* | The guest published `nonce` in a proof it owns on the named forge (§ "The identity proof") and names it; the host verifies the proof, resolves the account it belongs to and commits the join → `{ status: "authorized", token, principalId, login, workspaceId }` — the **token exactly once**. Refusals: `proof-invalid`, `proof-expired`, `github-unreachable` (the nonce survives for a retry), `identity-unverifiable` *(10.8)*, `owner-self-join`, `invite-pin-mismatch`, `workspace-full`, `workspace-archived` (the shared join transaction found the workspace archived — a proof that validated before a `workspace.archive` and commits after it; a proof validated after the sweep fails earlier with the invite's closed state `invite-revoked`, § "The join commit"), or the invite's closed state ([#1965](https://github.com/intent-hq/intentd/pull/1965), [#1986](https://github.com/intent-hq/intentd/pull/1986)) |
 
-#### Workspace guest roles (prepared)
+#### Workspace guest roles
 
-This extension is part of experimental Multiplayer; the contract does not claim
-a carrying release. Exact integer `workspaceGuestRoles: 1` on both `client.hello`
+This extension is part of experimental Multiplayer; intentd implements it, but
+the desktop feature stays in Labs. Exact integer `workspaceGuestRoles: 1` on both `client.hello`
 (`server.capabilities`) and `system.capabilities` advertises the complete role
 mutation and scoped authorization contract. Missing, malformed or unknown values
 disable role changes. Read support per connection, and refresh authority after
@@ -74,6 +74,7 @@ membership. Imports do not carry authority from the exporting host.
 | Permission | Participant | Manager |
 | --- | --- | --- |
 | Existing guest reads, discussion and agent prompting | Existing behavior | Same |
+| Rename workspace-wide discussions under `discussionManagement: 1` | Not allowed | Allowed; deletion remains Owner-only |
 | Existing `agent.setModel` RPC | Existing behavior retained | Same |
 | Create agents and use model/provider controls | Existing UI restrictions | Allowed within the granted workspace |
 | Run and observe existing saved scripts | Existing restrictions | Allowed within the granted workspace |
@@ -113,7 +114,7 @@ treating a capability flag or a selected menu value as a grant.
 
 #### Identity model
 
-- A **principal** is a person. The daemon's existing single user is the **primary** principal — minted by migration `0125` and made the **owner** of every workspace that already existed — and every other principal is someone who joined through an invite, identified by the stable forge account that its identity proof established at first join (§ "Joining by invite"); a returning guest is re-bound to the same principal by its credential, no forge call. `login` / `displayName` / `avatarUrl` are the cached forge profile.
+- A **principal** is a person. The daemon's existing single user is the **primary** principal — minted by migration `0125` and made the **owner** of every workspace that already existed — and every other principal is someone who joined through an invite, identified by the stable forge account that its identity proof established at first join (§ "Joining by invite"); a returning guest is re-bound to the same principal by its credential, with no forge call for its identity (only the owner-forge check of § "Invite links"). `login` / `displayName` / `avatarUrl` are the cached forge profile.
 - **Identity triple (10.8).** A principal's forge account is the provider-neutral triple `identity: { provider, host, externalUserId }` — `provider` is `"github"` | `"gitlab"`, `host` the bare instance host (`"github.com"`, `"gitlab.com"`, a self-managed GitLab `host[:port]`), `externalUserId` the forge's stable account id **as a string** (GitHub's numeric id stringified; provider-agnostic storage). **One principal per triple** (partial unique index; `NULL` while unlinked): a GitHub user and a GitLab user with the same numeric id or the same login are two principals. The triple is **additive** on every wire projection of a principal — `principal.me`, `principal.list` rows, `workspace.members.list` Member rows — and omitted while the principal has no linked identity. The pre-10.8 GitHub key is kept and stays populated: `githubUserId?` (the integer, on `principal.list` rows) is still served for a `github` identity, and the migration backfills every existing row as `{ provider: "github", host: "github.com", externalUserId: String(githubUserId) }` with zero principal loss. Pins (`WorkspaceInvite.pinIdentity?`) and the owner-self-join refusal compare triples, never logins.
 - **Which forge is the primary's identity (10.8).** The primary principal links the forge selected by the `identity.provider` setting (`"github"` | `"gitlab"` | `null`, §5.12): set and connected ⇒ that forge; `null` with exactly one forge connected ⇒ that one; `null` with both ⇒ the current identity if any, else `github` (the client prompts the user to choose). The identity is read from GitHub `GET /user` or GitLab `GET /api/v4/user`. Changing the setting is an **explicit re-key** of the primary's triple and publishes `principal:identity-changed` (§6); the identity lock below still blocks *implicit* re-keys (a token swap to another account of the same provider without a setting change).
 - **Caller binding happens at the upgrade gate**, once per connection, from the presented bearer token: the legacy file token (`server.auth.token`) binds the primary principal as **administrator**; a per-principal credential (`principal_credential` row, matched by hex SHA-256 of the token) binds that principal as a **non-administrator**. An unknown token is still `401`. The binding never changes for the connection's lifetime and is never taken from `client.hello` — `principal.me` reports it. Agents (MCP) and the daemon itself act as the primary principal.
@@ -171,7 +172,7 @@ treating a capability flag or a selected menu value as a grant.
 #### Invite links — `workspace.invite.create`
 
 - `expiresInSecs` defaults to **7 days** (`604800`) and must be in `[1, 2592000]` (30 days), else `-32602`. `pinLogin?` restricts redemption to one forge account: it is trimmed (blank ⇒ unpinned), resolved **at mint time** on the forge `pinProvider?` / `pinHost?` name — GitHub `GET /users/{login}`, GitLab `GET /api/v4/users?username=` — and stored as the identity triple (`pinIdentity`; `pinLogin` is kept as the canonical login for display; `pinGithubUserId` is still populated for a github pin) — a login that names no account is `-32602 { code: "invite-pin-unknown" }`. **`pinProvider` / `pinHost` (10.8)** default to the host's **own** identity provider and host (§ "Identity model"), so a pre-10.8 client that sends `pinLogin` alone keeps its behavior on a GitHub-identity host; a `pinProvider` outside the enum is `-32602`. Because the pin is a triple, a GitHub user cannot redeem an invite pinned to a same-named GitLab login — the join is `invite-pin-mismatch`.
-- **Inviting requires a linked forge identity.** The primary's cached identity alone does not qualify: the identity forge's auth status (`github.authStatus`, or `sourceControl.authStatus { provider: "gitlab" }`) must report a configured, working credential on every mint (the profile is fetched inline when the row is still unlinked), else `-32603 { code: "github-identity-required" }` — the code is kept for compatibility (10.8) but is raised only when **no** forge identity is linked, with a provider-neutral message; a host with a GitLab connection and no GitHub credential mints normally. A joined collaborator's identity was proven by its own identity proof and is accepted as cached — but `workspace.invite.create` is owner-only, so in v1 only the primary mints.
+- **Sharing requires a connected owner forge.** The primary's cached identity alone does not qualify: on every mint, GitHub (`GET /user` with the host's credential) or the bound GitLab instance (`GET /api/v4/user`) must answer for a live account — either forge suffices, whichever one the identity is linked to — else `-32603 { code: "github-identity-required" }` (the code is kept for compatibility from the GitHub-only era; its message is provider-neutral). When neither is connected but one could not be reached, the refusal is the retryable `-32603 { code: "github-unreachable" }` instead. The same check gates redemption: `invite.challenge`, `invite.prove` and `invite.accept` on a valid open invite (checked after the invite and secret validate, and before a prove spends its nonce) refuse the same way while no owner forge is connected, and the invite stays open until one reconnects; existing members keep access. A joined collaborator's identity was proven by its own identity proof and is accepted as cached — but `workspace.invite.create` is owner-only, so in v1 only the primary mints.
 - **Guest cap.** Every open invite reserves a guest seat: when the workspace's collaborators plus its open invites already reach `sharing.maxGuestsPerWorkspace`, `create` is `-32602 { code: "guest-limit" }` (so N open links can never be redeemed against one remaining seat); a join that finds the collaborators alone at the cap is `workspace-full` and leaves the invite open. `workspace.members.list` reports the spend as `guestCount` / `guestLimit`.
 - **Reusable links** ([intent-hq/intentd#1988](https://github.com/intent-hq/intentd/pull/1988)). An **unpinned** invite is reusable: any number of distinct forge accounts may join through it until it expires or is revoked (each join is one more collaborator; a member re-joining is idempotent), and its `redeemedAt` / `redeemedByPrincipalId` only record the **last** redemption while `redemptionCount` counts the memberships it created — the row stays in `workspace.invite.list` with `reusable: true`, and its `url` lets the owner re-share the same link. A **pinned** invite is single-use and closes on its redemption (`invite-redeemed` thereafter).
 - **The link envelope is tunnel-only and is resolved exactly once per `create`, before the invite is minted**, so a daemon nobody can dial never stores an invite that cannot be redeemed: no TCP listener is `-32603 { code: "listener-down" }` (the `pairing.getInfo` discriminator); a listener whose Tailcat tunnel is not running is `-32603 { code: "tunnel-down" }` (turn on Remote Access + Tailcat — `server.tunnel.enabled`). No invite row is stored in either case. The envelope is the `intent://pair` one (§5.12 `pairing.getInfo`) **minus the bearer token and minus the direct `hosts`**: `port`, certificate `fingerprint` and the tunnel `tcAddress` only — an invite never discloses the daemon's interface / bind IP addresses, whatever `server.bindAddress` is. `hosts` is always `[]` in the result. (`intent://pair` links and `pairing.getInfo` are unchanged: pairing an owner's own device still carries the direct hosts.)
@@ -200,13 +201,13 @@ The returning guest's `invite.accept` continues to validate the identity bound t
 
 ##### The identity proof — `invite.challenge` / `invite.prove`
 
-1. **Challenge — `invite.challenge { inviteId, secret }`** → `{ workspaceId, workspaceTitle, hostname, prettyHostname, collaborationName, pinIdentity, nonce, nonceExpiresAt }`. The host validates the open invite and issues a single-use **nonce** (32 random bytes, base64url unpadded, 10-minute lifetime) bound to the invite; `workspaceId` / `workspaceTitle` / `hostname` / `prettyHostname` let the guest's client name the workspace and host on its consent prompt (`invite.inspect` answers the same preview without spending a nonce). `pinIdentity` selects the required guest identity as above before publishing the proof. No forge is contacted.
+1. **Challenge — `invite.challenge { inviteId, secret }`** → `{ workspaceId, workspaceTitle, hostname, prettyHostname, collaborationName, pinIdentity, nonce, nonceExpiresAt }`. The host validates the open invite and issues a single-use **nonce** (32 random bytes, base64url unpadded, 10-minute lifetime) bound to the invite; `workspaceId` / `workspaceTitle` / `hostname` / `prettyHostname` let the guest's client name the workspace and host on its consent prompt (`invite.inspect` answers the same preview without spending a nonce). `pinIdentity` selects the required guest identity as above before publishing the proof. No forge is contacted for the guest; only the owner-forge check (after the invite and secret validate) refuses with `github-identity-required`, or `github-unreachable`, while no owner forge is connected.
 2. **Publish** — the guest, on its **own** authenticated `/ws` connection to its own daemon, calls `sourceControl.identityProof.create { provider, host?, nonce, hostLabel }` (§5.27; `github.identityProof.create { nonce, hostLabel }` is the pre-10.8 alias) → `{ proofId, login, provider, host, externalUserId, avatarUrl, gistId? }` (`externalUserId` and `avatarUrl` always present, both `string | null`; `externalUserId` is the GitLab author id string and `null` for GitHub, whose identity the host resolves server-side from `gistId` / `login` in step 3 — clients must not depend on it for GitHub). Its daemon publishes the nonce with its stored forge token: on **GitHub** a **secret gist** with the single file `intent-join-proof.txt` whose first line is the nonce; on **GitLab** a **public personal snippet** (`POST /api/v4/snippets`, title naming Intent, one file whose first line is the nonce — public because the host verifies it anonymously; the guest's token needs the `api` scope). The guest's token never leaves the guest's daemon.
 3. **Prove — `invite.prove { inviteId, secret, nonce, login, proofId, provider?, host? }`** (`gistId` is the pre-10.8 spelling of `proofId`; exactly one of the two). The host reads the proof back on the named forge — GitHub `GET /gists/{id}`; GitLab an **anonymous** read of the snippet metadata and raw content, falling back to an **authenticated** read with the host's **own** connection to the **same** `host` when the anonymous read is refused (`401` / `403` / a restricted `404`) — and requires: the owner (`author.username` on GitLab) equals `login` case-insensitively, the file's first line is the nonce, and the proof was created no earlier than the nonce was issued. Any mismatch, an unknown proof, or a nonce this host never issued for the invite (or already consumed) is `-32602 { code: "proof-invalid" }`; a nonce past its lifetime `proof-expired` (start over with `challenge`); the forge unreachable `-32603 { code: "github-unreachable" }` (the code is kept for both providers; the nonce stays valid for a retry); a GitLab host the daemon can neither read anonymously nor with a connection of its own is `-32603 { code: "identity-unverifiable", host }` with the message `cannot verify identity on <host>` (10.8; `error.data.host` names the instance). The nonce is consumed by the first attempt that reaches verification, except when the forge was unreachable. The identity then comes from the proof itself (GitHub: `GET /users/{login}`; GitLab: the snippet's `author` — `id`, `username`, `avatar_url` — no follow-up user call) and the join commits (below) → `{ status: "authorized", token, principalId, login, workspaceId }` — the **token exactly once**. The proven account being the **primary principal's own** is `-32602 { code: "owner-self-join" }`: the host owner cannot join its own host as a guest, no credential is minted and the invite stays open ([#1986](https://github.com/intent-hq/intentd/pull/1986); compared on the identity triple in 10.8).
 4. **Clean up** — the guest deletes its proof: `sourceControl.identityProof.delete { provider, host?, proofId }` → `{ ok: true }` (idempotent; refuses to delete anything that is not a proof of this shape).
 5. **Connect.** The guest reconnects through the tunnel route the link's `tc` names (the link carries no direct hosts; `/ws` directly only for a legacy link that still carries `host=`) with `token` as the bearer — the same port / fingerprint the link carried — and is bound as a non-administrator principal: `principal.me` names it (with its `identity`), `workspace.list` shows the joined workspace with `myRole: "collaborator"`, and every call is subject to the collaborator allowlist below.
 
-**Returning guests — `invite.inspect` / `invite.accept`.** A guest that already holds a credential from this host (another workspace's join) skips the proof: `invite.inspect { inviteId, secret }` previews the invite, `invite.accept { inviteId, secret, credential }` resolves the principal from the credential's hash exactly like the `/ws` bearer gate (unknown or revoked ⇒ `-32602 { code: "credential-invalid" }` — join through the proof instead; bound to the primary ⇒ `owner-self-join`), checks a pin against the principal's **stored** identity and commits the join with that identity — no forge call, no profile refresh — answering the `prove` shape with a **fresh** credential (the presented one is rotated out). Works for a `gitlab` principal exactly as for a `github` one (10.8).
+**Returning guests — `invite.inspect` / `invite.accept`.** A guest that already holds a credential from this host (another workspace's join) skips the proof: `invite.inspect { inviteId, secret }` previews the invite, `invite.accept { inviteId, secret, credential }` resolves the principal from the credential's hash exactly like the `/ws` bearer gate (unknown or revoked ⇒ `-32602 { code: "credential-invalid" }` — join through the proof instead; bound to the primary ⇒ `owner-self-join`), checks a pin against the principal's **stored** identity and commits the join with that identity — no forge call for the guest and no profile refresh; only the owner-forge check (after the invite and secret validate) refuses with `github-identity-required`, or `github-unreachable`, while no owner forge is connected — answering the `prove` shape with a **fresh** credential (the presented one is rotated out). Works for a `gitlab` principal exactly as for a `github` one (10.8).
 
 ##### The join commit
 
@@ -270,6 +271,14 @@ The baseline counts/list above predate this addition. It permits user-initiated 
 of an existing agent; it does not grant collaborator access to `agent.delete` or MCP
 retirement of another agent. See [§5.5 Direct user retirement](./agents.md#direct-user-retirement).
 
+**Remote machine administration:** `executor.mint`, `executor.list`,
+`executor.revoke`, `executor.invite.create`, the seven `remoteMachines.*` methods and the three
+`remoteLinkTraffic.*` methods
+([§5.50](./nodes.md#daemon-to-daemon-remote-machines)) join the
+owner-only refused remainder. They are on neither the collaborator nor the
+member allowlist: a machine shared with you is someone else's computer, so only
+its owner can lend it to a backend.
+
 Within the allowed set, four more rules apply to a collaborator caller:
 
 - **Projected `system.status`.** A collaborator receives a default-deny projection of the §5.7 result: `running`, `listenMode`, `port`, `version`, `buildCommit`, `protocolVersion`, `fingerprint`, `localIps`, `tcAddress`, `hostname`, `prettyHostname`, `collaborationName` and a `host` sub-object reduced to `os` / `arch` / `locality` / `deviceKind` / `hardwareModel` — every one already disclosed by the invite envelope or `server.pairingInfo`. The daemon-global counts (`clients`, `agents`, `busyAgents`, `maxAgents`), process / disk / file-watch / fd telemetry, the agent-memory budget, the update handshake, `transports` and `host.hasDisplay` are omitted; the administrator's snapshot is unchanged.
@@ -297,9 +306,9 @@ A non-administrator connection receives only the event types below — live over
 | search | search:done, search:result |
 | skills / specialists | skills:changed, specialists:changed |
 | task | task:agent-linked, task:agent-unlinked, task:created, task:ready-tasks-changed, task:status-changed |
-| workspace | workspace:activity, workspace:activity-changed, workspace:attention-changed, workspace:closed, workspace:context-changed, workspace:created, workspace:delete-cancelled, workspace:delete-scheduled, workspace:deleted, workspace:displayStatus-changed, workspace:opened, workspace:setup:completed, workspace:setup:started, workspace:tokenUsage-changed, workspace:updated, workspace:waiting-changed |
+| workspace | workspace:activity, workspace:activity-changed, workspace:attention-changed, workspace:backgroundTasksRunning-changed, workspace:closed, workspace:context-changed, workspace:created, workspace:delete-cancelled, workspace:delete-scheduled, workspace:deleted, workspace:displayStatus-changed, workspace:opened, workspace:setup:completed, workspace:setup:started, workspace:tokenUsage-changed, workspace:scriptsRunning-changed, workspace:updated, workspace:waiting-changed |
 
-Owner-only (the 49 refused types, `COLLABORATOR_REFUSED_EVENT_TYPES` in the intent-core golden): `terminal:data` / `terminal:exit` (raw PTY bytes) and `terminal:command` / `terminal:cwd` / `terminal:title`, `host:exec:stdout` / `stderr` / `exit`, `script:changed` / `output` / `state`, `build:started` / `build:completed`, `test:started` / `test:completed`, `browser:tab-opened` / `tab-updated` / `tab-closed`, `client:connected` / `client:disconnected`, `hook:run-started` / `hook:run-completed` (hook code and carried state), `agent:permission:request` / `agent:permission:resolved`, the agent delivery / subscription bookkeeping `agent:message:sent` / `agent:message:received` / `agent:message:delivery-failed` / `agent:delivery-confirmed` / `agent:event-delivery-failed` / `agent:event-delivery-timeout` / `agent:subscribed` / `agent:unsubscribed` / `agent:subscriptions-restored` / `agent:woken-by-subscription`, `workspace:transfer:progress` / `ready` / `failed`, `git:clone:progress` / `git:clone:done`, `gitRoot:registered` / `updated` / `unregistered`, `app:ui-highlight` / `app:ui-navigate` / `app:workspace-open`, `settings:changed`, `github:auth-changed`, `mcp.servers:status-changed`, `mcp:notification`.
+Owner-only (the 57 refused types, `COLLABORATOR_REFUSED_EVENT_TYPES` in the intent-core golden): `terminal:data` / `terminal:exit` (raw PTY bytes) and `terminal:command` / `terminal:cwd` / `terminal:process` / `terminal:title`, `host:exec:stdout` / `stderr` / `exit`, `script:changed` / `output` / `state`, `build:started` / `build:completed`, `test:started` / `test:completed`, `browser:tab-opened` / `tab-updated` / `tab-closed`, `client:connected` / `client:disconnected`, `hook:run-started` / `hook:run-completed` (hook code and carried state), `agent:permission:request` / `agent:permission:resolved`, the agent delivery / subscription bookkeeping `agent:message:sent` / `agent:message:received` / `agent:message:delivery-failed` / `agent:delivery-confirmed` / `agent:event-delivery-failed` / `agent:event-delivery-timeout` / `agent:subscribed` / `agent:unsubscribed` / `agent:subscriptions-restored` / `agent:woken-by-subscription`, `workspace:transfer:progress` / `ready` / `failed`, `git:clone:progress` / `git:clone:done`, `gitRoot:registered` / `updated` / `unregistered`, `app:ui-highlight` / `app:ui-navigate` / `app:workspace-open`, `settings:changed`, `github:auth-changed`, `mcp.servers:status-changed`, `mcp:notification`.
 
 #### Attribution — who wrote a human message
 
@@ -336,7 +345,7 @@ The removed member receives its own `removedPrincipalId` event as the last frame
 | -32602 | `{ code: "guest-limit" \| "workspace-full" }` | `workspace.invite.create` / `workspace.members.add` when collaborators plus open invites already reach `sharing.maxGuestsPerWorkspace`; a join (`invite.prove` / `invite.accept`) that finds the collaborators alone at the cap — the invite stays open |
 | -32602 | `{ code: "workspace-archived" }` | `workspace.members.add`, `workspace.invite.create`, or the join commit (`invite.prove` / `invite.accept`) on an **archived** workspace — archiving detached every guest and closed every open invite, so nothing is minted, added or joined until it is unarchived (`message`: `invalid params: this workspace is archived; unarchive it before inviting or adding members`); checked inside each operation's own write transaction, so a join racing `workspace.archive` is either swept by the archive or refused, never seated afterwards — with this code when the join's validation passed before the archive and its transaction ran after it, or with the invite's closed state `invite-revoked` when validation itself re-read the already-swept invite ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)) |
 | -32602 | `{ code: "proof-invalid" \| "proof-expired" \| "credential-invalid" \| "owner-self-join" }` | `invite.prove`: the proof does not prove the claimed `login` (unknown proof, another owner, no proof file or a first line that is not the nonce, created before the nonce was issued, or a nonce this host never issued for the invite / already consumed); the nonce's 10-minute lifetime passed (start over with `invite.challenge`). `invite.accept`: the presented credential is unknown or revoked. Both: the proven or credential-bound account is the primary principal's own — the host owner cannot join its own host as a guest |
-| -32603 | `{ code: "github-identity-required" \| "primary-identity-locked" \| "invite-flow-busy" \| "github-unreachable" }` \| `{ code: "identity-unverifiable", host }` | Inviting with **no** forge identity linked (the code is kept from the GitHub-only era; the message is provider-neutral in 10.8); the primary identity reconnect guard; the `/invite` caps — 4 in flight per connection, the listener-wide token bucket over starts, 8 outstanding nonces per invite / 256 daemon-wide; the forge could not be reached (or answered a server error) while verifying the proof — the nonce stays valid for a retry; **10.8** — the GitLab `host` named by `invite.prove` refuses anonymous reads and the host daemon has no connection of its own to that instance to read the snippet with (`message`: `cannot verify identity on <host>`) |
+| -32603 | `{ code: "github-identity-required" \| "primary-identity-locked" \| "invite-flow-busy" \| "github-unreachable" }` \| `{ code: "identity-unverifiable", host }` | Inviting, or redeeming through `invite.challenge` / `invite.prove` / `invite.accept`, with **no** owner forge connected (the code is kept from the GitHub-only era; the message is provider-neutral); the primary identity reconnect guard; the `/invite` caps — 4 in flight per connection, the listener-wide token bucket over starts, 8 outstanding nonces per invite / 256 daemon-wide; the forge could not be reached (or answered a server error) while checking the owner's own forge connection on create or redeem, or while verifying the proof — a prove's nonce stays valid for a retry; **10.8** — the GitLab `host` named by `invite.prove` refuses anonymous reads and the host daemon has no connection of its own to that instance to read the snippet with (`message`: `cannot verify identity on <host>`) |
 | -32603 | `{ code: "github-not-connected" \| "github-scope-missing" \| "github-unreachable" }` \| `{ code: "gitlab-not-connected" \| "gitlab-scope-missing" \| "gitlab-unreachable" }` *(10.8)* \| `{ code: "rate-limited" }` | `sourceControl.identityProof.create` / `.delete` (`github.identityProof.*` is the GitHub alias) on the **guest's** daemon (§5.27), keyed per provider: no stored credential for `(provider, host)` or the forge rejected it; the credential lacks the scope the proof needs (`gist` on GitHub — re-run `github.connect`; `api` on GitLab); the forge unreachable. `rate-limited` (provider-neutral, §9; [intent-hq/intent#5627](https://github.com/intent-hq/intent/issues/5627)): the guest's **own** daemon is rate-limited by the forge (exhausted primary quota or a secondary limit) — the credential is fine, so the guest waits for the limit to lift and retries after a backoff instead of signing in again; the guest's `github.getUser` probe before the proof answers the same code |
 | -32603 | `{ code: "listener-down" }` | `workspace.invite.create` with no TCP listener to embed in the link (same discriminator as `pairing.getInfo`) |
 | -32603 | `{ code: "tunnel-down" }` | `workspace.invite.create` with a TCP listener up but the Tailcat tunnel not running — the envelope is tunnel-only, so there is no `tc` to embed (`server.tunnel.enabled`); no invite row is stored. Never raised by `pairing.getInfo` |
@@ -362,18 +371,18 @@ See [the setting contract](./settings.md#collaborator-facing-machine-name).
 
 ### 5.55 Workspace discussions
 
-**Additive, prepared for protocol 15.1.** A workspace has a default discussion for
-all current members and may have direct or group discussions with selected
-members. These are separate from agent conversations and note comments. The
-desktop entry point remains behind Multiplayer Labs. Replies and reactions use
+**Additive in protocol 15.1.** A workspace has a default discussion for
+all current members. Under `discussionManagement: 1`, every new conversation is
+workspace-wide; earlier direct/group histories remain private and read-only.
+These are separate from agent conversations and note comments. The desktop entry point remains behind Multiplayer Labs. Replies and reactions use
 the independently gated message-actions extension below. Binary attachments,
 message edits, and changes to a conversation's participants are outside this contract.
 
 Exactly integer `discussionConversations: 1` in the server capabilities advertises
 the complete multiple-conversation contract. Clients must check this capability
-before sending recipient lists or non-default conversation IDs: an earlier
-single-discussion daemon may ignore unknown fields and otherwise send private
-content to the workspace-wide discussion. Missing or unrecognized capability
+before sending non-default conversation IDs: an earlier
+single-discussion daemon may ignore unknown fields and send to the wrong
+conversation. Missing or unrecognized capability
 values never authorize a fallback send.
 
 Exactly integer `discussionMessageActions: 1`, returned by both hello and
@@ -387,34 +396,89 @@ and does not replace the private-conversation gate.
 | discussion.conversations | workspaceId (req), beforeId? (exclusive conversation ID), limit? (integer 1–100, default 50) | `{ conversations: DiscussionConversation[], hasMore: boolean }` — only conversations accessible to the caller |
 | discussion.recipients | workspaceId (req), query? (profile search string, at most 256 UTF-8 bytes), afterPrincipalId? (exclusive principal ID), limit? (integer 1–100, default 50) | `{ members: DiscussionAuthor[], hasMore: boolean }` — current effective workspace members, including offline members, excluding the caller |
 | discussion.list | workspaceId (req), conversationId? (default `"default"`), beforeSequence? (positive integer, exclusive), afterSequence? (nonnegative integer, exclusive; mutually exclusive with beforeSequence), limit? (integer 1–100, default 50) | `{ messages: DiscussionMessage[], hasMore: boolean, conversation: DiscussionConversation }` |
-| discussion.send | workspaceId (req), conversationId? (default `"default"` when neither target field is supplied), recipientPrincipalIds? (1–31 distinct other current workspace members; mutually exclusive with conversationId), messageId (req, nonblank string, at most 128 UTF-8 bytes), body (req, nonblank string, at most 16384 UTF-8 bytes), replyToMessageId? (existing message in the same conversation; requires `discussionMessageActions: 1`), recipientAgentIds? (up to 31 distinct explicit agent recipients; requires `discussionAgentMessaging: 1`, see below) | `{ message: DiscussionMessage, conversation: DiscussionConversation }` |
+| discussion.send | workspaceId (req), conversationId? (default `"default"`), createConversation? (boolean, default false; see management below), messageId (req, nonblank string, at most 128 UTF-8 bytes), body (req, nonblank string, at most 16384 UTF-8 bytes), replyToMessageId? (existing message in the same conversation; requires `discussionMessageActions: 1`), recipientAgentIds? (up to 31 distinct explicit agent recipients; requires `discussionAgentMessaging: 1`, see below), principalMentions? (explicit selected person identities/spans; requires `discussionPrincipalMentions: 1`, see below) | `{ message: DiscussionMessage, conversation: DiscussionConversation }` |
+| discussion.rename | workspaceId (req), conversationId (req), name (req, string; see management below) | `{ conversation: DiscussionConversation }`; requires `discussionManagement: 1`; Owner or Manager only |
+| discussion.delete | workspaceId (req), conversationId (req) | `{ deleted: true, conversationId }`; requires `discussionManagement: 1`; Owner only |
 | discussion.react | workspaceId (req), conversationId? (default `"default"`), messageId (req, server message ID), reaction (req, `"👍"`, `"👎"`, `"👀"`, `"✅"`, `"🙈"`; legacy `"🙂"` removal/retry only), active (req, boolean desired state) | `{ messageId, reactions: DiscussionReaction[], reactionVersion }`; requires `discussionMessageActions: 1`; expanded choices and reactor snapshots require `discussionReactions: 1` |
 | discussion.stopAgent | workspaceId (req), conversationId? (default `"default"`), messageId (req, committed server ID), agentId (req), attempt (req, positive integer) | `{ activity: DiscussionAgentActivity }`; requires `discussionAgentActivity: 1`; human participant only |
 | discussion.retryAgent | workspaceId (req), conversationId? (default `"default"`), messageId (req, committed server ID), agentId (req), attempt (req, positive integer) | `{ activity: DiscussionAgentActivity }`; requires `discussionAgentActivity: 1`; human participant only |
 
 
-`DiscussionConversation` is `{ id, workspaceId, kind, participants, createdAt }`.
-`kind` is `"workspace"`, `"direct"`, or `"group"`. The reserved ID `"default"`
-identifies the workspace-wide conversation; its `participants: []` means current
-workspace membership governs access. A private conversation has a server-generated
-UUID and immutable `DiscussionAuthor` profile snapshots for its participants,
-including the creator. Two participants make a direct discussion; more make a
-group discussion. `createdAt` is a server RFC-3339 timestamp.
+`DiscussionConversation` is `{ id, workspaceId, kind, participants, createdAt, name? }`.
+`kind` is `"workspace"`, `"direct"`, or `"group"`. Workspace-wide conversations
+have `participants: []`: current workspace membership governs access, including
+members who join later. The reserved ID `"default"` identifies the initial
+workspace-wide conversation; additional workspace conversations have server-generated
+UUIDs. `name` is omitted, not null, until renamed; it never determines identity
+or access.
+`createdAt` is a server RFC-3339 timestamp. Legacy private conversations retain
+their immutable `DiscussionAuthor` participant snapshots and original kind.
 
-The default conversation leads the first conversation page and counts toward
-`limit`. Private conversations follow in descending ID order. `beforeId: "default"`
-starts with private conversations, so a first page with `limit: 1` can continue.
-Subsequent pages use the last returned ID; `hasMore` means another accessible
-conversation remains. Recipient pages use ascending principal ID order and
-apply search and membership filtering before the limit. Both queries are bounded
-in storage, without loading every message or every workspace member.
+The default conversation, unless deleted, leads the first page and counts toward
+`limit`. Other accessible conversations follow in descending ID order.
+`beforeId: "default"` skips the default, so a first page with `limit: 1` can
+continue. Subsequent pages use the last returned ID; `hasMore` means another
+accessible conversation remains. Recipient discovery remains available for
+person mentions, using ascending principal ID order, search and membership
+filtering before the limit. Both queries are bounded in storage.
 
-Sending `recipientPrincipalIds` creates a conversation and its first message in
-one transaction. The authenticated sender is added automatically. Opening or
-abandoning a new-discussion composer creates no durable empty conversation.
-Starting another composer with the same people creates a distinct conversation;
-this contract does not deduplicate discussions by participant set. The client
-uses the returned conversation ID for subsequent sends and reads.
+#### Workspace-wide creation and management
+
+Exactly integer `discussionManagement: 1` on hello and `system.capabilities`
+requires the complete workspace-wide creation, naming, deletion, and legacy
+privacy contract. This remains unreleased Multiplayer Labs functionality.
+Require exact support before enabling these operations; never drop a creation
+flag or retry against the default conversation when support is absent or unknown.
+The existing message-actions, person-mention, agent-messaging, agent-activity,
+and reaction capabilities remain independently required for their features.
+
+A human sends `discussion.send` with `createConversation: true`, no
+`conversationId` or `recipientPrincipalIds`, and the first message's stable
+`messageId`. The daemon atomically creates a workspace-wide conversation and
+its first message. Opening or abandoning a composer creates no empty record.
+An identical retry retains the original conversation and message without
+repeating lifecycle or message events; a different
+body or target under that retry key is invalid. Use the returned conversation ID
+for subsequent messages. Separate intentional first sends use separate keys
+and create separate conversations. New direct/group creation via
+`recipientPrincipalIds` is rejected, never converted into a workspace-wide send.
+
+Owner and Manager may rename any workspace-wide conversation, including the
+default; only Owner may delete one. These are authenticated human operations,
+with current workspace membership and role checked by the daemon. A capability
+or agent grant does not confer management authority. Ordinary Participants
+cannot rename or delete. The existing daemon administrator authority remains
+valid; inherited membership alone is not a management grant. Names are trimmed
+before storage and must then be nonblank and at most 128 UTF-8 bytes. Rename
+requires a string, not null; the response carries the stored name. Names are
+presentation metadata, not participant lists.
+
+Deletion removes the conversation from discovery and makes its history and
+mutations unavailable. Deleting the default does not recreate it on the next
+read or send, including after daemon restart. Repeating delete or retrying a
+deleted conversation's first send returns `-32602 { code: "not-found" }`; neither
+can resurrect it.
+Clients remove its open/history panes and cached state and reject late responses
+or events for that deleted ID. A new conversation uses a new server identity.
+
+Committed lifecycle changes publish transient, workspace-scoped events:
+
+- `discussion:created` and `discussion:updated` carry
+  `{ workspaceId, conversationId, conversation }`.
+- `discussion:deleted` carries `{ workspaceId, conversationId }`.
+
+`discussion:created` precedes the first `discussion:message`.
+These events go only to current human workspace members, never agent subscribers
+or event-history queries. Creation is also discoverable from the complete
+conversation descriptor in `discussion:message`. Recover missed changes through
+`discussion.conversations` and `discussion.list`; no message sequence or unread
+count advances merely because a name changed or a conversation was deleted.
+
+Legacy direct/group histories remain readable only by their original participant
+grants and current workspace membership. Owners and Managers receive no bypass.
+They cannot be renamed, deleted, sent to, reacted to, or used for agent operations;
+no migration broadens their membership or destroys their history. Clients show
+them as read-only and retain an unsent draft rather than redirecting it elsewhere.
 
 `DiscussionMessage` has the same shape in history, send replies, and events:
 
@@ -436,7 +500,10 @@ uses the returned conversation ID for subsequent sends and reads.
   "replyTo": null,
   "reactions": [],
   "reactionVersion": 0,
-  "recipientAgentIds": []
+  "recipientAgentIds": [],
+  "agentActivity": [],
+  "agentMentions": [],
+  "principalMentions": []
 }
 ```
 
@@ -465,6 +532,7 @@ uses the returned conversation ID for subsequent sends and reads.
 `replyToMessageId` references an existing message in the same conversation.
 The daemon checks this inside the send transaction, including current membership
 and participation. A new conversation cannot reply to another conversation.
+Legacy private histories remain read-only, including replies.
 The committed message carries an immutable, nonrecursive quote
 `replyTo: { id, author: DiscussionAuthor, body }`, or `null` when not a reply.
 The quote uses the original author snapshot and body, bounded by the existing
@@ -501,9 +569,11 @@ aggregation or profile joins.
 
 `discussion.react` sets the caller's desired state. Repeating it is a no-op.
 Inside the serialized write transaction, humans require current workspace
-membership and private-conversation participation. Agents require an existing
+membership; legacy private conversations reject reaction mutations.
+Agents require an existing
 explicit discussion grant and a nonretired, nondeleted session in the same
-workspace; only `default` is permitted. Agent identity comes exclusively from
+workspace; under `discussionManagement: 1`, any workspace-wide conversation
+with that explicit grant is permitted. Agent identity comes exclusively from
 the authenticated MCP context, never arguments. `ws.discussion.react` exposes
 `(conversationId, messageId, reaction, active)` with the same result. Reactions
 never create a grant, enqueue a message, wake an agent, or subscribe agents to
@@ -526,7 +596,7 @@ in the plain-text body and rendered as navigable chips. The client must preserve
 the target workspace/backend and validate link kinds; reference text is never
 HTML, executable code, or permission to invoke an agent.
 
-#### Correlated agent activity and controls (prepared)
+#### Correlated agent activity and controls
 
 Exactly integer `discussionAgentActivity: 1` on hello and `system.capabilities`
 adds durable activity and selected mention snapshots to the unreleased Multiplayer
@@ -545,8 +615,8 @@ an agent-wide status. Completed means the invocation ended; only an explicit
 A daemon restart marks interrupted work stopped; queued deliveries remain queued.
 
 Human members with current instruction authority may Stop or Retry in the default
-workspace-wide discussion. Agent callers and private discussions cannot use these
-controls. Stop cancels only the matching invocation, or removes its queued delivery;
+discussion, and in named workspace-wide discussions under `discussionManagement: 1`.
+Agent callers and private discussions cannot use these controls. Stop cancels only the matching invocation, or removes its queued delivery;
 it must not stop another active request. Generic queue editing/removal refuses discussion
 requests; use this correlated Stop control. Regenerating an unrelated agent chat
 retains pending discussion requests. Retry applies only to failed/stopped
@@ -573,7 +643,52 @@ retry identity. They never grant delivery or access independently of recipients.
 Import preserves mention text as historical attribution but clears activity and
 does not restore invocation receipts, grants, or pending addressed work.
 
-#### Explicit agent messaging (prepared)
+#### Explicit person mentions
+
+Exactly integer `discussionPrincipalMentions: 1` on `client.hello` server
+capabilities and `system.capabilities` enables human notification identities in
+unreleased Multiplayer Labs discussions. Clients require exact `1` before sending
+these fields or using them for notifications. Missing or unknown capability values
+must retain the selected draft; never silently discard its notification targets.
+
+`discussion.send` accepts optional
+`principalMentions: { principalId, name, start, end }[]`, defaulting to `[]`.
+Every `DiscussionMessage` returned in send acknowledgements, history, and live
+events includes `principalMentions`, empty when none were selected. These are
+explicit notification identities, never inferred from matching names, `@` text,
+reply quotes, or author snapshots. They neither add private participants nor
+address an agent; `recipientAgentIds` keeps its existing delivery semantics.
+
+Only authenticated human sends may contain nonempty `principalMentions`; bound
+agent sends reject them as forbidden, including through MCP. Every selected
+principal must be a current effective workspace member. Legacy private
+conversations reject new sends; their historical mention snapshots remain inert.
+The serialized write transaction checks
+these conditions for new sends and retries. Unknown, removed, or inaccessible
+principals return `not-found`, without exposing membership information.
+
+Each span uses UTF-16 code-unit offsets into `body` and must equal `@` plus the
+nonblank selected `name`. At most 100 spans and 256 UTF-8 bytes per name are
+accepted; principal IDs must be nonblank. The array is sorted by ascending
+position and nonoverlapping, including with `agentMentions`. Repeated mentions
+of one principal at distinct positions are allowed. Invalid offsets, unknown
+object fields, altered text, overlap, and oversized arrays return `invalid-params`.
+Names/spans are immutable selection snapshots, not live profile lookups.
+
+For example, sending `body: "😀 @Bob"` with
+`principalMentions: [{ principalId: "principal-bob", name: "Bob", start: 3, end: 7 }]`
+returns that exact selected array on the committed message. An identical retry
+returns the same server message; adding, removing, reordering, or changing mention
+metadata with the same `messageId` is invalid. A profile rename does not rewrite
+an existing selection or create a new notification. Live message delivery remains
+transient and uses the existing conversation access checks; clients deduplicate
+notifications by committed message ID and never notify from history replay.
+
+Import clears all `principalMentions` notification identities, even when a source
+ID happens to equal a destination ID. The body and author/reply text remain
+historical content. Legacy archives with no such field import as `[]`.
+
+#### Explicit agent messaging
 
 Exactly integer `discussionAgentMessaging: 1` on both hello and
 `system.capabilities` gates explicit agent recipients and agent-authored replies.
@@ -591,11 +706,12 @@ identity: reordering is immaterial, but adding or removing a recipient with the
 same retry key is invalid. Human and agent sender identities have separate
 retry scopes.
 
-The initial extension addresses agents only in the default workspace-wide
-discussion. Private-conversation targeting and agent access remain forbidden:
+The initial extension addresses agents in the default workspace-wide discussion;
+`discussionManagement: 1` extends it to every workspace-wide conversation.
+Private-conversation targeting and agent access remain forbidden:
 ordinary agent transcripts are workspace-visible, so granting private history
 without restricting those transcripts would expose private content.
-Human private conversations keep their existing behavior.
+Legacy private histories remain read-only with their original access restrictions.
 
 The daemon binds the author to the authenticated human or calling agent; no
 request field can impersonate either. An agent author has `agentId`,
@@ -680,6 +796,14 @@ conversation descriptor still present so restored panes can recover their title
 and participants. Queries are bounded
 by the page limit; the server does not load the entire conversation.
 
+A page is also bounded by size: when its messages would serialize past 480,000 bytes
+(under the daemon's 500 KiB read payload budget), the daemon returns fewer than
+`limit` messages and sets `hasMore: true`. A latest or `beforeSequence` page
+keeps its newest messages and an `afterSequence` page its oldest, so the usual
+cursor (the oldest or newest returned `sequence`) continues at the cut. A page
+always holds at least one message. Clients must page by `hasMore`, never by
+comparing the page length with `limit`.
+
 `discussion.send` persists the row before replying and publishes
 `discussion:message` with
 `data = { workspaceId, conversationId, conversation, message }`. The event carries
@@ -693,10 +817,10 @@ The retry key is scoped to `(workspaceId, authenticated principalId, messageId)`
 Repeated sends with the same key, target, reply target, and exact body return the original
 conversation, message identity, body, and author snapshot, even if the person's profile
 has since changed. The response projects the current reaction state for the caller.
-First-message retries use the same recipient set; ordering
-of that set is immaterial. A client retries an uncertain send with that same key and body. New intentional
-sends use new keys. Reusing a key with different text or a different conversation
-or recipient set is `-32602` Invalid params; it does not edit the row, create a
+First-message creation retries retain `createConversation: true`; they do not
+replace it with the returned conversation ID. A client retries an uncertain send
+with that same key and body. New intentional sends use new keys. Reusing a key with different text or a different conversation
+or creation intent is `-32602` Invalid params; it does not edit the row, create a
 conversation, insert a new message, or publish another event.
 
 Clients subscribe to workspace events before reading history, route by workspace
@@ -718,7 +842,7 @@ legacy event without a conversation ID can only belong to the default discussion
 #### Typing indicators
 
 Discussion typing uses the existing transient [presence channel
-(§5.47)](./presence.md#discussion-typing-151-prepared). A human connection reports
+(§5.47)](./presence.md#discussion-typing-151). A human connection reports
 `presence.update` with `discussionTyping: { workspaceId, conversationId }`;
 omitting `conversationId` selects the default discussion. Human roster rows
 carry `discussionTyping: [{ source, conversationId, since, pulse }]`, projected
@@ -738,18 +862,25 @@ daemon means no indicator, not a discussion failure.
 
 #### Workspace transfer
 
-Workspace exports include default discussion history. A workspace containing
-private conversations cannot be exported: export returns the existing unsupported
-transfer error, including when a private conversation is created after export
-admission but before the archive snapshot. This prevents the archive from exposing
-private history or participant identities to a nonparticipant owner or agent.
+Workspace exports support default discussion history. Named workspace-wide
+conversation export is not yet supported by the companion implementation at
+`c576b988`: its archive snapshot guard rejects messages outside `default`, even
+when admission accepts their workspace-wide conversation metadata. A workspace
+containing a message in a named conversation therefore fails export with the
+unsupported-transfer error. Do not promise named-conversation export until the
+snapshot guard distinguishes workspace-wide conversations from private history.
+
+A workspace containing legacy private conversations also cannot be exported.
+Export returns the unsupported-transfer error; admission and the archive snapshot
+protect against exposing private history or participant identities to a
+nonparticipant owner or agent.
 
 Import preserves message IDs, sequence order, bodies, timestamps, and author snapshots. An imported author's
 `principalId` is inert source-daemon attribution, not a destination identity or
 membership. A matching destination principal string must not rebind the author,
 change the profile, or establish an own-user comparison. Private conversation
 participant grants are cleared on import; their archived history remains
-inaccessible through discussion APIs, even to the destination owner. Default
+inaccessible through discussion APIs, even to the destination owner. Workspace-wide
 discussion history remains available to destination workspace members.
 
 Reply quotes retain their original inert author snapshots. Reaction counts and
@@ -768,12 +899,13 @@ version compatibility gate; it does not transfer membership or credentials.
 #### Access and compatibility
 
 Human calls require an authenticated client connection and current workspace
-membership, including inherited host membership. The prepared agent-messaging
+membership, including inherited host membership. The agent-messaging
 extension permits bound agents to discover granted conversations, read their
 history, and send replies as agents. Recipient discovery remains human-only.
-Under exact `discussionReactions: 1`, a bound agent may also react in `default`
-with an existing explicit discussion grant and a nonretired, nondeleted session
-in the same workspace, rechecked inside the serialized write transaction.
+Under exact `discussionReactions: 1`, a bound agent may also react in a
+workspace-wide conversation (named conversations require `discussionManagement: 1`).
+An existing explicit discussion grant and a nonretired, nondeleted session in the
+same workspace are rechecked inside the serialized write transaction.
 Reactions never grant access or wake agents. Agent, daemon, and unbound callers
 cannot post as people.
 A missing or inaccessible workspace is
@@ -781,9 +913,8 @@ A missing or inaccessible workspace is
 fields and out-of-range limits are `-32602` Invalid params. The author comes from
 the bound caller, never `client.hello` display metadata.
 
-Private conversation reads, sends, discovery, and event delivery additionally
-require a stored participant grant; workspace or host ownership does not bypass
-this check. Sends and retries recheck the sender's effective workspace membership
+Legacy private conversation reads and discovery additionally require a stored
+participant grant; workspace or host ownership does not bypass this check. Sends and retries recheck the sender's effective workspace membership
 inside the serialized write transaction. An unknown or inaccessible conversation is indistinguishable from a
 missing one. Participant snapshots do not confer membership: a removed workspace
 member loses access even while its historical participant record remains.

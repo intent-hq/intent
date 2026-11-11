@@ -1,8 +1,8 @@
-> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.5b Worker observations (prepared additive extension).
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.5b Worker observations (additive extension).
 
 ### 5.5b Provider worker observations and stop
 
-**Prepared, not implemented by the pinned components.** This contract defines a
+**Implemented by intentd under `agentWorkers: 1`.** This contract defines a
 bounded projection of provider reports about background work (shell commands,
 and for Claude also workflows and monitors) plus a provider-mediated stop
 request. It is not a process monitor: it adds no output reader, filesystem
@@ -23,13 +23,16 @@ falls back to unavailable; do not poll other methods or infer support from
 protocol version or catalog presence.
 
 Server support is distinct from support for the selected provider session. V1
-allows exactly these reviewed adapter pins, each with the AIR extension
-requested in ACP initialize:
+supports these adapters at the version the daemon pins, each with the AIR
+extension requested in ACP initialize. The version follows the daemon's adapter
+pin (`CODEX_ACP_NPX_PACKAGE` and `CLAUDE_AGENT_ACP_NPX_PACKAGE` in
+intent-providers) and moves with every pin bump; a session whose adapter
+reports any other name or version is unsupported with `adapter-version`:
 
 | Provider ID | Adapter | Version | Row `source` |
 | --- | --- | --- | --- |
-| `codex` | `@agentclientprotocol/codex-acp` | **2.2.2** | `codex-air` |
-| `claude-code` | `@agentclientprotocol/claude-agent-acp` | **0.81.1** | `claude-air` |
+| `codex` | `@agentclientprotocol/codex-acp` | the daemon's pin | `codex-air` |
+| `claude-code` | `@agentclientprotocol/claude-agent-acp` | the daemon's pin | `claude-air` |
 
 The table matches the **base** provider ID: a provider profile reference such as
 `claude-code@work` uses the part before `@` for support, source and task-type
@@ -43,8 +46,10 @@ The daemon merges this object into any other `clientCapabilities._meta` keys it
 already sends; it never replaces them. It records a successful initialization
 with that requested extension and its verified adapter identity. There is no
 invented per-worker capability ack. Neither standard `terminal: true`, a display
-name, nor receipt of a structured-looking frame is sufficient. Other adapter
-versions and providers require review before allowlisting. The adapter's
+name, nor receipt of a structured-looking frame is sufficient. Other providers require
+review before allowlisting. A new pin of a listed adapter is supported without a
+separate review of its worker reports, so the source observations below describe
+the versions reviewed when this surface was introduced and may lag the pin. The adapter's
 permitted dependency range does not certify every resolved runtime.
 
 Requesting the extension is not free for Codex: codex-acp treats any client that
@@ -55,7 +60,9 @@ until its Codex tool-call mapping is proven against that form. For Claude the
 extension is gated per capability and changes nothing else. No extension is
 enabled by this documentation change.
 
-Evidence reviewed from the published npm packages (no `gitHead` is published):
+Evidence reviewed from the published npm packages when this surface was
+introduced, at codex-acp 2.2.2 and claude-agent-acp 0.81.1 (no `gitHead` is
+published):
 codex-acp 2.2.2 `dist/index.js` SHA256
 `6b1bb4e7e9caaf4aeca1042ae4aec2dc2433b0b0e4b1614b38a4d41699902aaa`;
 claude-agent-acp 0.81.1 `dist/acp-agent.js` SHA256
@@ -72,7 +79,10 @@ replace-semantics task level can end a task as `stopped` before its
 authoritative completion arrives. Neither wire exposes a cause or internal
 epoch. Both adapters answer `_session/async_task/stop` with `{ stopped }` and
 publish the terminal `stopped` frame before that answer. These source
-observations explain the deliberately limited claims below.
+observations explain the deliberately limited claims below. Not reviewed against
+this section: claude-agent-acp 0.95.0 also publishes turns that Claude Code
+starts after `end_turn` as async tasks (`taskType: "turn"`), and adds a separate
+`backgroundSubagents` AIR capability that the daemon does not request.
 
 #### Methods, ownership and fallback
 
@@ -124,6 +134,12 @@ canonical source; do not combine both streams. The event is not persisted for
 turns or alter agent/task/script status. Emit a replacement on accepted state,
 support, continuity, capacity/eviction or generation changes. An unchanged list
 read, replay, stop decision or unrelated ACP event does not emit a worker change.
+
+The one workspace-level roll-up is the separate derived
+[`Workspace.backgroundTasksRunning`](./workspace.md#51-workspace) flag (§5.1): `true`
+while any agent of the workspace passes the running-worker predicate (supported,
+continuous, a row with providerState `running`). It is a Home grouping signal only and
+likewise never alters agent, task or script status.
 
 #### Stop
 

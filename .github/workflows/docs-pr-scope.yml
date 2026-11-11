@@ -1,0 +1,82 @@
+# Reusable PR-metadata check for the component repos (intent-hq/intentd,
+# intent-hq/cloudlands-fe): fail a pull request whose title says `docs:` but
+# whose diff changes files that are not documentation. The logic and its rules
+# live in scripts/check-docs-pr-scope.mjs (tests beside it).
+#
+# Incident: intentd#2839, titled "docs: explain sidebar multi-pane selection",
+# also rewrote the hook_manager.rs tests that fixed three flaky daemon tests.
+# A later search for an existing fix missed it because of the docs title, and
+# a whole workspace re-investigated the solved problem. Fix a red run by
+# retitling (test:, fix:, ...), splitting the PR, or, when the code change
+# really is documentation (doc comments only), applying the
+# docs-with-code-intended label; then re-run the job. Title and label edits do
+# not trigger the callers' CI, so this job reads the title, labels and changed
+# files from the API at run time instead of from the original event payload.
+#
+# Like consumer-checks.yml, the job checks out the monorepo at this workflow
+# file's own commit (`job.workflow_sha`) so the script always matches the
+# workflow, and a failed monorepo checkout is fail-soft (::warning::, job
+# green) so a monorepo outage never blocks the component repos.
+#
+# Caller sketch (pull_request only; the gate accepts its skip on merge_group):
+#   docs-pr-scope:
+#     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+#     permissions:
+#       contents: read
+#       pull-requests: read
+#     uses: intent-hq/intent/.github/workflows/docs-pr-scope.yml@main
+name: Docs PR scope
+
+on:
+  workflow_call:
+
+jobs:
+  docs-pr-scope:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out the monorepo check at this workflow's commit
+        id: monorepo
+        continue-on-error: true
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ job.workflow_repository || 'intent-hq/intent' }}
+          ref: ${{ job.workflow_sha || 'main' }}
+          submodules: false
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/check-docs-pr-scope.mjs
+            scripts/retry.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Skip when the monorepo checkout failed
+        if: steps.monorepo.outcome != 'success'
+        run: |
+          echo "::warning::docs-pr-scope: could not check out the monorepo check; skipping it for this run."
+
+      - uses: actions/setup-node@v7
+        if: steps.monorepo.outcome == 'success'
+        with:
+          node-version: 24
+
+      - name: Check the docs title against the changed files
+        if: steps.monorepo.outcome == 'success'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          pr="$RUNNER_TEMP/pull-request.json"
+          files="$RUNNER_TEMP/changed-files.txt"
+          # Each attempt rewrites its output file, so a failed partial page
+          # never leaks into the next attempt.
+          api="repos/$REPO/pulls/$PR_NUMBER"
+          scripts/retry.sh -- bash -c "gh api '$api' > '$pr'"
+          scripts/retry.sh -- bash -c "gh api --paginate '$api/files?per_page=100' \
+            --jq '.[] | .filename, (.previous_filename // empty)' > '$files'"
+          node scripts/check-docs-pr-scope.mjs "$pr" "$files"

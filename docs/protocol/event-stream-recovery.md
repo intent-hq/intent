@@ -1,7 +1,7 @@
 # Generic event stream loss recovery
 
-**Prepared additive contract; not a shipped feature.** `eventStreamRecovery: 1`
-in `client.hello.server.capabilities` advertises this complete transport contract.
+**Additive contract.** intentd advertises `eventStreamRecovery: 1`
+in `client.hello.server.capabilities`, which announces this complete transport contract.
 A numeric protocol version alone does not establish support. This extends
 [events subscriptions](06-events.md) with one additional fast-path method, without changing domain events,
 chat delivery, durable event queries or snapshot-channel sequences.
@@ -157,7 +157,7 @@ on another backend or principal.
 
 ## Causal recovery boundary: `events.fence`
 
-**Prepared fast-path method, required by `eventStreamRecovery: 1`.** Arrival-time
+**Fast-path method, required by `eventStreamRecovery: 1`.** Arrival-time
 mutation epochs cannot distinguish an old bulk push from a fresh read returned on
 the priority lane. A recovering client therefore brackets unversioned authoritative
 reads with fences on **every generic lease allowed to mutate that resource**:

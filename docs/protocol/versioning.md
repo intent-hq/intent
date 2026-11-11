@@ -8,8 +8,349 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `15.2` — retired workspaces, on top of 15.1's prepared discussions, guest roles, scoped repository pages and GitLab child Git policy; not a shipped-version claim.
-Other prepared extensions retain their independent support gates.
+**Documented version:** `17.0` — CoW isolation setting retirement, on top of 16.0's per-agent CoW sandbox retirement and 15.5's Agent Plugins, 15.4's bounded object reads, 15.3's plain-folder workspaces, 15.2's retired workspaces and 15.1's discussions, guest roles, scoped repository pages and GitLab child Git policy (intentd advertises all four at protocol 15.2); 15.4 is not a shipped-version claim.
+Every extension retains its independent support gate.
+
+**Version 17.0 — CoW isolation setting retirement (breaking).**
+Copy-on-write is now used only to hydrate checkouts from the repo cache.
+`workspace.create` from a local repository always provisions a linked worktree
+(`checkoutMode: "worktree"`). The `workspace.cowIsolation` setting is retired: it leaves
+the settings catalog, `settings.get` / `settings.reset` reject it with `-32602`,
+`settings.update` ignores it without failing, and the daemon strips it from `config.toml`
+and deletes its stored row at boot. `workspace.duplicate` now returns `-32601 Method not
+found`. `Workspace.cowSupported` and the `cowSupported` key of `system.capabilities` are
+removed. Cache-hydrated `cow` / `direct` checkouts and existing `cow` workspaces are
+unchanged. No store migration. The documented surface is **499 / 441 / 58**
+(dispatchable / router / fast path), one router method fewer.
+
+Also within 17.0 (additive optional launch and row fields; presence-detected; no
+method-catalog or nodeProtocol change, so no version bump): **display labels for
+hosted agents** ([display labels](./node-link.md#display-labels), [§5.5](./methods/agents.md)).
+The executor link's `launch` gains the optional `agentName` and `workspaceTitle`. The
+backend sends them on every launch and relaunch; the machine keeps the latest values
+with the hosted agent and serves them on that agent's `agent.memoryUsage` row (tagged
+`remoteOwner`). They are display-only, never identity or authorization, and a rename
+shows after the next launch. Rows omit them, never `null`, when the launch did not send
+them, as an older backend never does. Local rows are unchanged. The launch body ignores
+unknown members within node-link protocol 6 and the fields change no authority or
+meaning, so they need no nodeProtocol version.
+
+Also within 17.0 (additive methods, path and capability; capability-gated, so no
+version bump): **node invites** ([node invites and claim](./methods/nodes.md#node-invites-and-claim)).
+`intentd pair --node` mints a single-use, expiring node invite on the machine
+with the owner-only router method `executor.invite.create` and prints an
+`intent://node?v=1&host=…&port=…&fp=…&invite=…&secret=…[&tc=…]` link that carries
+no owner token. `executor.list` adds `invites` and a credential's `inviteId`;
+`executor.revoke` also takes `inviteId`. The backend claims a link with the
+owner-only router method `remoteMachines.claim`, gated by
+`remoteMachineClaim: 1` (advertised only with `remoteMachines: 1`), over the
+machine's new anonymous [`/node/claim`](./node-link.md#node-invite-claim) path;
+the claim mints an ordinary executor credential and the backend saves the
+machine as `remoteMachines.add` does. No `nodeProtocol` version is added. Node
+setup now ends with `intentd pair --node --tunnel` and prints the node link. The
+documented surface is **501 / 443 / 58** (dispatchable / router / fast path).
+
+**Version 16.0 — per-agent CoW sandbox retirement (breaking).**
+Removes per-agent copy-on-write sandboxes ([nodes.md landing step 2](./methods/nodes.md#errors-and-retirement-gates)).
+`sandbox.cow.merge` and `sandbox.cow.discard` now return `-32601 Method not found`.
+`agent.delegate` rejects `isolation: "cow"` with `-32602` and
+`data: { code: "isolation-removed" }` before any side effect; `"direct"` and `"shared"`
+are no-ops. The `sandbox:cow:created` and `sandbox:cow:merged`
+events are no longer emitted, and `AgentSession` / `AgentLite` drop `sandbox_id`,
+`sandbox_path` and `sandbox_branch`. `workspace.cowIsolation` keeps only its workspace
+checkout role; `checkoutMode: "cow"`, repo-cache hydration and
+`cowSupported` are unchanged (17.0 later retired the setting and `cowSupported`). `client.hello` advertises `agentIsolation: 2`. Transfer bundles keep an empty
+`refs.sandboxes` for older importers, and imports of older bundles ignore sandbox data.
+A store migration drops the sandbox rows; no files on disk are touched. The documented
+surface is **499 / 441 / 58** (dispatchable / router / fast path), two router methods
+fewer than the catalog before this removal.
+
+Also within 16.0 (additive field, method and capability; presence-detected or
+capability-gated, so no version bump): **prompt breakdown and machine model lookup**.
+`agent.getSession` adds `promptBreakdown`
+([prompt breakdown](./methods/agents.md#prompt-breakdown)): the sections of the
+session's stored system prompt and tool description, with owner, size, estimated
+tokens, control hints and hidden skills, or `{ available: false, reason }` for
+sessions whose harness records none (before 3.10, and 3.11). It is a getSession-only field on the Rust
+`AgentSession`, not on `AgentLite` rows. The experimental
+[machine model lookup](./methods/nodes.md#machine-model-lookup) adds the owner-only
+router method `remoteMachines.models`, gated by `remoteMachineModels: 1` (advertised
+only with `remoteMachines: 1`), taking the documented surface to **500 / 442 / 58**
+(dispatchable / router / fast path). Harness 3.10 prompts list exposed machines by
+stable identity only ([exposed machines](./model-platform-routing.md#exposed-machines)).
+The executor link's `launch` gains the optional `harnessVersion`
+([launch and agent lifecycle](./node-link.md#launch-and-agent-lifecycle)), so a
+remote machine builds the `workspace_api` tool description for the session's
+stamp. When it is absent, the machine keeps its legacy description. No
+nodeProtocol version is added.
+
+**Version 15.5 — Agent Plugins (additive methods).** [§5.57](./methods/plugins.md)
+adds five administrator-only router methods, `plugin.list`, `plugin.install`,
+`plugin.update`, `plugin.uninstall` and `plugin.toggle`, for app-wide
+[Agent Plugins v1](https://agent-plugins.org/specification) packages. Enabled
+plugins add `<plugin>:<skill>` entries to `skill.list` and their MCP servers to
+`mcp.servers.list` (with the new optional `plugin` field) and to new agent sessions. `agentPlugins: 1` gates support. The
+documented surface is **496 / 438 / 58** (dispatchable / router / fast path).
+
+Also within 15.5 (additive result fields and link param; no method-catalog change, so no
+version bump): **reported daemon mode and node setup**
+([reported daemon mode](./methods/nodes.md#reported-daemon-mode),
+[node setup and pairing](./methods/nodes.md#node-setup-and-pairing)). `client.hello`
+`server.daemonMode` and the `host.status` result add `daemonMode: "regular" | "node"`, the
+running mode; older daemons omit it, and clients then probe for the `-32003` `node-mode`
+refusal. `pairing.getInfo` adds `daemonMode`, and a node's `intent://pair` link adds the
+non-authoritative hint `mode=node` (absent means a full daemon; older parsers ignore it).
+When `intentd pair` turns the listener on with a loopback-only bind, it turns the tunnel on
+too, for full daemons as well (pre-checked in the picker; `--yes` pairs over it).
+`intentd pair --tunnel` turns it on whatever the saved value. The installers take
+`--daemon-mode=full|node` / `INTENTD_DAEMON_MODE` (default `full`). Settings → Machines
+splits full daemons (Machines) from nodes (Nodes). Adding a node asks whether to make it
+available to the current backend, and is refused (nothing saved) when that backend cannot run
+agents on other machines or remote agents are off in the client.
+
+Also within 15.5 (additive optional response field; presence-detected; no method-catalog
+change, so no version bump): **merge-queue CI failure on the queue entry**
+(§5.27 `MergeQueueEntry`, §5.42 `MergeRequirements.mergeQueue`, §5.7 `ws.pr.snapshot`).
+`MergeQueueEntry` gains `failedCheck?: { name, conclusion, url? }`, the first check that
+failed on the entry's merge-group commit (GitHub GraphQL `MergeQueueEntry.headCommit`),
+read in the same folded request (measured `rateLimit.cost` stays 1). GitHub marks an entry
+`unmergeable` minutes after its merge-group CI fails, before it ejects the entry, so the
+monitor's `unmergeable` change line and checklist row now name the failed job and say it is
+not a conflict when `failedCheck` is set, and keep the conflict and `git merge-tree` advice
+only when it is absent ([intent-hq/intent#8833](https://github.com/intent-hq/intent/issues/8833)).
+Older daemons omit it; clients detect it by presence.
+
+**Version 15.4 — bounded object reads (additive methods, capped replies).**
+[Bounded object reads](./methods/files-terminal-browser.md#bounded-object-reads-154) let a
+client keep `file.read`, `git.showFile` and `note.readAsset` replies under the 500 KiB read
+budget (480,000 bytes for the object field) so they no longer block the main connection.
+They add the optional `maxBytes` param (result markers `truncated` and `totalBytes`), and two
+router methods that read the whole object in windows over a transfer connection:
+`git.showFileChunk` and `note.readAssetChunk`. Requests without `maxBytes` are
+byte-identical to before (the whole object), so older callers keep working. The shared
+`boundedReads: 1` capability advertises the bounded read defaults. The
+documented surface is **491 / 433 / 58** (dispatchable / router / fast path).
+
+Also within 15.4 (behaviour change plus additive optional param and row fields;
+capability-gated; no method-catalog change, so no version bump): **bounded git diff
+reads** ([§5.6](./methods/git.md)). `git.diffs` and `git.branchDiff` results are packed
+under 480,000 bytes of compact JSON by default, with at most 458,752 bytes for one file;
+the new optional `maxBytes?: int` lowers the budget (clamped into [65,536, 480,000]).
+When many files changed, the file list is paged: a cut result ends with a continuation
+entry `{ nextToken }`, and the optional `nextToken?: string` param returns the next files.
+Every changed file keeps its entry; an entry whose body does not fit carries
+`truncated: true` and `truncatedReason: "fileTooLarge" | "pageBudget"` with an empty
+body, and a truncated `git.branchDiff` entry adds `oldRef` / `newRef` commit SHAs for
+`git.showFile`. Previously `git.diffs` was capped at 4 MiB / 512 KiB per file with
+entries emptied silently, and `git.branchDiff` was unbounded. Support is signalled by
+`boundedReads: 1` on `client.hello` `server.capabilities` (shared by every read whose
+default became bounded); older daemons ignore `maxBytes` and never send the keys. Older
+apps see truncated entries as empty diffs.
+
+Also within 15.4 (additive optional param, error data code and progress phase; no
+method-catalog change, so no version bump): **base refresh failure on `workspace.create`**
+([§5.1](./methods/workspace.md), [§9.2](./09-error-codes.md)). A failed fetch of the base
+branch before a worktree or CoW checkout, which used to surface as a generic
+`-32603 "Internal error"` with git's output only in `data`, is now `-32603` with a readable `message` and
+`error.data = { code: "base-refresh-failed", category, detail, baseRef, remote }`;
+`category` is one of `auth-required`, `ssh-host-key`, `network`, `timeout`,
+`repo-not-found`, `access-denied`, `other`, and `detail` / `message` are redacted. The
+new optional `skipBaseRefresh: boolean` param skips the fetch and starts from the
+last-fetched `refs/remotes/<remote>/<baseRef>`. Under a `progressId`, a create that
+fetches first reports the new `base-refresh` phase ("Updating <baseRef> from
+<remote>...") on `git:clone:progress` (§6.5). Older daemons ignore `skipBaseRefresh`
+and never send the code, so clients offer Continue only for `base-refresh-failed`.
+The docs also correct the worktree-provisioning paragraph, which still said no fetch
+happens (the fetch arrived with
+[intent-hq/intentd#2841](https://github.com/intent-hq/intentd/pull/2841)).
+
+Also within 15.4 (behaviour only, no wire-shape change): `agent.create` treats a blank or
+whitespace-only `model` or `provider` as absent ([§5.5](./methods/agents.md)), so creation-time
+default-model resolution runs and a session never persists `model: ""`
+([intent-hq/intent#8621](https://github.com/intent-hq/intent/issues/8621),
+[intent-hq/intentd#3069](https://github.com/intent-hq/intentd/pull/3069)). Clients should
+still omit an unchosen model; older daemons may reject or persist a blank value.
+
+Also within 15.4 (behaviour only, no wire-shape change): the **slim page byte budget**
+(`SLIM_PAGE_BUDGET_BYTES`, [§5.5](./methods/agents.md)) drops from 512 KiB to 480,000 bytes, so
+an `agent.getConversation` page and the seq-0 `chat.subscribe` snapshot fit their whole frame
+in the 500 KiB read budget. Pages may carry a few fewer messages; clients already follow
+`nextToken` / `prevToken`, so no client change is needed. A message that alone is over the
+budget is now cut to fit instead of being served whole (additive, presence-detected markers,
+[§5.5](./methods/agents.md)): oversized `text` / `thinking` bodies become previews with
+`textTruncated: true` + `textBytes`, and if the block count still overflows, the newest blocks
+become `{ id, type, bodyOmitted: true }` stubs. The full content is read by id through
+`agent.getMessageBlock`. Older apps show the preview without a way to load the rest. On
+`chat.subscribe`, a terminal reconcile or row delta too large for one frame is split across
+consecutive `delta` frames, and in full-text mode a live text block past the budget is sent as the
+same preview.
+
+Also within 15.4 (behaviour change plus additive row markers; capability-gated; no
+method-catalog change, so no version bump): **paged `agent.listUserMessages` by
+default** ([§5.5](./methods/agents.md)). A call without `limit` or `nextToken` now
+returns the newest 100 user rows (max `limit` 500) cut to a 480,000-byte items budget,
+and every result carries `nextToken` (`null` once no older rows remain); previously it
+returned the whole index (803 KB on the large-state fixture). A single row over the
+budget serves alone with `metadataOmitted: true` / `metadataBytes` in place of its
+`metadata`. Support is signalled by `boundedReads: 1`; older daemons return the whole
+index without `nextToken`, which clients read as complete. Older apps see the newest
+page only.
+
+Also within 15.4 (additive optional param, result fields and event field;
+capability-gated; no method-catalog change, so no version bump; node-link protocol 12):
+**skills of remote agents** ([§5.34 skills of a remote
+agent](./methods/agent-aux.md#skills-of-a-remote-agent), [skills on the
+machine](./node-link.md#skills-on-the-machine-nodeprotocol-12)). A remote agent's skills
+are discovered on its machine (its home there, and its own checkout), and the machine adds their catalog to the agent's first prompt. `skill.list`
+gains `agentId?`; with it the result is always the paged envelope, plus `stale: true`
+(machine not connected, last reported list) or `unavailable: "machine-offline" |
+"machine-update-required"`. `skills:changed` carries `agentId` when a remote agent's
+catalog changed. A message to a remote agent that starts with an unknown `/name` still
+sends, and gets a `skill_unavailable` system notice. Support is detected by exact integer
+`remoteAgentSkills: 1` on `client.hello` `server.capabilities` and `system.capabilities`;
+older daemons omit it, and clients keep the workspace-only call.
+
+Also within 15.4 (behaviour change plus one machine-internal link frame; no
+method-catalog or nodeProtocol change, so no version bump; fixes
+[intent-hq/intent#8593](https://github.com/intent-hq/intent/issues/8593)): **remote
+agents set the workspace title, their name and the status, and propose sibling
+workspaces** ([executor link
+routing](./workspace-routing.md#remote-agents-on-the-executor-link)). On the executor
+link, `workspace.setTitle`, `workspace.setAgentName`, `workspace.setStatusMessage`,
+`workspace.setStatusImage` and `workspace.proposeSibling` are now forwarded to the
+backend over the existing `workspace.call` request, like `workspace.details`, and run as
+the leased agent; `workspace.setAgentName` renames only the calling agent, and a
+proposal is attributed to the remote agent. Previously the machine refused them with
+`remote-agent-unsupported:`. `workspace.archive`, `workspace.unarchive`,
+`workspace.applyProposal` and `workspace.timeline` stay refused. As for
+`workspace.details`, both sides must be updated, because the machine forwards a frame
+only when its own table does and the backend serves only the methods its own copy of the
+table forwards: an older machine keeps refusing the setters on the machine, and a newer
+machine on an older backend gets the backend's `remote-agent-unsupported:` refusal. The
+machine registers a forwarded proposal card on the backend with the new machine-internal
+`workspace.call` frame `turn.attachments` (refused from agent code, like
+`git.commitPolicy`), sent once when the `workspace_api` call ends; an older backend
+refuses it, the machine ignores the refusal, and the card is taken from the tool output
+as before. Clients need no change.
+
+Also within 15.4 (behaviour change plus one machine-internal link frame; no
+method-catalog or nodeProtocol change, so no version bump): **remote agents use the
+backend-data namespaces and see the machines they can place sub-agents on**
+([executor link routing](./workspace-routing.md#remote-agents-on-the-executor-link)).
+On the executor link, `primitive.*`, `discussion.*`, `crossWorkspace.*`,
+`git.listRoots`, `terminal.list`, `terminal.readOutput`, `workspace.applyProposal`,
+`workspace.archive`, `workspace.unarchive`, `workspace.context`,
+`workspace.referenceDocs`, `workspace.timeline` and `workspace.emitNotification` are
+now forwarded to the backend over the existing `workspace.call` request and run as the
+leased agent. Previously the machine refused them with `remote-agent-unsupported:`.
+`app.*` and secondary git roots (`git.registerRoot`, `git.unregisterRoot`, a
+`gitRootId`) stay refused, with messages that say why. The machine asks the backend for
+the machine-placement text with the new machine-internal `workspace.call` frame
+`agent.placementHelp` (refused from agent code) and adds it to the remote agent's
+`workspace_api` description and `ws.help("agent")`; an older backend refuses it and the
+text is left out. As before, both sides must be updated: an older machine keeps
+refusing these frames, and a newer machine on an older backend gets the backend's
+`remote-agent-unsupported:` refusal. Clients need no change.
+
+
+**Prepared Product Manager specialist (no method-catalog change).**
+Harness 3.9 adds the bundled `product-manager` specialist (standard role, `icon: "coordinator"`,
+no pinned model) to the current catalog. It writes a critiqued spec in the `spec` note
+and hands it to a top-level `developer`. Older harness bundles are unchanged. Clients
+that predate it show it from the daemon catalog; the frontend fallback copy must stay
+byte-identical to the daemon file.
+
+**Prepared specialist simplification (no method-catalog change).**
+Harness 3.8 removes the built-in Coordinator/Lead (`spec-writer`), Implementor,
+and Verifier from the current catalog. Delegation without a `specialist` creates
+a general agent; callers may still explicitly select an available custom specialist.
+Developer plans and delegates as needed. Prior session snapshots and harness
+bundles remain unchanged. The `role` enum remains `"orchestrator"`, `"internal"`,
+or explicit `""`. Deploy matching daemon and frontend support, daemon first. See
+[specialist picker metadata](./methods/misc-namespaces.md).
+
+**Version 15.3 — plain-folder workspaces (additive).**
+[Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces) work directly in
+an ordinary folder with no git repository. They add the presence-detected
+`Workspace.plainFolder` row field (omitted = `false`; set only at create, never by
+`workspace.update`, and kept if `.git` appears later) and the `workspace.create` option
+`plainFolder: true` with `repositoryPath` naming an existing non-git folder or a new
+folder. The option is refused before any side effect with git-only create options, a pr-kind
+`contextLinks` entry, or a path inside a git repository or the daemon workspaces root
+(`plain-folder-path-rejected`). Intent never deletes, moves or modifies the folder:
+`workspace.retire` keeps its `retire-unsupported` refusal with `plainFolder: true`, and
+`workspace.duplicate` plus the agent bindings `ws.git.*`, `ws.pr.*`, `ws.mr.*` and
+`ws.workspace.proposeSibling` return the new `plain-folder-unsupported` error. No
+`changes:*`, `git:*`, `gitRoot:*`, `pr:*` or `prMonitor:*` events are emitted for these
+workspaces (§6.5). No method-catalog change: the documented surface stays
+**486 / 428 / 58** (dispatchable / router / fast path). The minor bump is
+the support signal: an older daemon ignores the unknown create option, so clients send
+`plainFolder` only when `protocolVersion` is at least `15.3`.
+
+Also within 15.3 (additive optional params and result field; presence-detected; no
+method-catalog change, so no version bump; fixes
+[intent-hq/intent#8278](https://github.com/intent-hq/intent/issues/8278)):
+**slimmer `agent.listUserMessages`** ([§5.5](./methods/agents.md)). Item `metadata` is
+now projected inside SQLite to the classification fields clients read — string `type`,
+`source`, `fromAgentId`, `fromPrincipalId`, and `queueInfo.{queuedAt, waitedMs, batchId}`
+— instead of the whole persisted `messageMetadata`, so heavy keys such as an event
+notification's `events` no longer ride the wire. The optional `limit` / `nextToken`
+params page the index newest-first, and paged results carry `nextToken` (`null` once
+no older rows remain). Older daemons ignore the params and omit `nextToken`; clients
+treat its absence as a complete index.
+
+Also within 15.3 (additive row field and `agent.update` key; presence-detected; no
+method-catalog change, so no version bump): **agent sidebar pins**
+([§5.5](./methods/agents.md)). `AgentLite.pinned` is a daemon-owned per-session
+boolean set through `agent.update { changes: { pinned } }`. It is always present on
+`AgentLite` rows from a supporting daemon, so clients detect support by the field's
+presence; older daemons omit it and reject the key with `-32602`. The
+`agent.getSession` form carries it only when `true`. A pin-only update does not
+advance `updatedAt`.
+
+Also within 15.3 (additive optional row and result fields; presence-detected; no
+method-catalog change, so no version bump): **remote agents in memory attribution and
+connected-daemon counts** ([§5.5](./methods/agents.md), [§5.7](./05-method-catalog.md),
+[remote machines](./methods/nodes.md#daemon-to-daemon-remote-machines)). On a machine
+exposed to another daemon, `agent.memoryUsage` also lists the agents the executor runs
+for that backend, each tagged `remoteOwner: { backendId, backendName }` and built from
+the launch (fields the launch did not carry, today `agentName`, are omitted, never
+`null`); their bytes count in `totalBytes` and `system.status.agentMemoryBytes`.
+Local rows omit the tag. `system.status` gains `remoteLinks: { backends, machines }`,
+the live inbound backend links and outbound machine links. Older daemons omit both
+the remote rows and `remoteLinks`.
+
+Also within 15.3 (behavior change and one accepted placement form; no method-catalog
+change, so no version bump): **sub-agents of remote agents inherit the machine, and
+remote agents read workspace details**
+([sub-agents of remote agents](./methods/nodes.md#sub-agents-of-remote-agents),
+[executor link routing](./workspace-routing.md#remote-agents-on-the-executor-link)).
+A remote agent's `ws.agent.create`, `ws.agent.delegate` or `ws.agent.wakeOrCreate`
+without a `placement` (including every child of a batch delegate) now creates the
+sub-agent on the parent's machine, with the
+normal checks and errors and no fallback; previously it ran on the backend. The
+placement subset now accepts `placement: { target: "local" }` to mean "run on the
+backend" instead of refusing it with `-32602` (on `agent.delegate` it may be combined
+with `isolation`), and a remote agent's `agent.delegate` with `isolation` but no
+`placement` is refused with `-32602`. On the executor link, `workspace.info`
+answers on the machine with the agent's checkout path and `workspace.details` is
+forwarded to the backend; the other `workspace.*` frames stay refused. Creates by the
+user, other clients and local agents are unchanged. Older backends keep sub-agents on
+the backend and refuse `target: "local"`. `workspace.info` depends only on the machine:
+an older machine refuses it. `workspace.details` needs both sides, since the machine
+forwards it and the backend serves only the methods its own copy of the table forwards:
+an older machine refuses it, and a newer machine on an older backend gets the backend's
+`remote-agent-unsupported` refusal.
+
+Also within 15.3 (behavior change only; no wire-shape or method-catalog change, so no
+version bump): **any merge-queued PR wins the `displayStatus` PR rung**
+([§5.1](./methods/workspace.md) step 4). The rung now reads `pr_queued` when any of its
+inputs — the linked `activePullRequest`, any open `pullRequests` / git-root pool entry,
+or an ACTIVE PR monitor's snapshot — shows an open, non-draft PR in the merge queue.
+Previously a linked open PR short-circuited the rung, so a workspace whose own PR was
+mergeable while it watched another PR in the queue read `pr_ready` (clients group that
+as needing the user) instead of `pr_queued` (waiting). Older daemons keep the old
+precedence; clients need no change.
 
 **Version 15.2 — retired workspaces (additive).**
 [Retired workspaces](./methods/workspace.md#retired-workspaces) add the `"Retired"`
@@ -22,17 +363,105 @@ keys on `workspace:updated`, the `workspace-retired` and `retire-unsupported` er
 absent from every workspace list surface unless the caller passes `includeRetired: true`,
 so older clients never see the new status in a list. Revive via `workspace.unarchive` /
 `workspace.restore` or a message to an agent provisions a fresh blank folder.
-The documented surface is now **474 / 416 / 58** (dispatchable / router / fast path).
+The documented surface is now **471 / 413 / 58** (dispatchable / router / fast path).
 Support is detected by `workspace.retire` answering; older daemons return `-32601`.
 
-**Version 15.1 — workspace discussions (additive, prepared).**
+Also within 15.2 (behavior and settings only; no method-catalog change, so no version
+bump): **automatic archive and purge**. The new `workspace.autoArchiveIdleAfterDays`
+setting (absent = 7, `0` = off) archives workspaces idle that many days
+([Automatic archive](./methods/workspace.md#automatic-archive)).
+`workspace.purgeArchivedAfterDays` replaces `workspace.autoRetireArchivedAfterDays`
+(migrated on boot), and the automatic purge skips folders holding uncommitted changes or
+unpushed secondary-root commits. A retire also sets the purge `statusMessage` (carried in
+its `workspace:updated` delta, cleared on revive when unchanged), and a revive leaves a
+one-time folder-purged notice pending for the workspace's agents. Clients may present
+`Retired` workspaces as archived.
+
+Also within 15.2 (additive optional row field, one new event type and a widened derived
+flag; presence-detected; no method-catalog change, so no version bump): **command-script
+and script-monitor workspace signals** (§5.1). `Workspace.scriptsRunning` is `true` while
+the workspace has a command-mode script run in flight (service-mode scripts never count;
+omitted when `false`) and transitions surface via the self-sufficient
+`workspace:scriptsRunning-changed { workspaceId, scriptsRunning }` event (§6.5), tailed by
+the global `workspace` channel. The orthogonal `Workspace.waiting` flag also turns `true`
+for an `active` script run monitor (§5.8a), recomputed at monitor registration and every
+terminal transition. Neither signal feeds `activity` or `displayStatus`. Older daemons omit
+`scriptsRunning` and never emit the event; clients must detect both by presence.
+
+Also within 15.2 (additive optional row field and one new event type; presence-detected;
+no method-catalog change, so no version bump): **background-task workspace signal**
+(§5.1). `Workspace.backgroundTasksRunning` is `true` while any agent of the workspace has
+a §5.5b provider background task still running on a continuous, supported connection
+(omitted when `false`); transitions surface via the self-sufficient
+`workspace:backgroundTasksRunning-changed { workspaceId, backgroundTasksRunning }` event
+(§6.5), tailed by the global `workspace` channel. It feeds neither `activity` nor
+`displayStatus`. Older daemons omit the field and never emit the event; clients must
+detect both by presence.
+
+Also within 15.2 (additive event field; presence-detected; no method-catalog change, so no
+version bump): **`agent:renamed` carries `nameExplicitlySet`** (§6.5). Both `agent:renamed` paths
+(`agent.rename` and a name-only `agent.update`) report the session's persisted flag after
+the write, so clients stop inferring it. Older daemons omit the field; clients treat an
+absent field as `true`.
+An `agent:updated` payload that carries `name` (a mixed `agent.update`, the
+`rememberSpecialist` placeholder rename) likewise carries the persisted `nameExplicitlySet`,
+overriding any request-echoed value. Older daemons omit it there; clients re-read the session.
+
+Also within 15.2 (additive optional row field, update param and `workspace:updated` key;
+capability-gated; no method-catalog change, so no version bump): **workspace labels**
+([§5.1](./methods/workspace.md#workspace-labels)). `Workspace.label` is one optional
+trimmed 1–64 character label per workspace (`"pinned"` = the built-in Pinned label),
+omitted while unset; `workspace.update` sets or clears it with `label?: string | null`
+(owner-only), and `workspace:updated` carries `changes.label: string | null`. Because
+unlabeled workspaces omit the field, support is detected by the exact-integer capability
+`workspaceLabels: 1` on `client.hello` `server.capabilities` and `system.capabilities`;
+older daemons omit it.
+
+Also within 15.2 (additive optional row field, update param and `workspace:updated` key;
+capability-gated; no method-catalog change, so no version bump): **workspace auto-archive
+opt-out** ([§5.1](./methods/workspace.md#auto-archive-opt-out)). `Workspace.autoArchiveDisabled`
+is a per-workspace boolean, omitted while `false` (the default); while `true` the automatic
+archive sweep skips the workspace. `workspace.update` sets it with
+`autoArchiveDisabled?: boolean` (owner-only), and `workspace:updated` carries
+`changes.autoArchiveDisabled: boolean`. Support is detected by the exact-integer capability
+`workspaceAutoArchiveOptOut: 1` on `client.hello` `server.capabilities` and
+`system.capabilities`; older daemons omit it.
+
+Also within 15.2 (additive optional result field; presence-detected; no method-catalog
+change, so no version bump): **`models.list` `warningKind`**
+([§5.30](./methods/models-providers.md#530-modelslist--model-catalog)). A provider-scoped
+`models.list` response may carry `warningKind: "cli-missing" | "prerequisite-missing"` next to
+`warning` when the daemon knows why a catalog fetch failed (emitted for `codex` and
+`claude-code`), so clients show an "install the CLI" notice only for a genuinely missing CLI
+instead of matching the human-readable `warning` text. Absent for every other failure, for
+informational warnings on a successful list and on the legacy no-`providerId` path; never
+persisted. Older daemons omit it; clients treat an absent or unknown value as a generic load
+failure, so later values are additive.
+
+Also within 15.2 (additive optional response field; presence-detected; no method-catalog
+change, so no version bump): **`browserClient.target`** on `workspace.getBrowserClient` /
+`workspace.setBrowserClient` ([§5.1](./methods/workspace.md#51-workspace)) names the client
+an unpinned workspace is routed to by the desktop-session or claimed-tab rule
+(`{ clientId, via: "desktop" | "tabs" }`), so `resolved: null` with `target` reads "routed
+to a client with no eligible live connection" rather than "no eligible client". Older
+daemons omit it; clients then cannot tell the two apart.
+
+Also within 15.3 (additive definition field; no method-catalog change, so no version
+bump): **`SettingDefinition.proposable`**
+([§5.12 chat settings proposals](./methods/settings.md#512-settings)). Supporting daemons
+emit it on every `settings.list` / `settings.get` definition, `true` or `false`, to say
+whether an Assistant chat settings-change card may change the setting. Older daemons omit
+it. Clients then refuse card changes to daemon settings outside their own schema and keep
+their previous behavior for settings they map.
+
+**Version 15.1 — workspace discussions (additive).**
 [Workspace discussions](./methods/multiplayer.md#555-workspace-discussions) add
 `discussion.conversations`, `discussion.recipients`, `discussion.list`,
 `discussion.send`, `discussion.react`, `discussion:message`, and `discussion:reaction` for a default workspace-wide discussion
-and direct/group discussions with selected members. The five router methods use
+and conversation-scoped history. The original router methods use
 authenticated human membership, private participant grants, bounded pagination,
 and principal-scoped retry keys that reject changed bodies or targets. The first
-message atomically creates a private conversation. Exactly integer
+message atomically creates a conversation. Exactly integer
 `discussionConversations: 1` gates multiple-conversation targeting, preventing
 older daemons from ignoring private target fields. Message events include the conversation
 descriptor, are broadcast-only, and exclude nonparticipants and agents.
@@ -40,26 +469,39 @@ Replies and per-viewer reaction aggregates require the separate exact
 `discussionMessageActions: 1` capability. Reply targets bind retry identity;
 reaction versions preserve updates without advancing message sequences. Exact
 `discussionReactions: 1` adds five picker choices, bounded immutable reactor
-snapshots, and reactions from explicitly granted agents in the default discussion.
+snapshots, and reactions from explicitly granted agents in workspace discussions.
 Older experimental clients must upgrade with this unreleased daemon extension.
 Discussion typing extends the existing `presence.update` and human roster
 shapes with transient, conversation-scoped `discussionTyping`, projected per
 recipient; typing adds no method or event type.
 Agent/daemon snapshots omit that field, and older rosters without it remain valid.
-The prepared `discussionAgentMessaging: 1` extension adds explicit per-message
-agent recipients and bound agent replies to the workspace-wide discussion.
+The `discussionAgentMessaging: 1` extension adds explicit per-message
+agent recipients and bound agent replies to workspace-wide discussions
+(named conversations additionally require `discussionManagement: 1`).
 Addressed agents may read that conversation's history on demand; other messages
-never dispatch a turn automatically. Private chats remain human-only because
+never dispatch a turn automatically. Legacy private histories remain human-only because
 agent transcripts have workspace-wide visibility. This adds no router method or
 event type; agent tools use the existing conversation/list/send operations.
 Clients tolerate unsupported methods without sending to an agent instead. The
-documented surface, including prepared startup, generic stream recovery,
+documented surface, including startup, generic stream recovery,
 PR workspace lookup, provider profiles, discussion activity, and guest role additions,
-is now **473 / 415 / 58**
+is now **474 / 416 / 58**
 (dispatchable / router / fast path). This reservation does not identify a carrying
 release or change independent capability gates.
 
-The prepared [workspace guest role extension](./methods/multiplayer.md#workspace-guest-roles-prepared)
+The `discussionManagement: 1` extension adds `discussion.rename` and
+`discussion.delete`, first-send `discussion.send { createConversation: true }`,
+optional conversation names, and `discussion:created`, `discussion:updated`,
+`discussion:deleted`. New conversations are workspace-wide; legacy direct/group
+histories retain their original privacy and become read-only. Owner and Manager
+may rename; only Owner may delete, including the default. Deletion is durable:
+reads, sends and first-message retries cannot resurrect the deleted identity.
+Named workspace conversations support independently gated agent messaging,
+reactions and Stop/Retry with per-conversation grants. This coordinated change to
+unreleased Multiplayer Labs retains older capability gates, does not establish
+readiness, and reserves **474 / 416 / 58** dispatchable / router / fast-path names.
+
+The [workspace guest role extension](./methods/multiplayer.md#workspace-guest-roles)
 adds `workspace.members.setRole` under exact `workspaceGuestRoles: 1` on both
 discovery surfaces. `collaborator` remains the default wire role, displayed as
 Participant; owner-assigned `manager` grants scoped agent and saved-script
@@ -67,13 +509,22 @@ operations without broadening `canManage` or granting raw terminal access.
 Role changes invalidate membership projections on existing connections. This
 extends the unreleased 15.1 contract and does not establish Multiplayer readiness.
 
-**Version 15.1 — scoped repository pages and GitLab child Git policy (additive, prepared).**
+The [secret request extension (§5.56)](./methods/secrets.md) adds
+`secret.provide`, `secret.dismiss`, `secret.list` and `secret.forget`, the
+`application/vnd.intent.secret-request+json` turn-end resource, the
+`agentFeatures.secretRequests` setting and the agent-only `secretEnv` option on
+`ws.host.exec`, under exact `server.capabilities.secretRequests: 1`. It adds no
+event type. The documented surface is now **478 / 420 / 58** (dispatchable /
+router / fast path). The pinned intentd implements it; this entry does not
+identify a carrying release.
+
+**Version 15.1 — scoped repository pages and GitLab child Git policy (additive).**
 This extension builds on protocol 15.0 without restoring legacy workspace import
-or replacing startup readiness and script or monitor list semantics. The [scoped resource-read contract](./methods/repository-resources.md#prepared-project-pages-and-discussions)
+or replacing startup readiness and script or monitor list semantics. The [scoped resource-read contract](./methods/repository-resources.md#project-pages-and-discussions)
 adds six operations: `sourceControl.read.captureScoped`,
 `sourceControl.read.detailScoped`, `sourceControl.read.releaseScoped`,
 `sourceControl.read.resolveKnownRepository`, `sourceControl.read.list` and
-`sourceControl.read.discussions`. The [owner-only child Git policy](./methods/settings.md#prepared-gitlab-child-git-credential-policy)
+`sourceControl.read.discussions`. The [owner-only child Git policy](./methods/settings.md#gitlab-child-git-credential-policy)
 adds `sourceControl.gitlab.childGit.get` and `sourceControl.gitlab.childGit.set`.
 
 Require exactly `repositoryResourcePages: 1` or `gitlabChildGitPolicy: 1`, as
@@ -86,7 +537,7 @@ including the private invalidation/retirement feed. Child Git policy retains its
 owner-only binding and defaults; native Git remains independent of that policy.
 
 These eight router operations extend the documented surface to **464 / 406 / 58**
-(dispatchable / router / fast path), including other independently prepared
+(dispatchable / router / fast path), including other independently gated
 additions. The private `sourceControl.read.invalidated` notification shares the
 original resource-read retirement feed; it is not a global event subscription.
 Catalog inclusion does not identify a carrying release, advance component pins
@@ -111,6 +562,14 @@ Released frontends still cap registered-root reads at major 15 until
 [cloudlands-fe#3478](https://github.com/intent-hq/cloudlands-fe/pull/3478) ships,
 so the daemon must not advertise major 16 before a carrying frontend release.
 
+Also within 15.0 (additive optional response field; presence-detected; no method-catalog
+change, so no version bump): **CI-never-started flag** (§5.42 `MergeRequirements` and
+`lastSnapshot`, §5.7 `ws.pr.snapshot`). The checklist gains `checksNotStarted?: { headSha,
+headCommittedAt, thresholdMinutes }` when an open, non-draft, conflict-free PR's head has zero check
+runs and statuses at least 15 minutes after its commit time while the base branch requires
+status checks; the monitor wakes the owning agent once per head with a push-again / rebase
+hint. Older daemons and hosts without a commit time omit it; clients detect it by presence.
+
 Also within 15.0 (additive optional response fields; presence-detected; no method-catalog
 change, so no version bump): **merge-queue position and estimated merge time**
 (§5.27 `GithubPullRequest`, §5.42 `MergeRequirements` and `lastSnapshot`, §5.7
@@ -124,6 +583,12 @@ Older daemons and hosts without merge queues omit it; clients detect it by prese
 The same change adds the UI-only event **`prMonitor:refreshed`** (§6.5 prMonitor details):
 emitted when a poll changed only the `mergeQueue` entry, so clients re-read
 `prMonitor.list`; it is never a wake and agent-owned subscriptions cannot request it.
+
+Also within 15.0 (behavior only; no wire shape or method-catalog change, so no version bump):
+**an unmergeable merge-queue entry wakes the owner** (§5.42 `mergeQueue`). The entry `state`
+turning `unmergeable` — the PR conflicts with an entry ahead and its branch is locked while
+queued — is now a monitor change line with dequeue / fix / re-enqueue steps, and a still-queued
+recovery reports once. Position, size and estimate movement stay informational.
 
 Also within 15.0 (additive optional event field; presence-detected; no method-catalog
 change, so no version bump): **`workspace:created` carries `origin?`** (§6.5 workspace
@@ -141,7 +606,7 @@ list-row preview cap). A list-shaped `AgentLite` row carries
 can mark the text as a prefix or read the uncapped value with `agent.get`. Older daemons
 omit the flags; clients must not read their absence as proof a value is complete.
 
-**Worker observation stop and Claude support (prepared amendment).** The
+**Worker observation stop and Claude support (amendment).** The
 [worker observation contract (§5.5b)](./methods/agent-workers.md) reserves the router
 method `agent.workers.stop` and reclassifies `agent.workers.subscribe` from a router
 method to a fast-path method (it holds per-connection subscription state, like
@@ -165,14 +630,22 @@ one runs, and a staged restart waits for them for at most 90 minutes (agent turn
 still waited for without a cap). Service-mode scripts never count. Older daemons omit
 both keys; clients must detect them by presence.
 
-**PR workspace lookup (additive, prepared).** The
-[PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) reserves
+Also within 15.0 (additive response fields; presence-detected; no method-catalog
+change, so no version bump): **skipped PR checks are reported separately** (§5.7
+`ws.pr.snapshot`, §5.42 `MergeRequirements` and `lastSnapshot`). The snapshot `checks`
+block gains `skipped` and `skippedNames`, `MergeRequirements.checks` and the monitor's
+`lastSnapshot.checks` gain `skipped`, and `checks.items[].status` gains the value
+`skipped`. `passed` now excludes skipped runs, and a skipped run never blocks merge
+readiness. Previously skipped runs counted as passed (intentd#2581, run 39724275631).
+Older daemons omit the new keys and count skipped runs as `passed`.
+
+**PR workspace lookup (additive).** The
+[PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) adds
 the read-only router method `workspace.findByPullRequest`, bringing the documented
-surface, including the prepared discussions and provider profiles, to
+surface, including the discussion and provider-profile reservations of the time, to
 **460 / 403 / 57**
 (dispatchable / router / fast path). The server hello
-capability `prWorkspaceLookup: 1` gates support. No shipped numeric version is
-claimed here.
+capability `prWorkspaceLookup: 1` gates support. No numeric version is assigned.
 
 **Version 14.1 — startup readiness (additive).** The [startup contract](./startup-readiness.md)
 adds `system.startupStatus` and numeric error `-32012`, with exact
@@ -182,8 +655,8 @@ Store or grant guest access to owner progress. The daemon implementation uses
 counts including this addition were **450 / 393 / 57** (dispatchable / router /
 fast path); the version-specific counts below describe their original deltas.
 
-**Version 14.0 — active-only script and monitor lists (breaking, prepared).**
-The [replacement contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
+**Version 14.0 — active-only script and monitor lists (breaking).**
+The [replacement contract](./methods/scripts.md#active-only-compact-lists-protocol-14-breaking-contract)
 adds script.get and scriptMonitor.get, optional bounded summary pages, and removes
 archived list selection and terminal monitor storage/history reads. Exact gates
 are `scriptActiveLists: 1` and `scriptMonitors: 2`. Earlier unshipped 13.11 /
@@ -207,8 +680,8 @@ unshipped summary/history reservations need no production removal. Daemon before
 frontend merge and a coordinated carrying release are required. An older daemon remains unsupported for these new list features;
 known-ID status/output may still be used. This draft grants no merge permission.
 
-**Prepared truncated note reads (independently gated additive extension).**
-[Truncated note reads](./methods/notes-tasks.md#truncated-note-reads-prepared-additive-contract)
+**Truncated note reads (independently gated additive extension).**
+[Truncated note reads](./methods/notes-tasks.md#truncated-note-reads-additive-contract)
 add the optional `maxContentBytes` param to `note.get` and `note.subscribe`, the
 `contentTruncated` / `contentBytes` response markers and the `baseContentBytes`
 whole-content write guard (`-32602` `content-base-mismatch`).
@@ -217,59 +690,53 @@ The method catalog, event catalog, surface counts and documented protocol versio
 are unchanged; requests without the new params are byte-identical.
 Catalog inclusion does not identify a carrying release.
 
-**Prepared generic stream recovery (independently gated additive extension).**
+**Capped message block reads (independently gated additive extension).**
+[Capped and paged block reads](./methods/agents.md#55-agent) cap every
+`agent.getMessageBlock` response at a 480,000-byte served block (under the 500 KiB read
+budget), add the optional `offset` / `maxBytes` params and the `truncated` / `field` /
+`encoding` / `totalBytes` / `nextOffset` result fields, serve an over-cap image without `data`
+(with `dataTruncated` / `dataBytes`), and let `agent.editAndRegenerate` take
+`{ type: "image", messageId, blockId }` stored block references.
+Exact integer `messageBlockPages: 1` gates the contract.
+The method catalog, event catalog, surface counts and documented protocol version are
+unchanged. A block that fits the cap is served byte-identical inside `block`; the cap applies
+to callers that omit the new params too.
+
+**Generic stream recovery (independently gated additive extension).**
 [`eventStreamRecovery: 1`](./event-stream-recovery.md) adds an opt-in/ack to
 `events.subscribe`, the socket-private `events.lost` notification and the
-`events.fence` fast-path method. The prepared surface is **451 / 393 / 58**
+`events.fence` fast-path method. The documented surface is **451 / 393 / 58**
 (dispatchable / router / fast path); domain event catalog and current advertised
 protocol version are unchanged.
 Exact capability and lease negotiation gate adoption, including bounded recovery
 and fail-closed membership watcher loss; older peers retain their legacy shapes.
 
-**Version 13.10 — cancellable note deletion (additive, prepared).**
-The [grace deletion contract](./note-delete-grace.md) adds `note.deleteSchedule`,
-`note.deleteCancel`, `note.deleteStatus` and `note:delete-operation`, gated by exact
-integer `noteDeleteGrace: 1`. It preserves original data during cancellable grace,
-uses guarded deletion at expiry and does not implement postcommit restore.
-Immediate `note.delete` and the independently gated 13.9 reading contract remain
-unchanged. The documented surface is **447 / 391 / 56** (dispatchable / router /
-fast path). Result objects are bounded independently of existing transport frames;
-unknown outcomes and restart require reconciliation, not automatic deletion retry.
+**Version 13.10 — cancellable note deletion (withdrawn).**
+This prepared minor reserved `note.deleteSchedule`, `note.deleteCancel`,
+`note.deleteStatus`, the `note:delete-operation` event and the `noteDeleteGrace`
+capability. intentd removed them with the note paging system
+([intent-hq/intentd#2588](https://github.com/intent-hq/intentd/pull/2588)), so the
+reservation is withdrawn. Immediate `note.delete` is unchanged.
 
-**Version 13.9 — read-only note paging (additive, prepared).**
-[Revision-safe note pages](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
-reserve this minor after the 13.8 selected checkout configuration extension. Exactly integer
-`notePagingRead: 1` plus a valid `server.capabilities.notePagingBackendId` gates the
-complete source/context/metadata/task-ID paging and bounded pageState subscription
-contract. `noteAnnotations: 1` separately requires the complete independent-epoch
-annotation extension alongside read paging. Numeric version, catalog presence and
-partial implementation do not establish support. Neither capability is advertised
-until its complete declared contract passes component validation.
-The prepared `markdownDocument` source owner supplies indexed omitted separator
-mappings without widening paragraph/heading ranges or changing the implicit native
-root. It uses the same canonicalNote v1 profile and read capability; component
-validation must include separator-only context discovery and exact source coverage.
+**Version 13.9 — read-only note paging (withdrawn).**
+This prepared minor reserved paged `note.get`, `note.lineAttribution.load`,
+`comment.list` and `comment.getThread` reads, the `pageState` subscription
+projections (`notePageState` snapshots), and the `notePagingRead`,
+`noteAnnotations` and `notePagingBackendId` capabilities with their `note-page-*`
+and `note-index-*` error codes. intentd removed the paging system
+([intent-hq/intentd#2588](https://github.com/intent-hq/intentd/pull/2588)) and the
+reservation is withdrawn; clients that must bound large note loads use the
+[truncated note read contract](./methods/notes-tasks.md#truncated-note-reads-additive-contract).
 
-The earlier prepared `notePaging` promised partial writes and staged operations;
-it remains absent and is not repurposed. Those eight unshipped method reservations
-are withdrawn. Paging extends existing methods with no new event names; the
-combined catalog is **444 / 388 / 56** (dispatchable / router / fast path).
-Editing explicitly loads full source and reuses existing complete-document editors.
-Full drafts save through existing `note.update` with the loaded `expectedVersion`
-and strict stale refusal. Legacy `note.setContent` retains its separate sanitation
-and merge behavior; no new write API or mutation capability is introduced.
-This is not a shipped-version or product-enablement claim. Recheck competing minor
-allocations before merging the implementation.
-
-**Version 13.8 — selected checkout configuration (additive, prepared).**
+**Version 13.8 — selected checkout configuration (additive).**
 Adds `sourceControl.checkout.repoConfig` and `gitlabCheckoutRepoConfig: 1` for a
 fixed `.intent/config.json` read at an observed immutable SHA. The original
 checkout capability and authority remain required. Missing config is distinct
 from unavailable reads; old clients and old-daemon fallback remain compatible.
-See the [configuration contract](./methods/repository-checkout.md#selected-repository-configuration-prepared-protocol-138).
+See the [configuration contract](./methods/repository-checkout.md#selected-repository-configuration-protocol-138).
 
-**Version 13.7 — checkout owner avatars (additive, prepared).**
-The [owner-avatar extension](./methods/repository-checkout.md#owner-avatar-extension-prepared-protocol-137)
+**Version 13.7 — checkout owner avatars (additive).**
+The [owner-avatar extension](./methods/repository-checkout.md#owner-avatar-extension-protocol-137)
 adds optional `includeOwnerAvatar` to checkout capture and optional
 `ownerAvatarUrl` to its project page/detail projection. Exactly integer
 `gitlabCheckoutOwnerAvatar: 1` on the original connection permits the opt-in;
@@ -292,9 +759,8 @@ daemons; no new capability flag is required. Existing prepared extensions retain
 their independent gates, and discovery remains unchanged. The documented surface
 is now **443 / 387 / 56** (dispatchable / router / fast path). This reservation
 does not advertise runtime implementation or change the pinned daemon version.
-Read-only note paging has its own independent capability gate.
 
-**Version 13.5 — GitLab project checkout (additive, prepared).**
+**Version 13.5 — GitLab project checkout (additive).**
 [Pre-workspace checkout](./methods/repository-checkout.md) adds six router methods:
 `sourceControl.checkout.capture`, `projects`, `project`, `branches`, `warm` and
 `release`. `workspace.create.repositoryCheckout` carries the original checkout
@@ -314,51 +780,51 @@ methods are separately prepared. Neither count establishes support or a carrying
 desktop release. Earlier version snapshots below remain historical rather than
 live count assertions.
 
-**Version 13.4 — submission correlation (additive, prepared).**
-[Submission correlation and optimistic display](./methods/agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension)
+**Version 13.4 — submission correlation (additive).**
+[Submission correlation and optimistic display](./methods/agents.md#submission-correlation-and-optimistic-display-additive-extension)
 adds optional queue `messageId`, public `submissionIds` on queue/reply/delivery
 surfaces, per-source `recoverySources` for combined retries and daemon-computed
 `mergeEligible` on full queue snapshots (false on draining overlays). Advertise
 `submissionCorrelation: 1` only for complete trusted, persisted end-to-end support;
 clients accept exactly integer `1`, independently of protocol version. This
-allocation follows the prepared Home 13.2 and GitLab 13.3 reservations; advertising
+allocation follows the Home 13.2 and GitLab 13.3 reservations; advertising
 13.4 does not imply either extension is implemented. Discover each surface under
 its independent capability and permission rules. No method/event names or catalog
 counts change: the documented surface remains **435 / 380 / 55**, while submission
 correlation alone leaves the 13.1 implementation's **404 / 349 / 55** unchanged.
-These prepared docs make no shipping claim.
+intentd advertises `submissionCorrelation: 1`.
 
-**Invitation account search (additive, prepared).** `host.invite.searchAccounts`
+**Invitation account search (additive).** `host.invite.searchAccounts`
 (§5.49) adds bounded public suggestions for GitHub and the selected GitLab host.
 `client.hello.server.capabilities.invitationAccountSearch: 1` advertises support;
 older daemons retain manual invitation account entry. Search never replaces
 create-time identity pinning or owner authorization. This is one additional router
 method; the historical version counts below describe their respective snapshots.
 
-**Version 13.3 — GitLab repository extension (additive, prepared).** The catalog adds
+**Version 13.3 — GitLab repository extension (additive).** The catalog adds
 thirteen router methods: repository context capture/read/release, selection
 capture/save/reset/reconcile/release, native review reconcile/release, and explicit
 resource capture/detail/release. This brings the documented surface, including
-other prepared additions, to **435 / 380 / 55** (dispatchable / router / fast path).
+other additions documented at the time, to **435 / 380 / 55** (dispatchable / router / fast path).
 Four retirement controls are private to the original connection; they are not
 global event subscriptions. `repositoryContext: 1`, `repositorySelection: 1`,
 `nativeReview: 1`, `nativeReviewCompanion: 1` and `repositoryResourceRead: 1` gate
 their respective complete contracts independently. The companion extends existing
 qualified preparation/execution without adding another method or notification.
-These docs lead the component pin and make no installed-version claim. Earlier
+intentd implements all five contracts. Earlier
 experimental 10.10–10.14 labels for this work are not public compatibility gates;
 existing protocol history and retired methods remain unchanged.
-The separately prepared Home 13.2 additions below are not implied by a daemon
+The separately gated Home 13.2 additions below are not implied by a daemon
 advertising 13.3: discover each surface as its own contract specifies. Relative
 to the 13.1 implementation's 404 / 349 / 55, these thirteen additions alone yield
 417 / 362 / 55; the documented 435 / 380 / 55 also includes eighteen independently
-prepared methods. Neither count substitutes for capability and permission checks.
+gated methods. Neither count substitutes for capability and permission checks.
 
-**Version 13.2 — Home backend prerequisites (additive, prepared).**
+**Version 13.2 — Home backend prerequisites (additive).**
 Adds `github.pulls.checks`, `github.pulls.reviews`, and `github.pulls.files`
 (§5.27): three read-only router methods, for **407 / 352 / 55** implemented
-dispatchable / router / fast-path names once the backend lands. Including other
-prepared additions the documented surface is **422 / 367 / 55**. Owner-wide
+dispatchable / router / fast-path names. Including other additions documented at
+the time, the documented surface was **422 / 367 / 55**. Owner-wide
 `github.pulls.search({org, ...})` and optional `Workspace.lastContentActivity`
 extend existing shapes; older daemons cannot serve those additions. Exact PR-head
 checkout is a behavior fix to workspace creation, with no additional method.
@@ -422,7 +888,7 @@ below remains prepared, independently capability-gated; advertising 11.3
 does not claim platform scheduling or any other prepared feature is implemented.
 
 **Version 11.2 — self-contained script changes.**
-[`script:changed` (§5.8)](./methods/scripts.md#self-contained-script-changes-prepared-additive-extension)
+[`script:changed` (§5.8)](./methods/scripts.md#self-contained-script-changes-additive-extension)
 adds optional `data.script` as a complete list-row snapshot on create/update,
 including runtime, archive metadata and latest result. Removal keeps its existing
 ID-only shape. Consumers presence-detect each valid snapshot and apply it without
@@ -459,40 +925,420 @@ These additive docs precede consumer merges/contract acceptance; authorized loca
 development and draft preparation may proceed in parallel. Static fixtures do not
 qualify a listener, fresh-workspace source, provider or ready/ACK behavior.
 
-**Prepared read-only note paging contract (additive, reserved in 13.9).**
-[§5.2](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
-defines the exhaustive read/annotation/subscription allowlist. Source, context,
-metadata and ordered task-ID pages extend `note.get`; annotation pages and bounded
-pageState projections extend existing methods. Exact integer `notePagingRead: 1`
-and valid `notePagingBackendId` are required; `noteAnnotations: 1` gates the complete
-annotation extension. Old clients retain complete-note APIs and events. New clients
-validate discriminants and never pass page content to full-document writers.
-Capability loss on reconnect preserves drafts and surfaces incompatibility.
+**Daemon-to-daemon remote agents — capability `remoteMachines: 1`, nodeProtocol 7.**
+[Remote machines (§5.50)](./methods/nodes.md#daemon-to-daemon-remote-machines)
+let a machine's owner expose a regular daemon to a backend daemon through a
+scoped [executor credential](./02-authentication.md#26-executor-credentials).
+It adds eight owner-only router methods (`executor.*`, `remoteMachines.*`), the
+`remoteMachine:changed` event, settings `remoteAgents.permission` and
+`daemon.mode`, and the errors `model-unavailable`, `machine-update-required` and new
+`placement-unavailable` reasons, taking the documented surface to
+**486 / 428 / 58** (dispatchable / router / fast path). The backend advertises
+`remoteMachines: 1` only when it implements the backend methods and is not in
+node mode, and no setting switches it. The flag is separate from `agentNodes`,
+whose complete-contract rule is unchanged, and it grants no authority. The private
+[executor link](./node-link.md#daemon-to-daemon-executor-link-nodeprotocol-7)
+negotiates a `{ min, max }` range that starts at 6; it is a new link family,
+outside the prepared `{2,3,4}`, `{3,4}` and `4` sets. nodeProtocol 7 adds
+[stop acknowledgement](./node-link.md#stop-acknowledgement-nodeprotocol-7)
+(`stop.stopId` and the `stopAck` frame); daemons that implement it offer only 7,
+because 6 was never released, so a version-6-only peer gets
+`machine-update-required`. It shipped without a public protocol version bump:
+clients detect it only through `remoteMachines: 1`.
 
-Additive docs land before dependent component opt-in. Withdrawn prepared write
-entries must be removed from component catalogs/consumers before a consumer check
-can pass against this reduced contract; do not weaken the checker to hide a pending
-component mismatch. Daemon support lands before frontend opt-in, with human merge
-authorization. Automated pin advancement remains unchanged. Controlled fixtures
-validate contract examples and bounds, not production storage or shipped support.
+**Remote initial agent — capability `remoteInitialAgent: 1` (additive).**
+`workspace.create` accepts `initialAgent.placement` under the
+[placement subset](./methods/nodes.md#placement-subset): the `agent.create`
+placement object, validated before any workspace effect, with a launch failure
+after the workspace commits returned as the `-32603` post-creation envelope.
+The backend advertises `remoteInitialAgent: 1` only together with
+`remoteMachines: 1`; `remoteMachines` is not bumped, because existing clients
+test it for exactly `1`. Older backends that advertise `remoteMachines: 1`
+ignore the field, so clients detect support only through this flag. No method
+is added and the public protocol version is unchanged.
 
-**Prepared command-default change — recommended 11.0, not shipped.**
-[Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)
+**Cloud machines on E2B — capability `cloudMachines: 1` (additive).**
+[Cloud machines (§5.50)](./methods/nodes.md#cloud-machines-e2b) let a backend
+start its own remote machines in E2B sandboxes with the owner's E2B API key. They
+add five router methods (`cloudMachines.configure`, `list`, `remove`, `pause`,
+`kill`), the placement `target: "e2b"`, the `RemoteMachine.cloud` and
+`AgentLite.cloudStart` fields, the `cloudMachine:changed` event and the errors
+`cloud-machine-unavailable`, `cloud-profile-required` and `cloud-quota`, taking
+the documented surface to **501 / 443 / 58** (dispatchable / router / fast
+path). The backend advertises `cloudMachines: 1` only together with
+`remoteMachines: 1`. Cloud machine rows are left out of `remoteMachines.list`
+and `remoteMachine:changed`, so older clients see no change. The
+[executor link](./node-link.md#cloud-machines) is unchanged: no new
+nodeProtocol, frame or route type. The public protocol version is unchanged;
+clients detect support only through the flag.
+
+**Remote-compatible profiles and switching a remote agent's model (additive, one narrowing).**
+[Provider profiles](./methods/provider-profiles.md#remote-compatibility) and
+Default configurations gain `remoteCompatible` and `remoteIncompatibility`
+(`{ reason: "account-folder", keys }`) on `providers.profiles.*` reads and on
+catalog `profiles` rows, and `providers.catalog` gains
+`defaultRemoteIncompatibility`. A configuration that sets an account folder is
+never placed on a remote machine: placement and `agent.setModel` refuse it with
+`-32602` `profile-not-remote-compatible`. `agent.setModel` on a remote agent is
+now accepted when the target is remote-compatible and its machine offers the
+provider and model, relaunching on the same machine
+([switching a remote agent's model](./methods/nodes.md#switching-a-remote-agents-model));
+otherwise it fails with `profile-not-remote-compatible` or `model-unavailable`.
+The narrowing: `agent.setModel` no longer returns
+`remote-model-change-unsupported`, which remains only a start-path safety net.
+No methods, events, numeric codes or nodeProtocol change, and the surface
+counts are unchanged. Clients detect it by the presence of `remoteCompatible`
+on profile rows; there is no public protocol version bump.
+
+**Remote-compatible as a saved choice, and machine sign-in (additive, presence-detected).**
+[`remoteCompatible`](./methods/provider-profiles.md#remote-compatibility) becomes
+the user's saved "Use on remote machines" choice instead of a computed value.
+`providers.profiles.create`, `update` and `updateDefault` accept
+`remoteCompatible?: boolean`, with the new field error `remote-account-folder`
+(an account folder can never be marked). `RemoteIncompatibility.reason` gains
+`not-marked`. `DefaultConfig` gains `remoteLaunch`
+(`"send" | "machine-sign-in" | "refused"`), and `providers.catalog` gains
+`defaultRemoteLaunch`; `defaultRemoteIncompatibility` now lists only Defaults
+that cannot run. The new setting `providers.remoteMachineSignIn` (per base
+provider, missing means on) lets an unmarked Default run with the machine's own
+sign-in (since removed; see [which providers a machine offers](./methods/provider-profiles.md#which-providers-a-machine-offers)).
+The [launch rules](./methods/nodes.md#placement-across-machines) apply to placement,
+sub-agents, `agent.setModel` and failover. `profile-not-remote-compatible` data
+gains `name` and `machineSignIn?`; the new `-32602` `machine-not-signed-in`
+refuses a machine-sign-in launch on machines reported signed out, and the new
+machine start-failure code `node-provider-signed-out` reports one that fails on
+authentication. The choices live in a new daemon-owned file that older daemons never touch, and a one-time migration keeps every launch that worked before (see
+[Remote compatibility](./methods/provider-profiles.md#remote-compatibility));
+`create` without the field applies the same rule. No methods or events are added,
+no numeric codes, and no nodeProtocol change (start-failure codes are journaled
+strings), so the surface counts are unchanged and there is no public protocol
+version bump. Clients detect it by the presence of `DefaultConfig.remoteLaunch`.
+
+**A machine's own sign-in is always used, else a marked profile; no machine sign-in setting (behaviour change, no capability).**
+The prepared `providers.remoteMachineSignIn` setting is removed before it shipped
+in any component, with its refusal and `profile-not-remote-compatible`'s
+`machineSignIn` data. A provider is offered on a remote machine when the machine's
+own sign-in can run it, or when this backend has a remote-compatible configuration
+for it and its CLI is installed there; a provider with neither is not offered for
+that machine. A plain Default that a machine's own sign-in cannot run (signed out there, or
+E2B) is created on the first profile marked for remote machines, in profile order,
+and its transcript gets a `provider_auto_selected` row
+([auto-pick](./methods/provider-profiles.md#remote-auto-pick)); with none it is
+refused with `machine-not-signed-in`. A profile chosen explicitly is never replaced
+([which providers a machine offers](./methods/provider-profiles.md#which-providers-a-machine-offers)).
+An unmarked Default is refused only on E2B, and only when no marked profile can be
+auto-picked. The new transcript metadata type `provider_auto_selected` is additive;
+older clients show its text. `DefaultRemoteLaunch` is `send` or
+`machine-sign-in` (`refused` only for an unreadable environment), and the catalog
+no longer sends `defaultRemoteIncompatibility`. The agent-facing machine list
+hides a provider a machine cannot run. No method, event or error code changes,
+and there is no public protocol version bump.
+
+**Default credential auto-mark (behaviour change, no capability).**
+An `updateDefault` that adds an API key or token marks that Default for remote
+machines in the same commit, unless the write sends `remoteCompatible` or the
+Default sets an account folder
+([credential auto-mark](./methods/provider-profiles.md#default-credential-auto-mark)).
+No field, method, event or error code changes, and there is no public protocol
+version bump; clients read the result on the `updateDefault` reply and the next
+`providers.profiles.list`.
+
+**Daemon-link traffic capture — capability `remoteLinkTraffic: 1` (additive).**
+[Link traffic capture](./methods/nodes.md#link-traffic-capture) lets the owner
+record a daemon's executor-link frames in both directions. It adds three
+owner-only router methods (`remoteLinkTraffic.start`, `stop`, `snapshot`) and
+the owner-only `remoteLinkTraffic:records` event, taking the documented surface
+to **489 / 431 / 58** (dispatchable / router / fast path). A daemon advertises
+`remoteLinkTraffic: 1` only together with `remoteMachines: 1`, so never in node
+mode. Capture is off by default, bounded, never persisted and cleared on stop;
+secrets are masked before a record is kept. No frame, nodeProtocol or error
+code changes, and there is no public protocol version bump: clients detect it
+only through `remoteLinkTraffic: 1`.
+
+**Terminal programs (additive).** `terminal.list` rows gain `foregroundProcess` and
+`lastProcess` (the running program and the previous one, `null` while only the shell
+runs), and the owner-only transient `terminal:process` event reports each change
+([terminal methods](./methods/files-terminal-browser.md)). No method, error code or
+surface count changes, and there is no public protocol version bump: clients detect it
+by the presence of `foregroundProcess` on `terminal.list` rows.
+
+**Remote scripts — capability `remoteScripts: 1` (additive), nodeProtocol 8.**
+A remote agent's `script.*` calls are now [forwarded](./workspace-routing.md#remote-agents-on-the-executor-link)
+to the backend instead of refused. When a remote agent starts a saved script,
+the run happens on its machine over the new
+[script frames](./node-link.md#saved-scripts-nodeprotocol-8)
+(`scriptStart`, `scriptStop`, `scriptStarted`, `scriptOutput`, `scriptExited`)
+as a separate machine run; the app and local agents still run scripts in the
+workspace's home checkout, today the backend's workspace checkout ([scripts of remote agents](./methods/scripts.md#scripts-of-remote-agents-remotescripts-1)).
+Script rows, summaries, `script.get` and `script:changed` snapshots gain the
+optional `machineRuns` and `remoteAuthor`; `script.status`, `output`, `start`,
+`stop`, `restart` and `run` gain the optional `remoteAgentId`; monitor rows on a
+machine run carry `remoteAgentId` and `nodeId`. A machine run lost with its
+machine reads `exited` / `exitCode: -1` with an `error` starting
+`remote-script-lost:`, inside the existing total exit contract. Machine-run
+transitions are published only as `script:changed`, never `script:state` or
+`script:output`, so older clients never apply them to the home run. New
+`-32602` reasons `remote-script-autostart-unsupported`, `remote-script-not-owned`,
+`remote-script-start-remote-only` and `remote-script-author-readonly`. Link
+traffic capture also masks script environments. nodeProtocol 8 is a new link
+version because older peers reject unknown frame types; daemons offer
+`{ min: 7, max: 8 }`, so protocol 7 machines keep running agents. A remote
+agent's `ws.script.*` calls work only on a link that negotiated 8 or later; otherwise its
+machine refuses them with `remote-agent-unsupported:` as before, and an existing
+machine run that meets a protocol 7 link fails to restart with
+`machine-update-required`. `RemoteMachine` rows gain `nodeProtocol`, the version
+the last bind negotiated, so clients can show which machines need an update.
+Script frames carry `agentId`, `scriptId` and `spawnId`, and deleting an agent or
+removing a machine waits, within its existing bound, for the script stops'
+`scriptExited` acknowledgements. The backend advertises
+`remoteScripts: 1` only together with `remoteMachines: 1`. No methods or events
+are added, the surface counts are unchanged, and there is no public protocol
+version bump: clients detect it only through `remoteScripts: 1`.
+
+**Final stop for remote agents — nodeProtocol 9 (behavior change, no capability).**
+`agent.delete`, `agent.retire`, `workspace.retire`, `workspace.delete` and
+`remoteMachines.remove` with `stopAgents: true` now end a remote agent with a
+[final stop](./node-link.md#final-stop-nodeprotocol-9)
+([ending a remote agent for good](./methods/nodes.md#ending-a-remote-agent-for-good)):
+the backend persists the pending stop, the machine stops the agent's scripts
+and provider, makes a final `head` / `wip` push (at most 60 s) that the backend
+accepts while the record exists, removes the agent's checkout and then
+acknowledges. The backend drops the record only after the acknowledgement or
+after 7 days (checked hourly and before each redial, so a machine offline that
+long stops being redialed), and keeps the agent's refs. It drops the agent's
+lease row with the record only for a delete or a machine removal; after a
+retire the lease row stays, so `agent.restore` or a workspace revive still
+works; a relaunched agent with no checkout checks out its saved `head` ref
+(else its base) and restores its `wip` changes on top, or, when they do not
+apply cleanly, keeps `head`, pins that `wip` commit to the create-only ref
+`refs/intent/ws/<workspaceId>/agents/<agentId>/unapplied/<full wip sha>` before
+any other push (idempotent when the ref already holds that commit; a failed pin
+fails the launch with `node-checkout-failed`), and
+gets a first-turn notice naming that ref; `unapplied/` refs are kept like
+`head` and `wip`. At bind, an agent whose session is retired or deleted is stopped for
+good instead of re-attached, and the machine sweeps checkouts of agents not in
+the new `hello.leaseAgents` (live sessions on the lease plus retired or deleted
+agents with a pending final stop, so a retired agent's leftover checkout is
+swept). The machine also removes the directories of
+credentials no longer active on it (revoked or unknown) at `executor.revoke`,
+at bind and at startup, never another active credential's.
+nodeProtocol 9 adds `stop.final`, `stopAck.finalPush` and `hello.leaseAgents`;
+it is a new link version because a final stop removes the checkout, which an
+older machine would not do while still acknowledging. Protocol 9 keeps every
+protocol 8 frame, so saved scripts work on a link that negotiated 8 or 9. Daemons offer
+`{ min: 7, max: 9 }`; on a lower link the backend sends a plain stop, the final push is
+best-effort (accepted for 120 s after the acknowledgement), and the checkout
+stays until a later protocol 9 bind.
+`remoteMachines.remove`'s stop wait grows from 30 s to 90 s on protocol 9 and
+stays 30 s on a lower link.
+`RemoteMachine.nodeProtocol` reads `9` from an updated machine. No methods,
+events, fields of public results or error codes change, the surface counts are
+unchanged, and there is no public protocol version bump.
+
+**Machine-side enabled providers (behavior change, no capability).**
+A machine's [capabilities report](./node-link.md#capabilities-report) lists only
+the providers enabled in its own `providers.enabled`, and the machine refuses a
+launch, model switch or quota failover on a disabled provider with the existing
+`node-provider-unavailable` start failure, so a remote agent needs its provider
+enabled on both the backend and the machine. Backend admission and
+`agent.setModel` keep returning `model-unavailable` when the report lacks the
+provider. When the enabled set changes, the machine now sends an unsolicited
+`capabilitiesReply` on every live link (and again after a full refresh), which
+the backend handles like a requested one. Older machines do not push; the
+backend sees the change at its next refresh, within about an hour. No frame,
+nodeProtocol, method, event, field or error code changes, the surface counts
+are unchanged, and there is no public protocol version bump.
+
+**Disabled providers in `model-unavailable` (additive, no capability).**
+The [capabilities report](./node-link.md#capabilities-report) gains optional
+`disabledProviders`, naming the providers the machine left out because its own
+`providers.enabled` switches them off. The
+[`model-unavailable`](./methods/nodes.md#remote-machine-errors) data's
+`machines[].status` gains `disabled` for those, and its message says
+"disabled on <machine>", so the user switches the provider on rather than
+installing it. Older machines omit the field and their absent providers stay
+`cli-missing`. No frame, nodeProtocol, method, event or error code changes, the
+surface counts are unchanged, and there is no public protocol version bump.
+
+**Prepared checkout for remote agents — nodeProtocol 10 (behavior change, no capability).**
+A remote agent's checkout on its machine is now
+[prepared](./node-link.md#prepared-checkout-nodeprotocol-10) like the backend
+worktree ([prepared checkout](./methods/nodes.md#prepared-checkout)): every
+submodule populated in the workspace worktree (whatever its `update` setting)
+is checked out, recursively, at that submodule's `HEAD`, served from the
+backend's submodule repository over a new module remote
+`intent://ws/<workspaceId>/agents/<agentId>/modules/<moduleKey>`, and the
+workspace's setup script runs on the machine before the agent starts.
+`launch` gains the closed `checkout: { submodules: { path, name, commit,
+moduleKey }[], setup?: { script, branchName, sourceBranch, timeoutSecs? } }`;
+the journal gains `setupStarted` and `setupFinished`; the `script` lane gains
+`setupOutput`. Pushes run per repository, deepest submodule first, and the
+superproject `wip` names each submodule's `wip`; relaunch restore, `unapplied/`
+pins and the final push (its `remote_final_stop` row gains `submodules`) work
+per submodule repository. Setup-created untracked files are kept out of `wip`.
+The `node-setup-failed`, `node-setup-timeout` and `node-setup-interrupted`
+codes appear only in `setupFinished.error`. Placed agents gain
+`submodules` (detail only) and `setup` (`RemoteSetupStatus`, output tail on detail
+reads only); the machine overlays its checkout's status on the agent's forwarded
+`workspace.details` `setupStatus`. Daemons offer `{ min: 7, max: 10 }`. On a
+link below 10, placing or starting an agent of a workspace with a populated
+submodule or a setup script fails `machine-update-required`, whose data gains
+the optional `reason: "prepared-checkout"` (for `workspace.create`'s initial
+agent, after the workspace is created, as `launch-failed` carrying that
+message); other workspaces run as before. No
+methods, events or numeric codes change, the surface counts are unchanged, and
+there is no public protocol version bump.
+
+**User MCP servers for remote agents — nodeProtocol 11 (behavior change, no capability).**
+A remote agent's provider now gets the user's MCP servers as servers in its own
+session, proxied to the backend's MCP hub: `launch` gains `mcpProxies:
+{ name, serverId }[]`, and the machine forwards the internal `workspace.call`
+frames `mcp.proxy.listTools` and `mcp.proxy.callTool`
+([user MCP servers](./node-link.md#user-mcp-servers-nodeprotocol-11)). Tools
+only; a proxied call may run 10 minutes. Server configs and OAuth tokens never
+leave the backend. `ws.mcp.*` is forwarded for remote agents, with a local
+agent's gates. `launch` also gains the optional `compactToolDescriptions`, so
+the machine serves the compact `workspace_api` description only when the
+backend's instructions carry the condensed reference. Daemons offer
+`{ min: 7, max: 11 }`; on a lower link the agent starts without the user's
+servers and its instructions say so. `RemoteMachine.nodeProtocol` reads `11`
+from an updated machine. No methods, events, fields of public results or error
+codes change, the surface counts are unchanged, and there is no public protocol
+version bump.
+
+**Sub-agent checkouts for remote agents — nodeProtocol 13 (behavior change, no capability).**
+A remote agent's sub-agent now starts from the parent's work
+([sub-agent checkouts](./node-link.md#sub-agent-checkouts-nodeprotocol-13)).
+On the parent's machine it works in the parent's checkout: `launch` gains
+`checkoutOf`, the machine starts the child there with its own temp folder,
+pushes the shared checkout to the parent's refs, stops the sharing children
+before the parent's final stop, and its sweep keeps a shared checkout. On
+another machine the backend asks the parent's machine to push now (new
+`pushWip` / `pushWipReply` control frames) and starts the child from the
+parent's `head` with its `wip` restored on top. Daemons offer
+`{ min: 7, max: 13 }`. On a link below 13 a child on the parent's machine
+starts from the workspace's last commit, as before, and one on another
+machine from the parent's last push. Only the create `notice` text changes on the public
+surface: no methods, events, fields or error codes change, the surface counts
+are unchanged, and there is no public protocol version bump.
+
+**Sub-agent placement from remote agents (behavior change, no capability).**
+A remote agent can place a sub-agent anywhere
+([sub-agents of remote agents](./methods/nodes.md#sub-agents-of-remote-agents)).
+Three things change. `placement: { target: "e2b" }` from an agent on a cloud
+machine now starts a new sandbox owned by the sub-agent, instead of meaning the
+parent's sandbox; an omitted placement still shares it. A
+`target: "local"` sub-agent of a remote parent with its own copy-on-write
+checkout now starts from the parent's latest work; in the shared worktree its
+notice names the parent's refs
+([backend sub-agents](./methods/nodes.md#backend-sub-agents-of-remote-agents)).
+A sandbox that an agent starts records the person behind the agent chain in
+`cloud.startedBy` instead of the backend owner, so that person can pause and
+kill it. `CloudMachineState.agentId` may now name a sub-agent. No methods,
+events, fields or error codes change, no node-link frame changes, the surface
+counts are unchanged, and there is no public protocol version bump.
+
+**Named E2B entries — capability `cloudMachineEntries: 1` (additive, with a
+migration).** The single E2B provider becomes a list of
+[named entries](./methods/nodes.md#named-e2b-entries), each with its own id,
+name, key, template project, size, idle pause and paused delete. The method
+names, the `cloudMachine:changed` event and the result keys stay the same:
+each `CloudMachineProvider` row (in `providers`, `provider` and the event) is
+now one entry, its `id` is the entry's `cloudMachineId` (no longer only
+`"e2b"`) and it gains `provider: "e2b"`. New optional members:
+`cloudMachines.configure` `cloudMachineId`, `name` and `apiKeyFrom`;
+`cloudMachines.remove` `cloudMachineId` (`provider` becomes optional); the
+placement `{ target: "e2b", cloudMachineId? }`; `CloudMachineState.cloudMachineId`;
+and `cloudMachineId` on the three cloud error datas, with the new
+`cloud-machine-unavailable` reason `entry-required` (data `entries`). A saved
+single provider migrates at the backend's first start to the entry `"e2b"`
+named `"E2B"`, keeping its secret store account `cloudMachines.e2b.apiKey`,
+settings, sandboxes and agents. Older clients keep working against the entry
+`"e2b"`: calls without `cloudMachineId` address it, a placement without one
+falls back to it, and they skip rows whose `id` is not `"e2b"`. Cloud machine
+rows are named `"<entry name> · <agent name>"`, and agents show the entry's
+name as `nodeName`. Nothing is renamed or removed, so the method and event
+catalogs, the protocol-to-app field parity rows and the surface counts are
+unchanged and the consumer checks need no staged row. The public protocol
+version is unchanged; clients detect entries only through the flag.
+
+**Secrets for remote agents — nodeProtocol 14 (additive result fields and error code; no method-catalog change, so no version bump).**
+A remote top-level agent can now request and use secrets
+([§5.56 remote agents](./methods/secrets.md#remote-agents)). Its
+`ws.secret.request` / `list` / `forget` calls are forwarded to the backend; the
+value is held only in its machine's intentd memory. `secret.provide` sends the
+value to the machine in the new `secretPut` link frame and answers only after the
+machine confirms; otherwise it fails with `-32602`
+`data.code: "secret-delivery-failed"` and the request stays pending. New
+`secretForget`, `secretList` and `secretReply` frames and `hello.headSession` (a
+backend restart drops the machine's values) complete the
+[link contract](./node-link.md#secrets-on-the-machine-nodeprotocol-14). `secret.list`
+adds the optional `secretsUnavailable: "machine-offline"` and `secret.forget` the
+optional `deferred: true`, only for a remote agent whose machine is not connected.
+Daemons offer `{ min: 7, max: 14 }`; on a lower link a remote agent has no
+`ws.secret` and no `secretEnv`. The surface counts are unchanged.
+
+**Forge token for remote agents — nodeProtocol 15 (link-only; no method-catalog change, so no version bump).**
+The backend passes its GitHub token to the machine in the new `forgeToken`
+link frame (answered by `forgeTokenReply`, which may carry the link reply code
+`forge-token-invalid`), and a top-level agent's `launch` gains `forge`
+(`remoteUrl`, `branch`). Every remote agent gets `GH_TOKEN`; a top-level agent
+also gets the workspace branch and `origin`
+([link contract](./node-link.md#forge-token-on-the-machine-nodeprotocol-15),
+[§5.50](./methods/nodes.md#forge-token-for-remote-agents)). Daemons offer
+`{ min: 7, max: 15 }`; on a lower link remote agents get no token, as before.
+No method, event, setting or result member changes, so the surface counts are
+unchanged.
+
+**Agent file pull — nodeProtocol 16 (link-only; no method-catalog change, so no version bump).**
+The MCP-only [`ws.file.pull({ fromAgentId, path, to? })`](./methods/files-terminal-browser.md#agent-file-pull)
+copies a file or folder (packed as one tar) from another agent's checkout of the
+same workspace into the caller's, confined to both checkouts, in pieces of at most
+4 MiB with the whole content's `sha256` in the first piece, and capped at
+209715200 bytes (200 MiB). A remote caller's machine uses the internal
+`file.pullData` `workspace.call` frame; a remote source's machine serves the new
+`checkoutRead` and `checkoutReadReply` link frames
+([link contract](./node-link.md#checkout-files-nodeprotocol-16)). Daemons offer
+`{ min: 7, max: 16 }`; a pull from a machine on a lower link fails with
+`file-pull-unsupported`. `ws.file.getAttachment` gains the same 200 MiB cap,
+local and remote (`attachment-exceeds-cap`). The surface counts are unchanged.
+
+**Sub-agent fetch through the backend — nodeProtocol 17 (link-only; no method-catalog change, so no version bump).**
+A sub-agent's `launch` gains `forgeFetch` (`remoteUrl`). The machine rewrites two
+forms of the workspace's GitHub URL, for that sub-agent only, to its new forge remote on
+`/node/git`. The backend refreshes from GitHub into private
+`refs/namespaces/intent-forge/*` refs before it serves that upload-pack (coalesced, 30 s timeout,
+last fetched refs with a warning on failure). It serves them as `refs/heads/*`
+and `refs/tags/*` and refuses receive-pack with
+the new CLOSE code `node-git-push-refused`
+([link contract](./node-link.md#sub-agent-fetch-through-the-backend-nodeprotocol-17)).
+Sub-agents still get `GH_TOKEN`. Daemons offer `{ min: 7, max: 17 }`; on a lower
+link sub-agents start as before. No method, event, setting or result member
+changes, so the surface counts are unchanged.
+
+**Script-run cards for remote agents' monitors (additive, no capability).**
+With `remoteScripts: 1`, a machine-run monitor's wake now carries the
+`script_monitor_wake` metadata of a home-run wake plus `remoteAgentId` and
+`nodeId`, instead of a plain message, so clients can render the script-run card
+([wakes of machine-run monitors](./methods/scripts.md#wakes-of-machine-run-monitors)).
+It stays an ordinary, non-durable queued message: only metadata without
+`remoteAgentId` is a durable monitor wake. The text still names the machine for
+clients that ignore the metadata; a client that already renders
+`script_monitor_wake` cards but ignores `remoteAgentId` shows it as a home-run
+card, an accepted degradation. No method, event or surface count changes.
+
+**Command-default change (breaking).**
+[Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain
 saved. Upserts preserve stored purpose when omitted, and legacy hydration/import
 still defaults to saved. Reusable and autostart command creators must send
 explicit `saved`; omitted-purpose new autostart commands now fail validation.
 This breaks an existing request's retention/acceptance behavior, so recommend the
 next major under the compatibility policy, despite unchanged methods and fields.
-Allocate against daemon main before merge. `scriptLifecycle: 1` alone cannot
-identify the default generation; explicit purpose is portable across supporting
-daemons. No capability or version claim here establishes release or deployment.
-
-Land the prepared contract first so reviewers can verify component expectations;
-there are no catalog additions/removals requiring count changes. Then land the
-daemon change before the frontend change, with human authorization for every
-merge. Automation owns subsequent pins and the generated MCP index. This change
-neither upgrades clients nor reclassifies existing workspace definitions.
+intentd implements it. `scriptLifecycle: 1` alone cannot identify the default
+generation; explicit purpose is portable across supporting daemons. There are no
+catalog additions/removals requiring count changes. This change neither upgrades
+clients nor reclassifies existing workspace definitions.
 
 **Version 10.11 — script lifecycle (additive, implemented candidate).** The
 [script lifecycle extension (§5.8)](./methods/scripts.md#saved-scripts-and-one-off-history-protocol-13-baseline)
@@ -556,8 +1402,8 @@ shape, and absent readiness never means a service is ready.
 The separately prepared [phase 1 node contract (§5.50)](./methods/nodes.md)
 reserves additive methods/events without claiming a shipped version. Implementors
 allocate the next minor against main and advertise `agentNodes: 1` only after the
-complete contract is implemented. Per-agent CoW removal follows replacement
-backend/frontend support, requires a major version and `agentIsolation: 2`, and
+complete contract is implemented. Per-agent CoW removal does not wait for the
+node or local-node support. It requires a major version and `agentIsolation: 2`, and
 removes canonical entries only after component deletion and automatic pin advance.
 Workspace `checkoutMode: "cow"` is retained.
 
@@ -620,7 +1466,8 @@ against current main when implementing; a numeric version alone is never proof o
 - The existing four `/invite` methods accept an optional scope, defaulting to workspace;
   host invites require explicit host scope and carry it in their link/preview/join result.
   Workspace response keys stay intact. A mismatched or legacy host-scope join fails closed.
-  Invitation issuance uses Intent authority, without a forge-connection prerequisite.
+  Invitation issuance uses Intent authority plus a connected owner forge (GitHub or
+  GitLab); with none connected, issuance and redemption are `github-identity-required`.
 - Collaboration sign-in has an isolated credential purpose. Existing forge-auth methods
   and GitHub aliases remain repository-purpose; proof methods gain a gated purpose and
   expected-identity check. Repository credential changes cannot silently re-key a person.
@@ -667,6 +1514,16 @@ The new method/event goldens and behavioral assertions must land with component 
 
 
 
+Prepared additive extension of [provider profiles (§5.54)](./methods/provider-profiles.md#default-configuration-overrides):
+**Default configuration overrides**. It adds the router method
+`providers.profiles.updateDefault`, the `defaults` member on the
+`providers.profiles.list` result, the catalog `defaultNames` map, and the
+`default-updated` / `default-activation` changes on `providers:profiles-changed`.
+The Default configuration keeps its bare reference, so no saved selection changes.
+This entry reserves the method without claiming a shipped version. Implementors
+allocate the next minor against main; clients detect support by the presence of
+`defaults`, and an older daemon rejects the method with `-32601`.
+
 Additive, presence-detected within the current protocol (no method-catalog change
 or version bump; [intent#5830](https://github.com/intent-hq/intent/issues/5830)):
 **Assistant prompt versions** (§5.5) — `AgentLite.metadata.chiefPromptVersion?`
@@ -683,7 +1540,7 @@ The guest half of the invite identity proof is generalized as two new router met
 `invite.prove` gains **`provider?` / `host?` / `proofId?`** (`proofId` aliases `gistId`, exactly one required), the host verifying a GitLab snippet anonymously or, when the instance refuses anonymous reads, through its own connection to the same host, else the new typed refusal **`-32603 { code: "identity-unverifiable", host }`** (`cannot verify identity on <host>`);
 the guest-side GitLab proof methods refuse with their own `gitlab-not-connected` / `gitlab-scope-missing` / `gitlab-unreachable` codes beside the kept `github-*` ones.
 Owner-self-join and pins compare triples.
-`invite.inspect` and `invite.challenge` additionally return **`pinIdentity: { provider, host, externalUserId } | null`** after validating the open invite and secret, without a forge call: legacy GitHub pins project to the triple, `null` means unpinned, and omission identifies an older host.
+`invite.inspect` and `invite.challenge` additionally return **`pinIdentity: { provider, host, externalUserId } | null`** after validating the open invite and secret, without a forge call for the pin (`invite.challenge` then runs only the owner-forge check, which refuses with `github-identity-required` or `github-unreachable` while no owner forge is connected): legacy GitHub pins project to the triple, `null` means unpinned, and omission identifies an older host.
 Guests select the matching connected account for a pin or, on a local daemon with the 10.8 identity seam, the chosen `principal.me` identity for an explicit null (older-host/sidecar fallbacks are documented in §5.48); malformed metadata is refused and the host retains its final pin enforcement ([intent-hq/intent#5817](https://github.com/intent-hq/intent/issues/5817)).
 Router catalog 330 → 336 (`principal.list`, `workspace.members.add`, `github.identityProof.*` and `sourceControl.identityProof.*` are the additions the catalog gains on this line's pin; 10.7 below left the 10.5 counts standing, so these deltas are 10.8's), fast path 53 → 57 (`invite.inspect` / `accept` / `challenge` / `prove`) — **395** dispatchable names while `invite.redeem` is still listed: it is retired from intentd and leaves the docs catalog once the pin advances past its removal, making the counts **394 / 336 / 56**.
 Every pre-10.8 shape is unchanged.
@@ -1428,6 +2285,27 @@ the automatic submodule bump must then carry that backend before these docs land
 No manual pin advance is part of the migration. Historical 10.3 replay semantics
 above describe the former method, not a durability guarantee for current commits.
 
+Also within 13.0 (behavior only, no method-catalog or wire-shape change, so no version
+bump — [intent-hq/intentd#2649](https://github.com/intent-hq/intentd/pull/2649), fixes
+[intent-hq/intent#7184](https://github.com/intent-hq/intent/issues/7184)): **per-note
+write serialization** (§5.2). The client content writers to one note (`note.add`,
+`note.edit`, `note.editLines`, `note.setContent`, `task.updateStatus`, `task.update`,
+`task.convertBlocks`, `comment.add`, `primitive.*` appends) and linked-checkbox
+materialization take turns per note from their read to their gated persist, so
+parallel writers — including parallel status changes of tasks linked from one note —
+no longer exhaust their bounded retries against each other and an exact-match `note.edit` always applies to the latest
+text ("Text not found" when an earlier writer replaced its `old` text, instead of a
+three-way merge). The `-32005` shape and the 5-attempt bound are unchanged.
+
+Also within 13.0 (behavior only, no method-catalog or wire-shape change, so no version
+bump — [intent-hq/intentd#2710](https://github.com/intent-hq/intentd/pull/2710)): **`noteIds` attach notes
+by reference** (§5.5 "Per-turn prompt-assembly hints"). `agent.sendMessage` no longer loads a context
+note's `workspace-asset://` images and appends them as ACP `image` blocks; each resolving note instead adds
+one text notice with its title, id, and up to 50 image URLs the agent opens with `ws.note.readAsset`.
+A note with many screenshots can therefore no longer push a turn past the provider image budget and fail
+every send while it is in context. Agents that relied on seeing note images automatically must now open
+them on demand. The `noteIds` param shape is unchanged.
+
 ### Compatibility Policy
 
 - **Additive changes** (new methods, new optional fields, new event types) bump the **minor** version (e.g., 2.0 → 2.1).
@@ -1436,7 +2314,7 @@ above describe the former method, not a durability guarantee for current commits
 
 The method surface is enforced by golden tests in `crates/intent-transport/src/catalog.rs`. Any drift (added, removed, or renamed methods) causes CI failure with the instruction: "Update ROUTER_METHODS in catalog.rs, update docs/protocol/05-method-catalog.md, and bump the protocol version." Additive response fields on an existing method (e.g., the optional `system.status` resource fields, §5 fast-path notes) do not change the golden-test-enforced catalog and ship within the current version; clients must detect them by **presence**, not by protocol version.
 
-The prepared `discussionAgentActivity: 1` extension adds per-message/recipient
+The `discussionAgentActivity: 1` extension adds per-message/recipient
 activity and selected mention snapshots, transient `discussion:activity`, and
 human-only `discussion.stopAgent` / `discussion.retryAgent`. The attempt fences
 controls; the version orders event, response, and history races. Legacy messages
@@ -1450,8 +2328,10 @@ pinned cloudlands-fe declares it. List such a field here in the docs PR that doc
 it, which lands before the intentd PR (docs lead the pin). **Row** is the Rust struct
 (`AgentLite`, `Workspace`), **Field** the wire name, **Contract** a Markdown link to the
 field's contract, and **App adoption** the cloudlands-fe PR or issue that declares it.
-`make check-protocol-field-parity` reads this table. A listed field the frontend
-type lacks is a warning instead of an error. An unlisted emitted field still fails,
+`make check-protocol-field-parity` reads this table; a local run off the component
+pins also reads it from `origin/main`, the copy `monorepo-consumer-checks` uses. A
+listed field the frontend type lacks is a warning instead of an error. An unlisted
+emitted field still fails,
 and so does a malformed table. Once the frontend pin declares the field, the check
 warns that the row is stale; remove it then. Fields the frontend never reads stay in
 the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
@@ -1460,3 +2340,12 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 |---|---|---|---|
 | `Workspace` | `attentionReminder` | [Workspace reminder projection (§5.1)](methods/workspace.md) | [cloudlands-fe#3308](https://github.com/intent-hq/cloudlands-fe/pull/3308) |
 | `Workspace` | `retiredAt` | [Retired workspaces](./methods/workspace.md#retired-workspaces) | Pending cloudlands-fe retired-workspaces PR (home, search and workspace view) |
+| `Workspace` | `scriptsRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home Running/Waiting groups PR |
+| `AgentLite` | `submodules` | [Prepared checkout](./methods/nodes.md#prepared-checkout) | Pending cloudlands-fe prepared-checkout PR ([intent-hq/intent#8594](https://github.com/intent-hq/intent/issues/8594)) |
+| `AgentLite` | `setup` | [Prepared checkout](./methods/nodes.md#prepared-checkout) | Pending cloudlands-fe prepared-checkout PR ([intent-hq/intent#8594](https://github.com/intent-hq/intent/issues/8594)) |
+| `Workspace` | `backgroundTasksRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home background-task Running PR |
+| `Workspace` | `autoArchiveDisabled` | [Auto-archive opt-out](./methods/workspace.md#auto-archive-opt-out) | Pending [cloudlands-fe#3863](https://github.com/intent-hq/cloudlands-fe/pull/3863) (Home Disable auto-archive toggle) |
+| `Workspace` | `plainFolder` | [Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces) | Pending cloudlands-fe plain-folder workspaces PR (Labs git toggle and hidden git UI) |
+| `AgentLite` | `pinned` | [Agent sidebar pins](./methods/agents.md) | Pending cloudlands-fe sidebar pin PR (Pin to top in the agent row menu) |
+| `AgentLite` | `cloudStart` | [Placement on E2B](./methods/nodes.md#placement-on-e2b) | Pending cloudlands-fe E2B cloud machines PR (Start On, machine badges) |
+| `AgentLite` | `nodeName` | [Placed agent projection](./methods/nodes.md#placement-and-creation) | Pending: the complete node contract that advertises `agentNodes`; agents placed on [remote machines](./methods/nodes.md#placement-subset) carry it on detail reads, but the app does not read it yet |

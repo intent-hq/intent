@@ -1,0 +1,81 @@
+# The one CI setup for the pinned Bash 3.2 that the shell suites' REQUIRE_BASH3
+# passes run under (ci.yml shell-tests-bash3, consumer-checks.yml's intentd
+# changed-tests suites, bash3-cache.yml). Exports BASH3_BIN.
+#
+# Compiling Bash 3.2 serially costs about 2 minutes per job, so the build is
+# cached under scripts/install-ci-bash3.sh --cache-key (pinned tarball sha256,
+# installer hash, runner OS and arch). Fail-closed either way: a restored
+# binary is used only when it reports exactly 3.2.57, and a miss or a bad
+# restore installs the build tools and builds from the checksum-verified
+# tarball. A cache-service outage only warns.
+#
+# Actions caches are repository-scoped and readable across runs only from the
+# default branch: merge-queue runs cannot read each other's saves, so
+# bash3-cache.yml (also callable by the component repos) fills the entry on
+# main. The path is relative to the workspace so the archive restores the same
+# way on hosted, Warp and self-hosted runners; .dev/ is gitignored.
+#
+# Reached as ./.github/actions/setup-bash3 from the monorepo checkout, so the
+# installer below comes from the same commit as this action.
+name: Set up pinned Bash 3.2
+description: Restore or build the checksum-pinned Bash 3.2 and export BASH3_BIN
+runs:
+  using: composite
+  steps:
+    - name: Compute the Bash 3.2 cache key
+      id: key
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        installer=$(cd "$ACTION_PATH/../../../scripts" && pwd -P)/install-ci-bash3.sh
+        key=$(bash "$installer" --cache-key)
+        {
+          echo "installer=$installer"
+          echo "key=$key"
+        } >> "$GITHUB_OUTPUT"
+        echo "Bash 3.2 cache key: $key"
+
+    - name: Restore cached Bash 3.2
+      uses: actions/cache/restore@v6
+      with:
+        path: .dev/ci-bash3
+        key: ${{ steps.key.outputs.key }}
+
+    - name: Check the restored Bash 3.2
+      id: probe
+      shell: bash
+      env:
+        INSTALLER: ${{ steps.key.outputs.installer }}
+      run: |
+        if bash "$INSTALLER" --check .dev/ci-bash3; then
+          echo reusable=true >> "$GITHUB_OUTPUT"
+        else
+          echo reusable=false >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Install Bash build prerequisites when absent
+      if: steps.probe.outputs.reusable != 'true'
+      shell: bash
+      run: |
+        if ! command -v yacc >/dev/null || ! command -v gcc >/dev/null; then
+          for attempt in 1 2 3; do
+            if sudo -n apt-get -o DPkg::Lock::Timeout=300 update -qq; then break; fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            sleep $((attempt * 15))
+          done
+          sudo -n apt-get -o DPkg::Lock::Timeout=300 install -y -qq build-essential bison
+        fi
+
+    - name: Install pinned Bash 3.2
+      shell: bash
+      env:
+        INSTALLER: ${{ steps.key.outputs.installer }}
+      run: bash "$INSTALLER" .dev/ci-bash3
+
+    - name: Save Bash 3.2 to the cache
+      if: steps.probe.outputs.reusable != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: .dev/ci-bash3
+        key: ${{ steps.key.outputs.key }}

@@ -6,13 +6,17 @@
 # Used by `make consumer-checks` (the monorepo CI job) and by the reusable
 # upstream workflow, so the two lists cannot drift.
 #
-# `docs-check` keeps its Makefile prerequisites (event-catalog-check and
-# check-mcp-bindings) for standalone `make docs-check`; here both run as their
-# own rows first and docs-check is invoked with `make -o <prerequisite>`
+# `docs-check` keeps its Makefile prerequisites (event-catalog-check,
+# check-mcp-bindings and check-protocol-status-labels) for standalone
+# `make docs-check`; here they run as their own rows first and docs-check is
+# invoked with `make -o <prerequisite>`
 # (--assume-old), which tells make the prerequisite is already up to date so
 # only the docs-check recipe itself runs (scripts/docs-check.sh, the protocol
 # line-length ratchet, and its fixture tests). That is what lets check-mcp-bindings be
-# advisory on its own without touching the Makefile graph.
+# advisory on its own without touching the Makefile graph. The docs-check
+# prerequisite check-doc-links runs inside the docs-check row in the monorepo
+# (it replaces the ci.yml docs-check job's separate doc link step); upstream it
+# is assumed old too, so the component PR gates do not change.
 #
 # Options (each also settable through the environment):
 #   --advisory=<targets>   CONSUMER_CHECKS_ADVISORY  space-separated targets
@@ -39,7 +43,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "$repo_root"
 
-checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-transfer-selection-contract check-backend-keychain-contract check-agent-worker-contract check-app-ui-targets check-note-pagination-contract"
+checks="event-catalog-check check-mcp-bindings check-protocol-status-labels docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-agent-feature-toggles check-keybindings-doc check-transfer-methods check-transfer-selection-contract check-backend-keychain-contract check-agent-worker-contract check-app-ui-targets check-app-guide-sources check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies"
 advisory=${CONSUMER_CHECKS_ADVISORY:-}
 context=${CONSUMER_CHECKS_CONTEXT:-monorepo}
 make_bin=${MAKE:-make}
@@ -87,15 +91,24 @@ fix_path() {
   case "$1" in
     event-catalog-check) echo "docs/protocol/event-types.json + docs/protocol/06-events.md" ;;
     check-mcp-bindings) echo "docs/protocol/methods/mcp-bindings.md (make mcp-bindings-doc) + prose under docs/protocol/" ;;
-    docs-check) echo "AGENTS.md / README.md / docs/fe/DEVELOPER_GUIDE.md (make targets, sandbox knobs) + docs/protocol/methods/files-terminal-browser.md (browser errorCode contract) + docs/protocol/**/*.md lines over 2,000 characters (one sentence or bullet per line; baseline scripts/doc-line-length-baseline.txt) + docs/protocol/**/*.md table rows whose cell count differs from the header (escape a literal pipe as \\|)" ;;
+    docs-check) echo "AGENTS.md / README.md / docs/fe/DEVELOPER_GUIDE.md (make targets, sandbox knobs) + Markdown links and backticked docs/ scripts/ .github/ packages/ paths that do not resolve (make check-doc-links; monorepo only) + docs/protocol/methods/files-terminal-browser.md (browser errorCode contract) + docs/protocol/**/*.md lines over 2,000 characters (one sentence or bullet per line; baseline scripts/doc-line-length-baseline.txt) + docs/protocol/**/*.md table rows whose cell count differs from the header (escape a literal pipe as \\|) + docs/protocol/fixtures/**/*.test.mjs failures (make check-protocol-fixture-tests; a node:test file must be named fixtures/**/*.test.mjs)" ;;
+    check-protocol-status-labels) echo "docs/protocol/**/*.md + fixtures/**/*.json \"prepared\" / \"not implemented\" labels on capabilities the pinned intentd advertises (drop the label; a really unfinished part gets a reasoned UNFINISHED entry in scripts/check-protocol-status-labels.mjs; baseline scripts/protocol-status-labels-baseline.txt only ratchets down)" ;;
     check-protocol-catalog) echo "docs/protocol/05-method-catalog.md + docs/protocol/methods/*.md" ;;
     check-makefile-targets) echo "Makefile intentd crate / --test references (must exist at the pinned intentd gitlink in the monorepo / at the caller head upstream)" ;;
     check-protocol-field-parity) echo "docs/protocol/versioning.md staged row fields table (daemon-first field), scripts/check-protocol-field-parity.mjs PAIRS ignore (field the FE never reads), or the cloudlands-fe type that consumes the row struct" ;;
+    check-agent-feature-toggles) echo "cloudlands-fe src/lib/components/settings/agent-feature-definitions.ts (FEATURE_PATHS + FEATURES) or scripts/check-agent-feature-toggles.mjs EXEMPT (reasoned entry, landed before the intentd PR), plus the Agent features list in docs/protocol/methods/settings.md" ;;
+    check-keybindings-doc) echo "docs/fe/KEYBINDINGS.md: one row per shortcut, its ID cell naming the shortcut (chord must match cloudlands-fe src/lib/utils/shortcut-bindings.ts SHORTCUT_DEFAULTS), or a PENDING entry in scripts/check-keybindings-doc.mjs landed before the cloudlands-fe PR that moves the chord" ;;
+    check-transfer-methods) echo "cloudlands-fe src/features/backend/main/transfer-connections.ts TRANSFER_METHODS (route the bulk method) or intentd crates/intent-transport/src/catalog.rs PAYLOAD_CLASSES (cap the read and classify it bounded); see docs/protocol/methods/files-terminal-browser.md Bounded object reads" ;;
     check-transfer-selection-contract) echo "docs/protocol/fixtures/transfer-selection/ (shape, coverage and provenance; no compilation)" ;;
     check-backend-keychain-contract) echo "docs/protocol/fixtures/backend-keychain/v1/ + adopted component mirrors/locks (see docs/protocol/backend-keychain.md)" ;;
     check-app-ui-targets) echo "intentd app-ui-targets.json + cloudlands-fe app-ui-targets.ts (supported routes and aliases)" ;;
+    check-app-guide-sources) echo "intentd assistant-app-guide.md Sources comments (cite files present at the pinned components; drop guide text for code that never landed)" ;;
     check-agent-worker-contract) echo "docs/protocol/methods/agent-workers.md + fixtures/agent-workers/v1/ + scripts/agent-worker-contract*.mjs (synthetic only)" ;;
-    check-note-pagination-contract) echo "docs/protocol/fixtures/notes/ + methods/notes-tasks.md (prepared specification only)" ;;
+    check-note-truncated-read-contract) echo "docs/protocol/fixtures/notes/truncated-read.json + methods/notes-tasks.md" ;;
+    check-browser-routing-contract) echo "docs/protocol/fixtures/browser-routing/routing.json + methods/files-terminal-browser.md REV-2 (intentd copy: crates/intent-transport/tests/fixtures/browser-routing.json, via scripts/browser-routing-contract.mjs)" ;;
+    check-fixture-copies) echo "scripts/check-fixture-copies.mjs REGISTERED (describe the copy with defineFixtureCopy() in scripts/lib/fixture-copy.mjs; see docs/protocol/README.md#copied-fixtures) + the named spec's canonical fixture and adopted copies/locks (scripts/<name>-contract.mjs)" ;;
+    check-turn-start-contract) echo "docs/protocol/fixtures/turn-start/turn-start-events.json + the docs/protocol/06-events.md §6.6 Turn-start signals table + REQUIRED_TYPES in scripts/turn-start-contract.mjs (types must be in docs/protocol/event-types.json)" ;;
+    check-suggested-prompts-contract) echo "docs/protocol/fixtures/suggested-prompts/v1/ + adopted component copies/locks (see docs/protocol/suggested-prompts.md)" ;;
     *) echo "unknown check" ;;
   esac
 }
@@ -103,13 +116,26 @@ fix_path() {
 # Upstream, packages/intentd is the caller's own checkout (a PR head, not the
 # pin), so check-makefile-targets asks whether that head still provides the
 # Makefile's crates / --test targets; in fe upstream context intentd sits at
-# the pin, so HEAD == pin. The monorepo keeps the strict pinned-gitlink read.
+# the pin, so HEAD == pin. check-app-guide-sources likewise reads both checkout
+# HEADs upstream and only warns for a missing cloudlands-fe file. The monorepo
+# keeps the strict pinned-gitlink reads.
 make_args() {
   case "$1" in
-    docs-check) echo "-o event-catalog-check -o check-mcp-bindings docs-check" ;;
+    docs-check)
+      if [ "$context" = "upstream" ]; then
+        echo "-o event-catalog-check -o check-mcp-bindings -o check-protocol-status-labels -o check-doc-links docs-check"
+      else
+        echo "-o event-catalog-check -o check-mcp-bindings -o check-protocol-status-labels docs-check"
+      fi ;;
     check-makefile-targets)
       if [ "$context" = "upstream" ]; then
         echo "CHECK_MAKEFILE_TARGETS_GITLINK=HEAD $1"
+      else
+        echo "$1"
+      fi ;;
+    check-app-guide-sources)
+      if [ "$context" = "upstream" ]; then
+        echo "CHECK_APP_GUIDE_SOURCES_UPSTREAM=1 $1"
       else
         echo "$1"
       fi ;;

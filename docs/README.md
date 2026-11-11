@@ -47,6 +47,58 @@ emitted or is now present in the FE type — is reported as a warning, not a fai
 an FE PR that declares the field does not have to wait for the monorepo entry to be
 removed; remove the entry in a follow-up.
 
+A local run whose component checkout is off its recorded pin (an intentd branch newer
+than the pin, say) compares like the upstream `monorepo-consumer-checks` job: a missing
+field is checked again against `PARITY_BASE` (default `origin/main`) — that ref's staged
+table, the off-pin checkout as the PR head, and the other component at that ref's pin.
+A field that passes there is a `pin drift` warning (this monorepo worktree is older
+than `origin/main`; rebase it to compare locally); a field the checkout itself adds
+still fails, with a note to `git fetch origin main` if that ref may be stale.
+`PARITY_BASE=` keeps the strict local comparison, and it is off when `CI` is set. Under
+`make check` / `make gate` a parity failure no longer stops make: fmt, cargo-shear, clippy
+and the source lints still run, and `check` fails at the end naming the parity step.
+
+Every `agentFeatures.*` setting intentd registers for `settings.list` (`definitions()` in
+`packages/intentd/crates/intent-services/src/settings.rs`) must have a Settings → Agent
+features toggle in cloudlands-fe (`FEATURE_PATHS` and `FEATURES` in
+`src/lib/components/settings/agent-feature-definitions.ts`). This is checked by
+`scripts/check-agent-feature-toggles.mjs` (`make check-agent-feature-toggles`, part of
+`make consumer-checks`). It also fails when `FEATURE_PATHS` and `FEATURES` disagree, or
+when the `agentFeatures.*` entries of intentd's `KNOWN_PATHS` differ from what it read in
+`definitions()`, so an unrecognized registration form fails instead of being skipped. A
+setting without a toggle fails both here and on the upstream intentd PR. For a setting
+that intentionally has no toggle, or whose toggle lands later, add it with a one-line
+reason to the script's `EXEMPT` map, and land that change before the intentd PR. A
+toggle the daemon does not register, or a stale `EXEMPT` entry, is only a warning.
+The same check fails when a registered setting is missing from the Agent features list
+in `docs/protocol/methods/settings.md` (the paths before "— booleans"). For a docs-first
+addition, a `(prepared addition)` bullet that opens with the path also counts; once the
+daemon registers that setting, the check warns until the path is in the list.
+
+The chords `docs/fe/KEYBINDINGS.md` shows for configurable shortcuts (rows with a
+shortcut id in their `ID` cell) must match `SHORTCUT_DEFAULTS` in cloudlands-fe
+`src/lib/utils/shortcut-bindings.ts`. This is checked by `scripts/check-keybindings-doc.mjs`
+(`make check-keybindings-doc`, part of `make consumer-checks`), so a cloudlands-fe PR that
+moves or adds a shortcut fails until the doc agrees. Land the doc row with a `PENDING` entry in
+the script first; see [Moving a shortcut](./fe/KEYBINDINGS.md#moving-a-shortcut). A table
+shortcut with no row fails too, so a new shortcut's row lands before its cloudlands-fe PR. An
+id the table lacks, or a stale `PENDING` entry, is only a warning.
+
+A capability the pinned intentd advertises in `client.hello` `server.capabilities` (the
+`server_json()` literal in `packages/intentd/crates/intent-transport/src/client.rs`) must
+not be described as "prepared" or "not implemented" anywhere under `docs/protocol/`. This
+is checked by `scripts/check-protocol-status-labels.mjs` (`make check-protocol-status-labels`,
+part of `make docs-check` and `make consumer-checks`). A label's subject is the first
+capability code span in its sentence (or the next sentence after an emphasized lead-in),
+from its table cell to the end of a row, or in a heading's section; a `§N.N` reference or
+a link counts as the capability that dominates the referenced section. Fixture JSON whose
+`status` starts with `prepared` is checked too. Drop a stale label when the feature ships;
+for a part of a shipped feature that really is unfinished, add a reasoned `UNFINISHED`
+entry to the script. Labels that were already stale when the check was added are
+grandfathered in `scripts/protocol-status-labels-baseline.txt`, which only ratchets
+down. Docs lead the pin: an intentd PR that starts advertising a capability fails its
+`monorepo-consumer-checks` job until the monorepo docs drop the label.
+
 ## Harness Versioning — `HARNESS.md`
 
 **[HARNESS.md](./HARNESS.md)** explains the harness versioning system: the permanent
@@ -75,7 +127,7 @@ migrated from `packages/cloudlands-fe/docs/` after an accuracy audit:
 - [fe/TROUBLESHOOTING_GUIDE.md](./fe/TROUBLESHOOTING_GUIDE.md) — common issues and debugging workflow
 - [fe/IPC_DEBUG_GUIDE.md](./fe/IPC_DEBUG_GUIDE.md) — IPC debug tooling and adding new channels
 - [fe/ERROR_HANDLING_SYSTEM.md](./fe/ERROR_HANDLING_SYSTEM.md) — error handler, reporter, and toast utilities
-- [fe/KEYBINDINGS.md](./fe/KEYBINDINGS.md) — keyboard shortcut reference and audit notes
+- [fe/KEYBINDINGS.md](./fe/KEYBINDINGS.md) — keyboard shortcut reference, checked against the shortcut table
 - [fe/PR_DESCRIPTION_GUIDE.md](./fe/PR_DESCRIPTION_GUIDE.md) — PR description conventions
 - [fe/RULES_SYSTEM.md](./fe/RULES_SYSTEM.md) — agent instruction layers and rules loading
 
@@ -92,12 +144,11 @@ migrated from `packages/cloudlands-fe/docs/` after an accuracy audit:
 
 **Release engineering**
 
-- [RELEASING.md](./RELEASING.md) — cross-component release pipeline (channels, workflows, secrets, ordering, guardrails, release notifier and how to link fix PRs to issues)
+- [RELEASING.md](./RELEASING.md) — cross-component release pipeline (channels, workflows, secrets, ordering, guardrails, release notifier and how to link fix PRs to issues, landing security fixes)
 - [fe/RELEASING.md](./fe/RELEASING.md) — release process (beta/stable channels)
 - [fe/DEPLOYING.md](./fe/DEPLOYING.md) — deployment infrastructure, runners, and feeds
 - [SCCACHE_SERVER.md](./SCCACHE_SERVER.md) — self-hosted sccache WebDAV cache server: provisioning, tokens and rotation, prune tuning, health check, rollback (config in `infra/sccache/`)
 - [GITHUB_RUNNERS.md](./GITHUB_RUNNERS.md) — self-hosted GitHub Actions runner slots on the cache box: install, credential and rotation, slots, drain, runner upgrades, troubleshooting (config in `infra/runners/`)
-- [CI_JOB_SIZING.md](./CI_JOB_SIZING.md) — `scripts/ci-job-sizes.py`: per-job resource report from the runner job stats, size-class recommendations and estimated savings
 
 ## Initial porting phase — **COMPLETE (historical)**
 

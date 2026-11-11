@@ -87,13 +87,12 @@ precedence applies); JSON `{}` is an explicit object. Invalid nonempty values fa
 creation with invalid-params, not silently ignored defaults. Stored defaults have
 no power to bypass caller authorization or supported capability checks.
 
-With no selected object, retain current local
-shared/worktree resolution and existing additive-stage CoW behavior. Explicit
-legacy isolation selects its existing local compatibility path; it conflicts with
-any effective placement object. Workspace cowIsolation is consulted
-only on the legacy path, not silently combined with a selected remote route.
-Per-agent CoW removal remains separately gated. Workspace checkoutMode cow and
-reflink behavior are unchanged.
+With no selected object, retain current local shared/worktree resolution.
+Per-agent CoW isolation was removed in protocol 16
+([nodes.md landing step 2](./methods/nodes.md#errors-and-retirement-gates)):
+`isolation: "cow"` is rejected, and an explicit `isolation` still conflicts with any
+effective placement object. Workspace checkoutMode cow and reflink behavior are
+unchanged.
 
 MCP create/delegate option parsing and their WorkspaceApi forwarding must carry
 these values; accepting an unknown JS key alone is not support. Extend the
@@ -375,6 +374,83 @@ Resolved create/get/list/subscription data carries fully resolved placement
 (including actual os/arch), nodeId, leaseId and nodeName when known from admission.
 No configured target ID, pool projection or manual placement selector is added.
 Existing effectiveIsolation and pending/error semantics remain unchanged.
+
+## Exposed machines
+
+[Daemon-to-daemon remote machines](./methods/nodes.md#daemon-to-daemon-remote-machines)
+widen the candidate set from one configured node to every machine exposed to
+this backend. This section governs only backends that advertise
+`remoteMachines: 1`; the single-node rules above stay in force elsewhere.
+
+**Selection.** `placement.nodeId` names one exposed machine and never falls
+back to another. Without it, `target: "remote"` considers every exposed machine
+that is not revoked, once the provider reference is
+[remote-compatible](./methods/provider-profiles.md#remote-compatibility):
+
+1. platform matches `os` / `arch`;
+2. the provider is installed: `cli-missing` and `prerequisite-missing` are
+   skipped for every launch;
+3. without a selected profile, the default account's status is `signed-in` or
+   `unknown` (`signed-out` and `auth-failed` are skipped), unless a plain
+   Default has a profile marked for remote machines to
+   [auto-pick](./methods/provider-profiles.md#remote-auto-pick): then those machines
+   stay candidates, and once one of them is chosen the backend sends that
+   profile. With a selected profile (the launch sends `profileEnv`) that status
+   is not consulted, because it describes the machine's own login, not the
+   profile's credentials;
+4. the requested model is listed, or no model was requested. The model list
+   comes from the machine's installed provider and is used for profile launches
+   too; a model the profile's account cannot use fails at launch, not here;
+5. free capacity under the machine's shared count and memory limits.
+
+Candidates are ordered by fewest running agents, then most recently used. The
+backend connects on demand and refreshes a report older than 1 hour before
+deciding. `node-configuration-ambiguous` does not apply: several machines are
+an ordinary candidate set. An explicit remote placement never falls back to
+the local daemon.
+
+**Errors.** A provider reference the [launch rules](./methods/nodes.md#placement-across-machines)
+refuse (not marked for remote machines, or setting an account folder) fails first
+with `profile-not-remote-compatible`; a Default that relies on the machine's own
+sign-in on machines reported signed out fails with `machine-not-signed-in`. The
+machine list given to agents leaves out a provider a machine cannot run: signed
+out there with no remote-compatible profile on this backend, or not installed
+([which providers a machine offers](./methods/provider-profiles.md#which-providers-a-machine-offers)). When no machine lists the model, admission fails before any launch
+with `model-unavailable`, listing each machine's provider status and models
+(at most 50 per machine); a provider switched off in the machine's own settings
+reports status `disabled` rather than `cli-missing` (see
+[`model-unavailable`](./methods/nodes.md#remote-machine-errors)). Otherwise a definite no match is
+`placement-unavailable` with reason `no-capacity`, `unsupported-platform`,
+`machine-unreachable`, `machine-unknown` or `machine-revoked`; `no-capacity`
+carries the limit that denied it and is refused, never queued. A version gap is
+`machine-update-required`. MCP's error-to-string path renders the code, reason,
+limit and per-machine alternatives in safe text, as above.
+
+**Tool-description discovery.** The `ws.agent.create` / `ws.agent.delegate`
+tool descriptions and `ws.help("agent")` list the exposed machines: name, id,
+platform, connected or last seen, and each usable provider with its sign-in
+status and up to 10 models. The list is capped at 8 machines and a fixed text
+budget; anything cut is summarized with a count and a pointer to
+`model-unavailable` for the full list. It is recomputed from the cached reports
+at each help request and tool-list refresh, includes `observedAt`, and never
+exposes routes, fingerprints, credentials or other backends.
+
+**Harness 3.10 and later (experimental).** For sessions stamped with harness 3.10
+or later, the system prompt and tool descriptions list each exposed machine by
+stable identity only: name, `nodeId` and platform. They carry no state, last-seen
+time, sign-in status or model list, so the text changes only when a machine is
+added or removed and agents with the same settings share a cacheable prompt. They
+tell the agent to confirm the machine, provider and model with
+`ws.agent.machineModels(nodeId?, { provider?, model? })`, backed by
+[`remoteMachines.models`](./methods/nodes.md#machine-model-lookup), before it
+places a remote agent. The identity list keeps the cap of 8 machines, in name
+order; machines that do not fit are summarized as a count with a pointer to
+`ws.agent.machineModels`. The full placement how-to moves to `ws.help("agent")`,
+with a one-line pointer left in the prompt. In these sessions `ws.help("agent")`
+shows the same identity-only list and the how-to, but no state, sign-in status or
+models: live facts come only from `ws.agent.machineModels`. `model-unavailable`
+still lists each machine's models. Sessions on older harness versions keep the
+text above, including its `ws.help("agent")` content.
 
 ## Verification boundary
 

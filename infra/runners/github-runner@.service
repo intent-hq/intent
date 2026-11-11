@@ -22,7 +22,7 @@ RestartSec=5
 # TimeoutStopSec the supervisor is killed; the container lives in
 # runners.slice, outside this unit's cgroup, so ExecStopPost removes it (and
 # its disk). It is a no-op after a normal exit, when the supervisor already
-# removed it (after measuring its disk for the job stats).
+# removed it.
 KillMode=mixed
 TimeoutStopSec=6h
 ExecStopPost=-/usr/bin/docker rm -f gh-runner-%i

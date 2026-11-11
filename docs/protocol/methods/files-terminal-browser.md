@@ -6,12 +6,12 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 
 | Method | Params | Result |
 | --- | --- | --- |
-| browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below. Tabs are **agent-scoped**: `claimTab` / `listTabs` scoping / `resizeTab` and the structured ownership errors are FE-enforced — see the tab-ownership block below (monorepo#2857). Agent tabs are **hidden by default**: `openTab` `visible?`, `showTab`, and the `listTabs` `visibility` / `displayed` fields — see the hidden-by-default block below (monorepo#3045). **Agent-initiated** calls (no client connection to answer on) are routed to the workspace's **driving client** under the REV-2 rules — `capabilities.browserExec` gate, `workspace.setBrowserClient` pin, claimed-tab host, first-connected eligible — and `listTabs` is answered by the daemon from the tab registry (§5.45); see the REV-2 block below (v9.9–v9.11) |
+| browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below. Tabs are **agent-scoped**: `claimTab` / `listTabs` scoping / `resizeTab` and the structured ownership errors are FE-enforced — see the tab-ownership block below (monorepo#2857). Agent tabs are **hidden by default**: `openTab` `visible?`, `showTab`, and the `listTabs` `visibility` / `displayed` fields — see the hidden-by-default block below (monorepo#3045). **Agent-initiated** calls (no client connection to answer on) are routed to the workspace's **driving client** under the REV-2 rules — `capabilities.browserExec` gate, `workspace.setBrowserClient` pin, active desktop session, claimed-tab host, most recently focused client, first-connected eligible — and `listTabs` is answered by the daemon from the tab registry (§5.45); see the REV-2 block below (v9.9–v9.11) |
 | browser.listTabs *(v9.10)*, browser.upsertTab *(v9.10)*, browser.removeTab *(v9.10)*, browser.syncTabs *(v9.10)*, browser.navigateTab *(v9.11)*, browser.closeTab *(v9.11)* | see §5.45 | the daemon-owned **browser tab registry** — fast-path methods (no `workspaceId` envelope requirement; the host-only reports are keyed by the connection's `client.hello` identity). Documented in §5.45 at the end of this file |
 | browser.docs | topic (req) | docs string — **not exposed**: no router arm; see the `browser.docs — not exposed` block below |
-| terminal.list | workspaceId (req) | `{ terminals: [{ id, name, cwd, isExecutingCommand }], daemonBootId }` (v4.0 envelope — the pre-4.0 bare terminals array is retired; monorepo#1334). `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal values across responses prove the same daemon lifetime and an **empty `terminals` list is authoritative** for that lifetime (not a restarted daemon that lost its PTYs). `name` is **always present** on each entry: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively). The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally — agents still see the bare terminals array (§6.8) |
-| terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text |
-| file.read | path (req), gitRootId? (v11.1 registered-root selector; see below) | file contents as a bare UTF-8 string — paths outside the selected root rejected (-32603); unknown/foreign gitRootId rejected (-32602) |
+| terminal.list | workspaceId (req) | `{ terminals: [{ id, name, cwd, isExecutingCommand, foregroundProcess?, lastProcess? }], daemonBootId }` (v4.0 envelope — the pre-4.0 bare terminals array is retired; monorepo#1334). `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal values across responses prove the same daemon lifetime and an **empty `terminals` list is authoritative** for that lifetime (not a restarted daemon that lost its PTYs). `name` is **always present** on each entry: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively). The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally — agents still see the bare terminals array (§6.8). `foregroundProcess` is the name of the program in the foreground (the PTY's foreground process group leader), or `null` while only the spawned process (the shell) holds it; `lastProcess` is the most recent program that has left the foreground, or `null`. Both are `null` on platforms without process groups, absent from daemons that predate them, and change with a `terminal:process` event (§6.5) |
+| terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text — the newest `maxLines` lines (default 200, 1–10,000), further cut to the newest whole lines whose JSON-escaped size fits 480,000 bytes; a cut says `older output omitted to fit the reply size limit` in the header (see *Bounded output reads* in [scripts.md](./scripts.md#bounded-output-reads)) |
+| file.read | path (req), gitRootId? (v11.1 registered-root selector; see below), maxBytes? *(15.4)* | file contents as a bare UTF-8 string — paths outside the selected root rejected (-32603); unknown/foreign gitRootId rejected (-32602). With `maxBytes` the result is `{ content, truncated, totalBytes }` with `content` capped at 480,000 bytes as a JSON string; without it the whole file, as before (see [Bounded object reads](#bounded-object-reads-154)) |
 | file.readChunk *(v6.18)* | path (req), offset (req; 0-based byte offset), length (req; positive, ≤ 16 MiB decoded), gitRootId? (v11.1; see below) | { content (base64), bytesRead, size } — one offset-windowed slice of the file's raw bytes (the binary counterpart of the UTF-8-only `file.read`; monorepo#2458). `size` is the file's total byte length; a window at/past EOF is `{ content: "", bytesRead: 0, size }` (never an error) and a window crossing EOF returns just the remaining bytes. Zero/over-cap `length` and directory paths are -32602 naming the cause; paths outside the selected root rejected (-32603); unknown/foreign gitRootId rejected (-32602); missing file → -32603 per the file-op convention |
 | file.write | path (req), content (req) | { ok, path, size } |
 | file.list | path? (default .) | [{ name, type }] |
@@ -88,6 +88,82 @@ API gains root support; all other file APIs retain their existing scope.
 // ← response
 { "jsonrpc":"2.0","id":40,"result":{ "ok": true, "path": "notes/out.txt", "size": 5 } }
 ```
+
+### Bounded object reads *(15.4)*
+
+`file.read`, `git.showFile` ([§5.6](./git.md)) and `note.readAsset`
+([§5.2](./notes-tasks.md)) return a whole object on the client's main connection,
+where one large reply delays the heartbeat and every other call queued behind it.
+From protocol 15.4 a client that sends `maxBytes` gets a reply under the 500 KiB read
+budget and reads the whole object in chunks over a separate transfer connection. A
+caller that omits `maxBytes` keeps the earlier whole-object reply. The shared exact
+integer `server.capabilities.boundedReads: 1` (also in `system.capabilities`) tells a
+client the daemon bounds its read defaults.
+
+**Cap.** The object field of one reply (`file.read`'s string, `git.showFile`'s
+`content`, `note.readAsset`'s base64 `data`) takes at most 480,000 bytes as a JSON
+string, quotes and escapes included. The rest of the frame stays well under 512,000
+bytes.
+
+**`maxBytes` (optional).** A positive integer, clamped into [4,096, 480,000].
+`0`, a negative or fractional number, or a non-number is `-32602`
+(`maxBytes must be a positive integer`), with no read.
+
+- `file.read` and `git.showFile` with `maxBytes` return
+  `{ content, truncated, totalBytes }`. `content` is the longest prefix of the text,
+  ending on a UTF-8 character boundary, whose JSON string is at most `maxBytes`
+  bytes. `totalBytes` is the UTF-8 size of the whole text (`git.showFile` text is
+  the blob decoded with replacement characters, as before). `truncated` is `true`
+  when `content` is shorter than the whole text.
+- `note.readAsset` with `maxBytes` adds `truncated` and `totalBytes` (decoded asset
+  bytes) to its result. An asset whose `data` would exceed `maxBytes` is sent with
+  `data: ""` and `truncated: true`; a partial image is not useful.
+- The empty fallbacks of `git.showFile` (missing path, unknown, remote or non-repo
+  workspace) return `{ content: "", truncated: false, totalBytes: 0 }`.
+
+**Without `maxBytes` (legacy).** The reply is unchanged: the whole object in its earlier
+shape, up to the 40 MiB frame cap, so older apps and other callers keep working. Such
+a reply rides the main connection, so a client that can send `maxBytes` should. A
+shortened legacy reply is never sent, because a client could save it back over the
+file. Daemons before 15.4 ignore `maxBytes`, so a client that always sends it handles
+both shapes: a bare string or an object without `truncated` is a whole object.
+
+**Reading the whole object.** These chunk methods return
+`{ content (base64), bytesRead, size }` with the `file.readChunk` window rules
+(0-based `offset`, positive `length` of at most 16 MiB decoded, an empty chunk
+at or past the end, a shortened chunk across it, zero or over-cap `length` is
+`-32602`):
+
+| Method | Params | Notes |
+|---|---|---|
+| `file.readChunk` | path, offset, length, gitRootId? | The file's raw bytes (§5.9 above). |
+| `git.showFileChunk` *(15.4)* | workspaceId, filePath, ref, offset, length, gitRootId? | The raw blob bytes `git.showFile` decodes, with its path, ref, root, fallback and `not-a-file` rules; a fallback is an empty blob (`size: 0`). |
+| `note.readAssetChunk` *(15.4)* | workspaceId, asset, offset, length | The asset's raw bytes, plus `assetId` and `mimeType`. |
+
+`size` is the whole object's byte length. A client reads windows from offset 0
+until `bytesRead` is short or the offset reaches `size`, then decodes the bytes.
+For `git.showFile` text, decode with replacement characters to match its
+`content`. An object can change between reads; a client that needs a consistent
+copy compares `size` across windows.
+
+**Transfer connections.** Over a remote (WSS) connection, the app sends every
+method that may carry more than the read budget on a short-lived connection of
+its own, so a large frame never blocks the main connection: `file.readChunk`,
+`git.showFileChunk`, `note.readAssetChunk`, `workspace.export.read`, and the
+attachment uploads (`file.placeAttachment`, `file.attachmentUpload.*`). A
+transfer connection carries requests only: no `client.hello` beyond what a
+scoped read needs, no subscriptions and no heartbeat. Over the local Unix socket
+the app keeps one connection: there is no uplink to saturate, and the same-host
+socket drains a 16 MiB chunk in milliseconds. The monorepo consumer check
+`check-transfer-methods` fails when a method intentd classifies as a bulk
+transfer (`BulkTransfer` in `PAYLOAD_CLASSES`) is called by the app but missing
+from the app's `TRANSFER_METHODS`, or when `TRANSFER_METHODS` lists a capped read.
+It enforces only once both pinned components carry this work (intentd classifies
+`git.showFileChunk` and the app routes it); until then it reports the same findings
+as warnings and passes, so these docs can land ahead of the pins.
+
+**Not bounded.** Agent tools (`ws.file.read`, `ws.note.readAsset`) call the
+services directly and are unchanged.
 
 > **`file.placeAttachment` — daemon-mediated attachment placement (v6.5;
 > [monorepo#1948](https://github.com/intent-hq/monorepo/issues/1948)).** Places a chat
@@ -192,6 +268,18 @@ API gains root support; all other file APIs retain their existing scope.
 > whose **file was deleted** from the store errors naming the original `fileName` +
 > `uploadedAt` and instructing the model to continue without the file rather than
 > retry.
+>
+> **Size cap.** `ws.file.getAttachment` copies at most 209715200 bytes (200 MiB),
+> for local and [remote](../workspace-routing.md#remote-agents-on-the-executor-link)
+> agents alike. It checks the attachment's stored size on disk (not the registry
+> row, which can be stale) before it writes anything: a larger attachment fails
+> with `-32602` `attachment-exceeds-cap: <size> bytes; limit 209715200` (exactly
+> 209715200 bytes still copies) and leaves no destination directory and no part
+> file behind. An attachment whose file was deleted from the store fails with the
+> existing "continue without this file" error, which comes before the cap check.
+> Uploads still accept up to 1 GiB (`file.attachmentUpload.begin`), so an agent
+> cannot copy an attachment between the two limits; the user can still open it in
+> the app.
 
 > **`file.attachmentUpload.*` — staged chunked attachment upload (v6.16;
 > [monorepo#2262](https://github.com/intent-hq/monorepo/issues/2262)).** The
@@ -312,20 +400,57 @@ API gains root support; all other file APIs retain their existing scope.
 >    this workspace is not connected` when no name is known) — **never** a silent
 >    fallback to another client. The name is the client's last hello `name`, read from
 >    the persisted `client` row when the connection registry no longer knows it.
-> 3. **Claimed-tab host (v9.11).** Unpinned, but the workspace has at least one
+> 3. **Active desktop session (desktop control, §5.51;
+>    [intent-hq/intentd#2245](https://github.com/intent-hq/intentd/pull/2245)).** Unpinned,
+>    but the workspace has an **active** desktop-control session (`desktop:session-changed`
+>    `status: "active"`): the target is the client running that session; a pending permission
+>    request does not count. Offline ⇒ the same `… for this workspace is not connected`
+>    `-32603`, with no fallback to claimed tabs.
+> 4. **Claimed-tab host (v9.11).** Otherwise, when the workspace has at least one
 >    **claimed** registry tab (`ownerAgentId` set, §5.45): the target is the host client
->    of the oldest claimed tab — the workspace's agent tabs all live on one client. Offline
+>    of the oldest claimed tab — the workspace's agent tabs all live on one client. User
+>    tabs (no `ownerAgentId`) never select a host. Offline
 >    ⇒ the same `… for this workspace is not connected` `-32603`.
-> 4. **Default (v9.9).** Otherwise the **first-connected eligible** connection (registration
->    order; UDS + WSS share one registry); if it drops, the next eligible connection takes
->    over. No eligible connection at all ⇒ `-32603` `browser.exec: no client connected` —
->    the same class of failure a closed channel already produces.
+> 5. **Default (v9.9; recent focus,
+>    [intent-hq/intent#7855](https://github.com/intent-hq/intent/issues/7855)).** Otherwise,
+>    first the eligible client that **most recently focused the workspace**: a client whose
+>    connection names the workspace in its `presence.update` focus set (§5.47) now (the
+>    latest such update first), else the one whose focus left it most recently, via that
+>    client's **newest** eligible live connection. Focus history lives in daemon memory per
+>    connection and ends with it (at most 64 past workspaces per connection); a
+>    focused client with no eligible live connection is skipped, never an error. When no
+>    focused client is connected, the target is the client of the **oldest remaining eligible**
+>    registration (registration order; UDS + WSS share one registry), via that client's
+>    **newest** eligible live connection — the same per-client rule as the pin, so a stale
+>    older socket of the same app is skipped (intent-hq/intent#7902). Selection is re-run on
+>    every request: when that oldest registration drops, the client of the next-oldest
+>    eligible registration is chosen, even if the first client still has a newer connection. No eligible connection at all ⇒ `-32603`
+>    `browser.exec: no client connected` — the same class of failure a closed channel
+>    already produces. The virtual Chief workspace cannot be pinned and skips rules 2–4: it
+>    always resolves under this rule, whatever desktop session or claimed tabs it has, and
+>    skips its focus preference: the Chief always goes to the oldest eligible registration.
+>
+> Each rule is pinned by worked cases in
+> [`fixtures/browser-routing/routing.json`](../fixtures/browser-routing/routing.json); its
+> contract test checks every case against these rules, and intentd runs the same cases from
+> a copy of the file against its router (checked by `scripts/browser-routing-contract.mjs`, the
+> shared fixture-copy tool with `revision` provenance). Change a rule here and its cases together,
+> bumping the fixture's `revision`.
+>
+> A routed request the chosen connection does not answer in time is `-32603` `browser.exec:
+> reverse request timed out: browser.exec: browser client "<name>" (<clientId>) on connection
+> <n> over <uds|wss>, connected <ts> did not accept or answer the request within <s>s` (the
+> name is the client's hello `name`, escaped). Only a daemon-side deadline gets this suffix;
+> an error the client itself returns passes through unchanged. The text after the
+> `reverse request timed out: browser.exec` prefix is diagnostic only; do not parse it.
+> Agents check which connections a client holds, and where an unpinned and this workspace's
+> `browser.exec` would go right now, with the read-only `ws.browser.clients()` binding (§6.8).
 >
 > `workspace.getBrowserClient` (§5.1) runs the same resolution without dispatching
-> (`resolved: null` for the two offline outcomes). The virtual Chief workspace cannot be
-> pinned and always resolves under rule 4. Client-triggered `browser.exec` is
-> **unchanged**: it still reverse-dispatches on the caller's own connection, whatever
-> the workspace's pin says.
+> (`resolved: null` for the two offline outcomes; an unpinned workspace routed by the
+> desktop or claimed-tab rule also reports that client as `target: { clientId, via }`).
+> Client-triggered `browser.exec` is **unchanged**: it still reverse-dispatches on the
+> caller's own connection, whatever the workspace's pin says.
 >
 > **Registry-backed agent actions (v9.11).** Because the daemon owns the tab registry
 > (§5.45), two parts of an agent's batch are handled daemon-side before / after the
@@ -738,6 +863,148 @@ API gains root support; all other file APIs retain their existing scope.
 > `terminals[]` entry of the v4.0 envelope) with a `"Terminal"` fallback — see the
 > `terminal.list` row above.
 
+### Agent file pull
+
+`ws.file.pull({ fromAgentId, path, to? }) → { path, kind, size, sha256, files, skipped }`
+copies a file or folder from another agent's checkout into the caller's own. It is
+MCP-only (no wire method, like `ws.file.getAttachment`) and needs an agent caller.
+It replaces pushing artifacts to the backend: the source agent stages what it wants
+to share (logs, result bundles, screenshots) inside its checkout, and the other
+agent pulls it. Commits still flow through refs as before.
+
+- **`fromAgentId`** (required) is an agent of the caller's workspace, local or
+  remote. An unknown agent and an agent of another workspace fail the same way,
+  with `file-pull-unknown-agent: <id>`. The caller's own id copies within its own
+  checkout.
+- **`path`** (required) is relative to the source agent's checkout (the sandbox
+  clone for a CoW-sandboxed local agent; the shared checkout for a sub-agent that
+  shares its parent's). It names a regular file or a directory.
+- **`to`** (optional) is relative to the caller's checkout; it defaults to `path`.
+
+**Which sources serve.** A pull is served while the source's checkout exists: for
+a local source, any agent of the workspace whose worktree is still there,
+including a stopped or finished one; for a remote source, an agent on its
+machine's lease whose checkout is still there, so a stopped agent serves until its
+[final stop](../node-link.md#final-stop-nodeprotocol-9) removes the checkout.
+Otherwise the pull fails with `file-pull-source-unavailable`.
+
+**Confinement.** Both paths are resolved against their checkout and then
+canonicalised, so symlinks are followed. These fail with
+`file-pull-outside-checkout: <path>`, for the source and for the destination,
+before anything is read or written:
+
+1. an absolute path or a `..` segment;
+2. a path that resolves outside its checkout;
+3. a path with a component named `.git` at any depth, compared ASCII
+   case-insensitively (macOS volumes are case-insensitive), so no pull reads git
+   config or writes a git hook;
+4. a destination whose first component is `.intent` (same comparison), so no
+   pull replaces the ignore-all marker or writes into part files and attachments.
+
+Rules 3 and 4 apply both to the path as given and to the resolved path relative
+to its checkout, so a symlink such as `out` → `.intent` does not get around them.
+
+A symlink whose target stays inside the checkout, and not in `.git`, is allowed.
+A missing source, or one that is neither a regular file nor a directory, fails
+with `file-pull-not-found: <path>`. Copying a path onto itself, or a folder into
+itself, fails with `file-pull-destination-conflict`.
+
+**Snapshot.** At the first piece the source makes one snapshot outside its
+checkout and names it with a `transferId`, so later pieces read fixed bytes even
+if the checkout changes (a growing log copies as it was at the start):
+
+- **File.** A copy of the file. It is opened without following a final symlink
+  (a symlink is resolved and its target opened the same way), and the opened
+  file's real path is checked against the checkout again, so a swap between the
+  check and the open cannot read outside it.
+- **Folder.** One pax-format tar archive. It holds only regular files (type `0`),
+  directories (type `5`) and pax extended headers (type `x`, setting only `path`
+  and `size`), with entry paths relative to `path`. Modes are `0644`, or `0755`
+  when the source had any execute bit; never setuid, setgid or sticky. A symlink
+  that resolves inside the source checkout (not in `.git`) is followed and stored
+  as what it points to; `.git` entries, symlinks that resolve outside, and
+  anything else are left out and counted in `skipped`.
+
+Packing stops as soon as the archive passes 209715200 bytes (200 MiB) or 100000
+entries, and the pull fails with `file-pull-too-large`. A source keeps at most 4
+live snapshots per source agent; a fifth pull fails with `file-pull-busy`. A
+snapshot is removed after its last piece is served, when the source's checkout is
+removed, or after 2 minutes without a piece (well above the 60-second piece
+timeout, so a failed or abandoned pull frees its slot quickly); a later piece then
+fails with `file-pull-transfer-expired`. When a pull fails on the backend, the
+backend drops any snapshot it made itself for a local source at once.
+
+**Transfer.** The caller's side drives a loop of ranged reads, as
+`ws.file.getAttachment` does with `file.attachmentData`: pieces of at most 4 MiB
+(4194304 bytes) by `offset`/`length`, each starting where the copy so far ends.
+Every piece carries `kind`, the snapshot's `size` and its `transferId`; the piece
+at offset 0 also carries the lowercase-hex `sha256` of the whole snapshot.
+`transferId` is absent from a request exactly when `offset` is 0; any other
+combination fails with `file-pull-mismatch`. A
+`transferId` answers only the caller that opened it, for the same source agent
+and `path`; any other request naming it fails with `file-pull-transfer-expired`.
+An `offset` at or past `size` (other than 0 for an empty snapshot) fails with
+`file-pull-mismatch`. A piece not answered within 60 seconds fails the pull with
+`file-pull-source-unavailable`.
+
+**Write.** The caller writes the pieces to a part file with a unique name under
+its checkout's git-ignored `.intent/pulls/`, so it never reaches a commit and two
+pulls never collide. At the end it checks the size and `sha256`, then renames a
+file into place, or unpacks an archive (rejecting any entry type, name or mode the
+snapshot rules above do not allow, with `file-pull-mismatch`, and stopping with
+`file-pull-too-large` past 100000 entries) into a folder there
+and moves it into place. Every written entry is confined again: its resolved
+parent must be inside `to` and the checkout, and an existing parent that is a
+symlink fails with `file-pull-outside-checkout`. An existing symlink at an entry's
+destination is replaced as a link, never written through. A file replaces an
+existing file at `to`; a folder is merged into an existing folder at `to`,
+replacing same-named files and keeping the rest. A file onto an existing folder,
+or a folder onto an existing file, fails with `file-pull-destination-conflict`.
+Missing parent directories of `to` are made; a failed pull removes its part file
+and the directories it made, and leaves `to` as it was.
+
+The route depends on where the two agents run:
+
+| Source → caller | Bytes |
+| --- | --- |
+| Local → local | The backend runs the loop itself, against its own worktrees |
+| Remote → local | The backend reads the source's machine with [`checkoutRead`](../node-link.md#checkout-files-nodeprotocol-16) and writes the caller's checkout |
+| Local → remote | The caller's machine asks the backend with the internal [`file.pullData`](../workspace-routing.md#remote-agents-on-the-executor-link) frame; the backend reads its own worktree |
+| Remote → remote | `file.pullData` from the caller's machine, relayed piece by piece to the source's machine with `checkoutRead`; the backend writes nothing to disk |
+
+A source on a paused cloud (E2B) machine is resumed for the pull.
+
+**Cap.** One pull copies at most 209715200 bytes (200 MiB) of snapshot (the file,
+or the folder's archive) and at most 100000 entries. The source enforces it while
+it makes the snapshot, and the caller checks the first piece's `size` before it
+writes anything. Past it the pull fails with `file-pull-too-large`, naming the
+size and the limit, and copies nothing. The same 200 MiB cap applies to
+`ws.file.getAttachment` (§5.9 above).
+
+**Result.** `path` is the destination relative to the caller's checkout, `kind`
+is `"file"` or `"directory"`, `size` and `sha256` are the snapshot's, `files` is
+the number of regular files written (1 for a file), and `skipped` is the number of
+folder entries left out (0 for a file), which the source reports in the first
+piece. Pulled files are neither committed nor
+git-ignored: the caller decides what to do with them.
+
+**Errors.** Every error is `-32602`, and its message starts with a code, so
+agents can branch on it:
+
+| Code | Meaning |
+| --- | --- |
+| `file-pull-unknown-agent` | No agent with that id in the caller's workspace |
+| `file-pull-outside-checkout` | A source or destination path escapes its checkout or names `.git`, or the destination is in `.intent/` |
+| `file-pull-not-found` | Nothing at the source path, or neither a regular file nor a directory |
+| `file-pull-too-large` | Over 209715200 bytes or 100000 entries; the message names the size and the limit |
+| `file-pull-busy` | The source agent already has 4 live snapshots; retry later |
+| `file-pull-mismatch` | The copy's size or `sha256` differs, a piece did not start where the copy ended, an offset was past the end, `transferId` did not match `offset`, or an archive entry was not allowed |
+| `file-pull-destination-conflict` | A file onto a folder, a folder onto a file, or a path onto itself |
+| `file-pull-transfer-expired` | No live snapshot with that `transferId` for this caller, source and path; retry the pull |
+| `file-pull-source-unavailable` | The source's checkout is gone, or its machine is offline, did not resume, or did not answer within 60 s; retry later |
+| `file-pull-unsupported` | The source's machine runs a link protocol below 16; the message names the machine to update |
+| `remote-agent-unsupported` | A remote caller on a machine or backend too old for `ws.file.pull` |
+
 ### 5.13 Interactive `terminal.*`
 
 > Alongside the read-only methods (`terminal.list` — the v4.0 `{ terminals, daemonBootId }`
@@ -756,7 +1023,7 @@ API gains root support; all other file APIs retain their existing scope.
 | terminal.write | terminalId (req), data (req, base64), workspaceId? | { ok: true } — `data` is base64-encoded input bytes |
 | terminal.resize | terminalId (req), cols (req,int), rows (req,int), workspaceId? | { ok: true } |
 | terminal.kill | terminalId (req), workspaceId? | { ok: true } — signals the PTY; emits `terminal:exit` (§6.5) |
-| terminal.getBuffer | terminalId (req), maxBytes?, workspaceId? | { terminalId, data, daemonBootId, startOffset, endOffset } — base64 scrollback and atomic byte range for replay |
+| terminal.getBuffer | terminalId (req), maxBytes?, workspaceId? | { terminalId, data, daemonBootId, startOffset, endOffset } — base64 scrollback and atomic byte range for replay; at most the newest 359,424 bytes (351 KiB, the **serve window**; base64 479,232 bytes), so the reply fits the 480,000-byte page budget |
 
 **Base64 framing.** Terminal payloads are **binary-safe**: input (`terminal.write` `data`),
 scrollback (`terminal.getBuffer` `data`), and streamed output (`terminal:data` `chunk`, §6.5)
@@ -788,8 +1055,10 @@ This contract does not imply that existing clients already use cursors.
   bytes' actual range, which need not start at zero.
 - Scrollback is bounded. Eviction never resets the counter; snapshot `startOffset`
   identifies the oldest returned byte. `maxBytes` selects a trailing byte window
-  without changing `endOffset`; omitted or legacy negative bounds return all
-  retained bytes. Zero returns an empty range at the current end. An empty stream
+  without changing `endOffset`. Omitted, legacy negative or larger bounds return
+  the newest 359,424 bytes (351 KiB, the serve window) of retained output; output
+  older than the serve window counts as no longer retained for replay and recovery.
+  Zero returns an empty range at the current end. An empty stream
   returns `startOffset = endOffset = "0"`. Snapshot boundaries may split UTF-8 or
   escape sequences, so clients must preserve binary framing.
 
@@ -807,7 +1076,7 @@ suffix. For **both** queued and subsequently arriving events:
    Identical byte sequences at different positions are distinct output.
 3. A range with `startOffset > next` reveals a gap. Before continuing, request
    `terminal.getBuffer` **without `maxBytes`**, so recovery includes all retained
-   output. A capped snapshot alone cannot prove eviction: its requested window
+   output within the serve window. A capped snapshot alone cannot prove eviction: its requested window
    may exclude bytes still available in the ring. Apply the uncapped snapshot's
    unseen suffix using step 2. Only when this uncapped snapshot also starts beyond
    `next` is that prefix no longer retained. Indicate truncation and reset the
@@ -853,7 +1122,10 @@ registry is the shared source of truth every client renders from: a host reports
 tabs, any client reads the workspace's tabs across hosts, and navigation / close requests
 about a tab are **routed** by the daemon to the client that must perform them. All six
 methods are **fast-path** (§5 catalog): the host-only reports are keyed by the
-connection's `client.hello` identity, never by a wire parameter.
+connection's `client.hello` identity, never by a wire parameter. A host row can also move without
+a report: `workspace.setBrowserClient` migrates claimed tabs, and `client.hello` rehomes open
+tabs still hosted by a superseded id of the same device (§5.17) — both emit
+`browser:tab-updated { changes: { hostClientId } }`.
 
 | Method | Params | Result |
 | --- | --- | --- |
@@ -936,11 +1208,17 @@ successful `claimTab` re-homes the row to the workspace's **driving client** (§
 REV-2 rule order; `browser:tab-updated { changes: { hostClientId, ownerAgentId } }`), and
 `workspace.setBrowserClient` (§5.1) moves **every claimed tab** of the workspace to the
 new pin (`changes: { hostClientId }` per moved tab; clearing the pin moves nothing).
-Either re-home also **clears the moved tab's `displayed`** (the previous host's layout
+Independently of the driving client, a successful `client.hello` moves the **open** tabs —
+claimed **and** unclaimed — still hosted by a superseded id of the same device (a shorter
+`:`-suffix of the presented `clientId` the caller may act as, with no live connection;
+§5.17) to the presented id, one `browser:tab-updated { changes: { hostClientId } }` per
+moved tab ([intent-hq/intent#8045](https://github.com/intent-hq/intent/issues/8045)).
+Every re-home also **clears the moved tab's `displayed`** (the previous host's layout
 fact is no longer vouched for): the same `browser:tab-updated` carries `changes: {
 displayed: null }` when it was set, and the row reads with `displayed` absent until the
 new host reports it via `browser.upsertTab` / `browser.syncTabs`.
-Unclaimed (user) tabs never move. A host that receives a `browser:tab-updated` naming
+Apart from that superseded-id rehome, unclaimed (user) tabs never move: a driving-client
+switch leaves them on their physical host. A host that receives a `browser:tab-updated` naming
 another `hostClientId` for one of its tabs stops treating that tab as its own; the new
 host materialises it from the canonical row.
 

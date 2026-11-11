@@ -52,8 +52,8 @@ function assertRow(row) {
   assertCompact(row);
 }
 
-test('prepared methods, capability and event inventory match canonical documents', () => {
-  assert.equal(fixture.status, 'prepared-not-executed');
+test('methods, capability and event inventory match canonical documents', () => {
+  assert.equal(fixture.status, 'historical-static-examples');
   assert.deepEqual(fixture.capability, { scriptMonitors: 1 });
   for (const method of ['list', 'cancel', 'cancelRun']) assert.ok(doc.includes(`| scriptMonitor.${method} |`));
   assert.match(catalog, /\| scriptMonitor \| 4 \| cancel, cancelRun, get, list/);

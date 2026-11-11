@@ -31,8 +31,8 @@
 
 set -euo pipefail
 
-always_on_jobs="runner-route docs-check event-catalog-check shell-lint workflow-lint repo-hygiene ruleset-check triage-parser-test consumer-checks-prepare ci-policy"
-queue_only_jobs="bridge-test python-tests shell-tests shell-tests-bash3 bootstrap-install"
+always_on_jobs="runner-route docs-check event-catalog-check shell-lint workflow-lint repo-hygiene ruleset-check triage-parser-test consumer-checks-prepare ci-policy python-tests"
+queue_only_jobs="bridge-test shell-tests shell-tests-bash3 bootstrap-install"
 pull_request_only_jobs="pr-title breaking-token submodule-pins"
 path_selected_jobs="consumer-checks-exercise"
 

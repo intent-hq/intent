@@ -110,7 +110,7 @@ bus — never on the transport or on each other directly.
 | intent-acp | spawn providers over stdio, handshake, session new/load/prompt/cancel, streaming, client-served fs/terminal/permission, agent→BE MCP server | core, providers, pty, js; calls back into services via a trait |
 | intent-providers | ProviderConfig registry, arg/env builder, capability/quirks (no static model catalogs — model discovery is dynamic via `models.list`, and no provider carries a default designation) | core |
 | intent-sourcecontrol | SourceControl trait + GitHubSourceControl (octocrab): PR/issue/review/check-run/mergeability, retry | core |
-| intent-git | status/stage/commit/branches, worktree create + lock, CoW reflink probe/clone (macOS `clonefile(2)` whole-tree fast path with best-effort walk fallback, Linux `ioctl(FICLONE)`) for CoW workspace checkouts and per-agent sandboxes, hidden repo cache (`repo_cache`) of read-only GitHub clones backing cache-hydrated workspace creation | core |
+| intent-git | status/stage/commit/branches, worktree create + lock, CoW reflink probe/clone (macOS `clonefile(2)` whole-tree fast path with best-effort walk fallback, Linux `ioctl(FICLONE)`) for cache-hydrated CoW workspace checkouts, hidden repo cache (`repo_cache`) of read-only GitHub clones backing cache-hydrated workspace creation | core |
 | intent-context | ContextEngine trait + AuggieContextEngine + discovery | core |
 | intent-pty | unified portable-pty host for terminals **and** scripts: scrollback ring buffers (script output is also copied by an output sink to per-run logs under `<data_dir>/script-output/`, which `script.output` reads, so it survives restart and archive), multi-client attach, service/command modes, auto-restart, URL/port detection | core |
 | intent-search | BE-owned `search.*`: ripgrep-equivalent content search (grep + ignore + globset), path/glob search, adapters over persisted sessions/events/memories/notes/codebase; per-request cancellation | core, store |
@@ -125,7 +125,8 @@ The [node contract](protocol/methods/nodes.md), [private node link](protocol/nod
 and [checkpoint format](protocol/node-checkpoints.md) define the approved target;
 they are **not implemented at the current pins**. Phase 1 includes static remote
 nodes, the in-process local node, hub durability/recovery and full per-agent CoW
-retirement. Current sandbox behavior is recorded separately below until removal.
+retirement. Per-agent CoW retirement does not wait for the local node. Current
+sandbox behavior is recorded separately below until removal.
 
 Head owns durable orchestration: SQLite, transcripts, permissions, placement,
 leases, prompts, hub refs, notes/tasks, event delivery and explicit publication.
@@ -213,53 +214,33 @@ head filesystem paths. Cloud adapters, images, Windows qualification, local Mac
 microVMs, freeze/fork, automatic sitter upgrades and credential administration
 are outside phase 1.
 
-Retirement order is additive docs → backend node/hub support and local parity →
-replacement frontend → backend per-agent CoW deletion → canonical catalog cleanup
-after automatic pins. Each merge requires human authorization. Keep workspace
+Retirement order is additive docs → backend per-agent CoW deletion and frontend
+cleanup → canonical catalog cleanup after automatic pins. Backend node/hub support,
+local parity and the replacement frontend follow independently; until the local
+node ships, agents that are not placed remotely share the workspace checkout.
+Each merge requires human authorization. Keep workspace
 `checkoutMode: cow`, reflink primitives and repo-cache coverage throughout. Remove
-per-agent isolation selection and merge/discard routes without aliases or live
-sandbox migration; old sandbox files remain untouched for explicit recovery.
+per-agent isolation selection and merge/discard routes without aliases. No live
+sandboxes exist, so the removal drops the sandbox store rows and session sandbox
+fields without a recovery path and never touches files on disk.
 
-## Workspace checkouts & agent sandboxes (CoW)
+## Workspace checkouts (CoW)
 
-This section describes **current pinned behavior**. The per-agent sandbox portion
-is retired only after the replacement gates above; workspace CoW checkout creation
-is retained. In particular, the legacy shared fallback below is not allowed for
-future explicit isolated node placement.
+This section describes **current pinned behavior**. Per-agent sandboxes were
+removed in protocol 16. Protocol 17 retired the `workspace.cowIsolation` setting,
+`workspace.duplicate` and the `cowSupported` capability, so copy-on-write is used only
+to hydrate checkouts from the repo cache.
 
-Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
-(sandboxes). Architectural split of responsibilities:
+Wire contract: PROTOCOL.md §5.1 (`checkoutMode`). Architectural split of responsibilities:
 
-- **Provisioning (`workspace.create`).** `intent-services`
-  owns the decision matrix — `workspace.cowIsolation` off ⇒ linked worktree
-  (`intent_git::worktree::provision_worktree`); on ⇒ CoW reflink probe from the
-  repository directory into the workspace dir (`intent_git::cow_probe(&repo_dir,
-  &ws_dir)`), then a standalone clone of the whole repository directory
-  (`intent_git::cow_checkout::provision_cow_checkout`). When the probe reports
-  Unsupported (or errors) — e.g. the repository lives on a different volume than
-  the workspaces root, since reflinks cannot cross filesystems — provisioning
-  logs a warning and falls back to the linked-worktree path (the setting is a
-  preference, not a guarantee; the separate root→root probe backing the
-  `cowSupported` aggregate is advisory only). Both paths run under the
-  per-repository worktree lock. The setting is consulted **only** at
-  provisioning time; the persisted `checkoutMode` is immutable per workspace.
-- **Duplication (`workspace.duplicate`).** Applies that matrix only for
-  shared-checkout (worktree-mode) sources. A **standalone** source — the source's
-  own `checkoutMode` is `cow` or `direct` — always duplicates as a standalone
-  checkout, cloned from the source's own checkout rather than from its
-  `repositoryPath`: CoW probe ⇒ `cow` clone, Unsupported/probe error ⇒ a plain
-  local clone of the source checkout persisted as `direct`
-  (`intent_git::cow_checkout::provision_local_clone_checkout`, which carries
-  committed state only and resolves `origin` so no relative or self-referencing
-  URL survives into the duplicate — the CoW path copies `.git/config` verbatim
-  instead). `workspace.cowIsolation` is **ignored** for such sources
-  (parity with cache-hydrated create), and the duplicate persists
-  `repository_path` = its **own** checkout so it is fully self-contained. A linked
-  worktree rooted in a sibling workspace's checkout is never provisioned: the
-  source's deletion detaches that directory and would orphan the duplicate, and
-  deleting the duplicate would mutate the source (intent-hq/monorepo#1560). If
-  provisioning fails, the inherited `repository_path` is cleared for standalone
-  sources so no checkout-less row references the source's directory.
+- **Provisioning (`workspace.create`).** `intent-services` provisions a create from a
+  local repository as a linked worktree (`intent_git::worktree::provision_worktree`)
+  under the per-repository worktree lock. A create that arrives with a `githubUrl` and
+  no `clonePath` hydrates a standalone checkout from the repo cache instead (below):
+  a CoW reflink probe from the cache into the workspace dir (`intent_git::cow_probe`)
+  picks a CoW clone (`cow`) or a plain local clone (`direct`). The persisted
+  `checkoutMode` is immutable per workspace; rows created as `cow` copies of a local
+  repository before protocol 17 keep working.
 - **Unified provisioning progress.** `intent-services::create_progress` owns the
   per-create progress reporter armed by a `workspace.create { progressId }` (PROTOCOL
   §5.1/§6.5): it echoes the client-minted id on every `git:clone:progress`/`git:clone:done`
@@ -306,15 +287,6 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   env-backed credential helper, never argv; the helper config propagates to submodule
   child fetches during cache clone/refresh via `GIT_CONFIG_PARAMETERS`, the token only
   via the inherited env var.
-- **Capability surface.** The root→root probe is cached per workspaces root by the
-  shared aggregate cache (`workspace_aggregates`) and delivered two ways: as the
-  `Workspace.cowSupported` enrichment on the `workspace.list`/`workspace.get` read
-  paths (PROTOCOL §5.1), and workspace-independently via the `system.capabilities`
-  router method (protocol 2.3) — `{ cowSupported?: boolean }`, present when the
-  probe ran, omitted otherwise. The FE gates the `workspace.cowIsolation` settings
-  toggle on the capability RPC, so the toggle works with no workspace loaded;
-  workspace payload consumers (e.g. isolation-mode resolution) still read the
-  per-workspace aggregate.
 - **Deletion.** `workspace.delete` first closes data-producer admission for the
   target workspace, waits for already admitted operations, and stops its runtime
   writers. Store cleanup removes one session at a time and sweeps histories and
@@ -339,29 +311,10 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   layout — is never renamed or removed; deletion removes only the workspace
   row. The recursive removal of the trash directory runs in the background
   outside the lock in both modes.
-- **Agent sandboxes.** `services::sandbox_ops` provisions a per-agent CoW clone,
-  resolving the **sandbox source** from the workspace's checkout mode: shared-checkout
-  workspaces (no `checkoutMode`) clone from the user's repository folder; `cow` and
-  `direct` checkouts clone from the **workspace checkout** (a `direct` workspace with no
-  provisioned checkout — an `isNewRepo` initialization — falls back to its repository
-  folder) — and the merge-back on agent completion targets
-  that same directory (agent commits land in the workspace's own checkout, never the
-  user's repo folder). Worktree-mode workspaces are ineligible (agents share the
-  checkout). **Provisioning is asynchronous** relative to `agent.delegate`
-  (PROTOCOL §5.5): the delegate path registers a per-agent settlement gate
-  (`Services::begin_sandbox_provisioning`), spawns the clone in a background task,
-  and returns `effectiveIsolation: "pending"` immediately — a large clone can take
-  tens of seconds, which previously starved the `workspace_api` MCP budget. The
-  background half settles the outcome onto the child's session (sandbox fields +
-  `sandbox:cow:created` event) and releases the gate via a drop guard, so it settles
-  even on panic. The child's turn worker awaits the gate
-  (`await_sandbox_provisioning`) **before its first ACP spawn**, so the child never
-  spawns against a half-copied sandbox. Fallback semantics are unchanged: on
-  reflink-unsupported filesystems or provisioning failure the child runs in shared
-  mode (log-only; no sandbox fields, no event). A delete race is discarded: when
-  `agent.delete` races the clone, `settle_provisioned_sandbox` finds the session
-  missing/soft-deleted and removes the sandbox directory (best-effort deleting the
-  store record too) instead of persisting fields or emitting the event.
+- **Agent sandboxes (removed in protocol 16).** Per-agent CoW sandboxes,
+  their merge-back and the `sandbox.cow.*` routes were removed; every agent that is
+  not placed on a remote machine works in the workspace checkout. Store migration
+  `0187` dropped the `sandbox` table and the session sandbox columns.
 
 ## Agent default-model resolution (daemon-owned)
 
@@ -1307,13 +1260,11 @@ prefer the highest rung that fits:
    never hydrates or decodes transcript bodies (#958).
 2. **Cached with invalidation.** Compute off the hot path and serve from a
    shared cache with explicit invalidation or a TTL. Embodiments: the
-   `workspace_aggregates` cache (`intent-services/src/workspace_aggregates.rs`
-   — lifetime-cached CoW probe, single-flight, per-call budget), the
    `agent.list` projection cache (`agent_list_cache.rs` — event-driven
    invalidation on transcript writes, epoch-guarded against stale in-flight
    loads), and the disk-usage cache (`disk_usage.rs` — ~60 s TTL,
    stale-while-revalidate: an expired entry is served immediately while a
-   single-flight background walk refreshes it).
+   single-flight background walk, guarded by `single_flight.rs`, refreshes it).
 3. **On-demand RPC.** If a field cannot be made cheap, it does not belong on
    a list payload: give it its own method the client calls when it actually
    needs the value. Embodiment: `diffSummary` was removed from workspace
@@ -1324,8 +1275,8 @@ Two corollaries:
 
 - **Degrade by omission, never by blocking.** When a cached aggregate is
   cold or over budget, the read omits the optional field and lets a detached
-  task backfill the cache for the next poll (`cowSupported`'s 1.5 s budget,
-  disk usage's first-poll omission) — a hot RPC never waits out a probe or a
+  task backfill the cache for the next poll (disk usage's
+  first-poll omission) — a hot RPC never waits out a probe or a
   filesystem walk.
 - **Window before materializing.** Pagination selects and decodes only the
   requested page inside SQLite (`get_agent_messages_page`; the preview

@@ -77,8 +77,10 @@ so `execute` rejects `action:"export"`. A step that fails sets `success:false` a
   stats: { additions, deletions, binary? },
   attribution: { agent?: { agentId, agentName, sessionId, turnNumber, messageId?, toolCallId?,
   timestamp }, manual?, timestamp } }`.
-- **Review** — `{ author, verdict: "approve"|"request-changes"|"comment", body?, submittedAt }`
-  (host-agnostic; GitHub's `APPROVED`/`CHANGES_REQUESTED`/`COMMENTED` map onto `verdict`).
+- **Review** — `{ author, verdict: "approve"|"request-changes"|"comment", body?, submittedAt, id?, commitSha? }`
+  (host-agnostic; GitHub's `APPROVED`/`CHANGES_REQUESTED`/`COMMENTED` map onto `verdict`; additive,
+  omitted when unreported: `id` is the forge's review id, `commitSha` the commit the review was
+  submitted against — GitLab approvals carry neither).
 - **CheckRun** — `{ name, state: "pending"|"success"|"failure"|"neutral"|"cancelled", url? }`.
 - **Metrics** — line-change totals: `{ additions, deletions, filesChanged, byAgent }` (workspace-level
   stats include `byAgent`; per-agent stats may omit `byAgent`; see §5.20).
@@ -93,11 +95,11 @@ so `execute` rejects `action:"export"`. A step that fails sets `success:false` a
 | accept-changes.reconcile | workspaceId, operationId, root | Original pending/settled native-review attempt, subject to current disclosure checks |
 | accept-changes.release | workspaceId, operationId, root | {released: true}; retires admission without erasing a committed effect |
 
-**Prepared additive contract.** Detect support through the original
+**Additive contract.** Detect support through the original
 connection's [`nativeReview: 1` capability](client-hello.md#native-review-capability).
 The capability does not establish a configured provider connection. Admission is conditional
-on current original ownership and provider configuration. Prepared facts and the
-capability alone are not permission to execute.
+on current original ownership and provider configuration. Facts returned by
+preparation and the capability alone are not permission to execute.
 
 The **presence** of `review` selects the qualified branch of the existing
 `accept-changes.prepare` and `accept-changes.execute` operations. Omitting it keeps
@@ -307,7 +309,7 @@ to preserve receipts without treating a stale handle as new authority.
 
 #### Commit companion preparation
 
-**Prepared additive contract.** This adds an opt-in, separately confirmed
+**Additive contract.** This adds an opt-in, separately confirmed
 create after a staged-only commit. It requires the original physical
 connection's [`nativeReviewCompanion: 1` capability](client-hello.md#commit-companion-capability)
 alongside `nativeReview: 1`. This extends the existing qualified operations;

@@ -17,37 +17,29 @@ The 10.11 [script lifecycle candidate (§5.8)](./methods/scripts.md#saved-script
 implements archive/restore ahead of the monorepo pin; `scriptLifecycle: 1`
 advertises complete support, not catalog presence or a numeric version alone.
 
-The prepared [command creation default change (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)
+The [command creation default change (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
 changes omitted purpose for new commands to `oneOff`, retaining stored upsert and
-legacy hydration defaults. It changes no catalog names or counts and makes no
-shipped-version claim; `scriptLifecycle: 1` alone does not distinguish defaults.
+legacy hydration defaults. It changes no catalog names or counts;
+`scriptLifecycle: 1` alone does not distinguish defaults.
 
-The prepared [worker observation contract (§5.5b)](./methods/agent-workers.md)
+The [worker observation contract (§5.5b)](./methods/agent-workers.md)
 adds a list, a subscription and a provider-mediated stop; `agentWorkers: 1` gates support.
 
-The prepared [note paging core (§5.2)](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
-defines bounded read-only views; `notePagingRead: 1` gates support.
-Source and annotation pages extend existing methods, not new event names.
-
-The prepared [compact script list contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
+The [compact script list contract](./methods/scripts.md#active-only-compact-lists-protocol-14-breaking-contract)
 adds `script.get` and `scriptMonitor.get`, plus optional bounded summary views on
 the existing lists under `scriptActiveLists: 1` / `scriptMonitors: 2`. Protocol 14 removes archived list selection and terminal monitor history; full event payloads remain unchanged.
 
-The prepared [cancellable note deletion contract](./note-delete-grace.md) adds
-three router methods and one operation event under `noteDeleteGrace: 1`.
-Immediate deletion and read-only paging capabilities remain unchanged.
-
-The prepared [desktop control contract (§5.51)](./methods/desktop.md) adds four
+The [desktop control contract (§5.51)](./methods/desktop.md) adds four
 user/executor router methods and one daemon-only reverse RPC. Agent lifecycle
 and actions are MCP-only; `desktopControl: 1` gates support independently at both ends.
 
-The prepared [GitLab checkout contract (§5.53)](./methods/repository-checkout.md)
+The [GitLab checkout contract (§5.53)](./methods/repository-checkout.md)
 adds six original pre-workspace router methods, plus the independently gated
 `sourceControl.checkout.repoConfig` read (`gitlabCheckoutRepoConfig: 1`). `gitlabCheckout: 1` gates the complete
 contract on the selected destination; it does not confer host or project access.
 
-The prepared [PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup)
-adds one read-only router method, `workspace.findByPullRequest`, ahead of the pin.
+The [PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup)
+adds one read-only router method, `workspace.findByPullRequest`.
 `prWorkspaceLookup: 1` gates support.
 
 The [retired workspace state](./methods/workspace.md#retired-workspaces) (protocol 15.2)
@@ -62,13 +54,13 @@ The prepared [startup readiness contract](./startup-readiness.md) adds owner-onl
 `system.startupStatus` and a restricted pre-Store bootstrap dispatcher. Ordinary
 hello does not succeed until ready; `startupStatus: 1` gates the full contract.
 
-The prepared [generic stream recovery contract](./event-stream-recovery.md) adds
+The [generic stream recovery contract](./event-stream-recovery.md) adds
 one fast-path method, `events.fence`, under `eventStreamRecovery: 1`. Its bulk-lane
 response brackets recovery reads with actual event-delivery boundaries.
 
-The prepared [workspace discussion contract (§5.55)](./methods/multiplayer.md#555-workspace-discussions)
-adds five workspace-scoped router methods for a default conversation and private
-direct/group discussions with selected workspace members, gated by exactly integer
+The [workspace discussion contract (§5.55)](./methods/multiplayer.md#555-workspace-discussions)
+adds workspace-scoped router methods for conversation discovery, history and
+message actions, gated by exactly integer
 `discussionConversations: 1`. Replies and reactions additionally require
 `discussionMessageActions: 1`; expanded choices, bounded reactor snapshots, and
 granted agent reactions additionally require exact `discussionReactions: 1`.
@@ -76,65 +68,95 @@ granted agent reactions additionally require exact `discussionReactions: 1`.
 creating a message or advancing its sequence.
 Explicit agent recipients and bound agent replies additionally require
 `discussionAgentMessaging: 1`. The initial extension applies to the default
-workspace-wide conversation; agent history access starts only after an explicit
+workspace-wide conversation; `discussionManagement: 1` extends it to named
+workspace-wide conversations. Agent history access starts only after an explicit
 addressed message, and no automatic discussion subscription is created.
+`discussionManagement: 1` also gates first-send workspace-wide creation,
+Owner/Manager `discussion.rename`, Owner-only `discussion.delete` (including
+default), and lifecycle events. Legacy private histories remain read-only and
+participant-restricted; no new direct/group creation is permitted.
 Its transient typing indicators extend existing presence parameters and human
 roster rows without adding another method or event type (§5.47).
 Older daemons reject these methods with `-32601`; no agent chat fallback is allowed.
 
-The prepared [workspace guest role contract](./methods/multiplayer.md#workspace-guest-roles-prepared)
+The [workspace guest role contract](./methods/multiplayer.md#workspace-guest-roles)
 adds one owner-authorized router method, `workspace.members.setRole`, under exact
 `workspaceGuestRoles: 1`. The `manager` role grants scoped agent and saved-script
 controls while preserving the existing Participant default and full-management boundary.
 
-The prepared [protocol 15.1 scoped resource reads](./methods/repository-resources.md#prepared-project-pages-and-discussions)
+The [protocol 15.1 scoped resource reads](./methods/repository-resources.md#project-pages-and-discussions)
 add six router methods and one socket-private invalidation notification. The
-[owner-only child Git policy](./methods/settings.md#prepared-gitlab-child-git-credential-policy)
+[owner-only child Git policy](./methods/settings.md#gitlab-child-git-credential-policy)
 adds two router methods. Require `repositoryResourcePages: 1` and
 `gitlabChildGitPolicy: 1` for their respective contracts; legacy detail reads
 retain `repositoryResourceRead: 1`. Neither capability grants authority or
 implies a carrying release.
 
-The documented surface reserves **474 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The [daemon-to-daemon remote machines contract (§5.50)](./methods/nodes.md#daemon-to-daemon-remote-machines)
+adds eight owner-only router methods: `executor.*` on the machine that runs
+remote agents, `remoteMachines.*` on the backend. `remoteMachines: 1` gates the
+backend side. The experimental [machine model lookup](./methods/nodes.md#machine-model-lookup)
+adds a ninth, `remoteMachines.models`, gated by `remoteMachineModels: 1`; catalog presence does not imply `agentNodes`.
+[Node invites](./methods/nodes.md#node-invites-and-claim) add two more:
+`executor.invite.create` on the machine and `remoteMachines.claim` on the
+backend, gated by `remoteMachineClaim: 1`.
+[Link traffic capture](./methods/nodes.md#link-traffic-capture) adds three
+owner-only router methods, `remoteLinkTraffic.*`, gated by
+`remoteLinkTraffic: 1`.
+[Cloud machines](./methods/nodes.md#cloud-machines-e2b) add five router
+methods, `cloudMachines.*`, gated by `cloudMachines: 1`: `configure` and
+`remove` are owner-only; `list` is also open to shared-host members, and
+`pause` and `kill` to the member who started the sandbox.
 
-- **Router methods:** 416 methods dispatched via the main router (`router::dispatch`)
+The [secret request contract (§5.56)](./methods/secrets.md) adds four
+workspace router methods for answering, dismissing, listing and forgetting
+agent-requested secrets. Requests are MCP-only; `secretRequests: 1` gates support.
+
+The [Agent Plugins contract (§5.57)](./methods/plugins.md) adds five
+administrator-only router methods that install, update, remove, enable and list
+app-wide plugins; `agentPlugins: 1` gates support.
+
+The documented surface reserves **501 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+
+- **Router methods:** 443 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 58 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 0; use canonical Git read names
 
 Additionally, the protocol includes:
 
-- **Server→client notifications:** 7 notifications: prepared `events.lost` ([loss contract](./event-stream-recovery.md)), `events.event` (§6.3) and the socket-private `workspace.repositoryContext.retired`, `workspace.repositorySelection.retired`, `accept-changes.retired`, `sourceControl.read.retired`, `sourceControl.read.invalidated` controls (§6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 474 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Server→client notifications:** 7 notifications: `events.lost` ([loss contract](./event-stream-recovery.md)), `events.event` (§6.3) and the socket-private `workspace.repositoryContext.retired`, `workspace.repositorySelection.retired`, `accept-changes.retired`, `sourceControl.read.retired`, `sourceControl.read.invalidated` controls (§6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
+- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 501 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 474 dispatchable names + 7 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 501 dispatchable names + 7 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.55) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.57) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
-**Prepared GitLab repository additions:** the [repository context and selection
+**GitLab repository additions:** the [repository context and selection
 contracts](methods/workspace.md#repository-context), [native review and commit
 companion](methods/change-tracking.md#native-review-preparation-and-receipts),
 and [explicit resource reads](methods/repository-resources.md) add thirteen router
 methods and four socket-private control notifications. Their individual hello
 capabilities gate support; catalog entries do not grant permission or establish
-which desktop release contains the feature. The methods below lead the component
-pin, while all existing methods and prepared extensions remain present.
+which desktop release contains the feature. All existing methods remain present.
 
-### Router methods by namespace (416 total)
+### Router methods by namespace (443 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
 | accept-changes | 7 | addRemote, execute, getStatus, mergePR, prepare, reconcile, release — the "accept the agent's work" pipeline (§5.18; `workspaceId` req) |
 | agent | 52 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getCreationPreferences, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listActive, listInterrupted, listUserMessages, markSeen, memoryUsage, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, resolveProposal, respondPermission, restore, retire, retry, sendMessage, sendQueuedMessageNow, sendQueuedMessagesNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate, workers.list, workers.stop |
 | client | 1 | list — live hello'd connections grouped by logical `clientId` (§5.17; v9.9, daemon-global result; optional routing-only `workspaceId`). The handshake itself (`client.hello`) is a fast-path method, below |
+| cloudMachines | 5 | configure, kill, list, pause, remove — E2B cloud machines (§5.50) from named entries, daemon-global; configure/remove owner-only, list owner and members, pause/kill owner or starter |
 | comment | 6 | add, delete, getThread, list, resolveThread, respond |
 | crossWorkspace | 3 | listNotes, listSiblings, readNote |
 | debug | 1 | sampleStacks — point-in-time sample of the daemon's own thread stacks rendered as a text report (§5.43; v6.3, daemon-global — no `workspaceId`) |
-| desktop | 4 | getState, respondPermission, revoke, setPermission — prepared desktop control (§5.51); user/executor only |
-| discussion | 7 | conversations, list, react, recipients, retryAgent, send, stopAgent — workspace-wide and participant-restricted discussions (§5.55); authenticated humans, plus explicitly addressed agents in the default discussion under `discussionAgentMessaging: 1` |
+| desktop | 4 | getState, respondPermission, revoke, setPermission — desktop control (§5.51); user/executor only |
+| discussion | 9 | conversations, delete, list, react, recipients, rename, retryAgent, send, stopAgent — workspace-wide discussions and participant-restricted legacy histories (§5.55); authenticated humans, plus explicitly addressed agents in the default discussion under `discussionAgentMessaging: 1` |
 | event | 3 | agentActivity, query, workspaceSummary |
+| executor | 4 | invite.create, list, mint, revoke — daemon-to-daemon executor credentials and node invites (§5.50), owner-only, daemon-global |
 | file | 16 | attachmentUpload.abort, attachmentUpload.begin, attachmentUpload.chunk, attachmentUpload.commit, delete, exists, getAttachmentInfo, list, mkdir, placeAttachment, read, readChunk, rename, stat, tree, write |
 | file-tracking | 5 | getAgentLocks, getChanges, loadCommits, stage, unstage — the per-file audit-trail reads with agent attribution (§5.19; `workspaceId` req). The attribution writer `trackChange` is internal (no wire method), per the §6.8 principle |
-| git | 27 | agentCommit, branchDiff, branchStatus, changes, checkMergeConflicts, checkoutBranch, clone, commitDetails, commits, createBranch, diffs, discard, fetch, getBranches, getConfig, getRemoteUrl, numstat, pull, push, removeLockFile, renameBranch, showFile, stage, stageHunk, status, unstage, unstageHunk |
+| git | 28 | agentCommit, branchDiff, branchStatus, changes, checkMergeConflicts, checkoutBranch, clone, commitDetails, commits, createBranch, diffs, discard, fetch, getBranches, getConfig, getRemoteUrl, numstat, pull, push, removeLockFile, renameBranch, showFile, showFileChunk, stage, stageHunk, status, unstage, unstageHunk |
 | gitRoot | 1 | list — the workspace's registered secondary git roots (§5.6; v6.15, `workspaceId` req). No wire register/unregister method: registration is MCP-only (`ws.git.registerRoot` / `ws.git.unregisterRoot`), per the §6.8 principle |
 | github | 32 | authStatus, branches.list, branches.listCached, cancelAuth, connect, getReviewThreads, getUser, identityProof.create, identityProof.delete, issues.get, issues.list, issues.search, listReviewComments, pulls.checks, pulls.create, pulls.files, pulls.get, pulls.list, pulls.merge, pulls.reviews, pulls.search, pulls.updateBranch, relatedRepos.list, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolveThread, revoke, unresolveThread, users.search — `identityProof.create` / `identityProof.delete` (§5.27; [intent-hq/intentd#1965](https://github.com/intent-hq/intentd/pull/1965), daemon-global — no `workspaceId`) are the **guest half** of the gist identity-proof join (§5.48): the guest's own daemon publishes a host-issued nonce in a secret gist made with its stored GitHub token (`gist` scope) and deletes it after the join; owner-client only, the token never crosses the wire |
 | hook | 3 | cancel, list, runNow — background-hook management (§5.40; v2.10). No `hook.schedule` on the wire: scheduling is MCP-only (`ws.hook.schedule`), per the §6.8 principle |
@@ -147,24 +169,27 @@ pin, while all existing methods and prepared extensions remain present.
 | metrics | 1 | getAgentStats |
 | models | 1 | list |
 | node | 4 | drain, list, register, remove — prepared node execution contract (§5.50) |
-| note | 21 | add, create, delete, deleteCancel, deleteSchedule, deleteStatus, edit, editLines, get, getVersion, lineAttribution.computeNow, lineAttribution.load, list, listTasks, listVersions, readAsset, restoreVersion, saveAsset, setContent, update, updateMetadata |
+| note | 19 | add, create, delete, edit, editLines, get, getVersion, lineAttribution.computeNow, lineAttribution.load, list, listTasks, listVersions, readAsset, readAssetChunk, restoreVersion, saveAsset, setContent, update, updateMetadata |
+| plugin | 5 | install, list, toggle, uninstall, update — app-wide Agent Plugins (§5.57; administrator-only, daemon-global; gated by `agentPlugins: 1`) |
 | pr | 1 | refresh — status was removed in v12.0; 11 other `pr.*` methods were removed in v5.0 (§5.7) |
 | prMonitor | 3 | list, cancel, flush — the FE surface over centralized PR monitors (§5.42; v6.1). No wire registration method: monitors are agent-owned via the MCP `ws.pr.monitor` binding only, per the §6.8 principle (like `hook.*` vs `ws.hook.schedule`) |
 | presence | 1 | snapshot — the current online roster of a member workspace, i.e. the `presence:changed` payload (§6.5) on demand (`{ workspaceId }` req; §5.47; shipped in intentd b518d31). Ephemeral read, no host reach; the presence writes are fast-path (`presence.update`, `note.presence.update`, below) and the per-note viewer channel is `note.presence.subscribe` / `note.presence.unsubscribe` (§6.9) |
 | primitive | 4 | addAgentAction, addCli, addPatch, addReference |
 | principal | 3 | list, me, revokeSelf — `me` is the principal this connection was bound to at admission (`{ id, login: string \| null, displayName: string \| null, avatarUrl: string \| null, isAdministrator, identity? }` — the profile fields are always present, `null` until a forge identity is cached; `identity?` is the v10.8 provider-neutral triple `{ provider, host, externalUserId }`, omitted while unlinked; §5.46; v10.3, [intent-hq/intentd#1869](https://github.com/intent-hq/intentd/pull/1869), no params, daemon-global — no `workspaceId`). Fails closed (`-32603`) when no caller is bound. `list` ([intent-hq/intentd#2023](https://github.com/intent-hq/intentd/pull/2023); §5.48) is the administrator-only roster of credentialed guests `{ principals: [{ principalId, login: string \| null, displayName: string \| null, avatarUrl: string \| null, githubUserId: integer \| null, identity? }] }` the direct member add draws from (the four profile keys always present, `null` when uncached — the `me` convention; `identity?` omitted while unlinked). `revokeSelf` (shipped in intentd b518d31; §5.48) revokes the caller's **own** credentials and drops its collaborator memberships (each publishing the `removedPrincipalId` `workspace:updated`, §6.5); self-directed only (no target parameter), the administrator is refused in the service layer |
-| providers | 6 | catalog, profiles.create, profiles.delete, profiles.list, profiles.reorder, profiles.update — `catalog` is the static provider registry served over the wire (§5.38; v2.6, daemon-global result; optional routing-only `workspaceId`); `profiles.*` manage named Codex/Claude Code profiles (§5.54; prepared, administrator-only) |
+| providers | 7 | catalog, profiles.create, profiles.delete, profiles.list, profiles.reorder, profiles.update, profiles.updateDefault — `catalog` is the static provider registry served over the wire (§5.38; v2.6, daemon-global result; optional routing-only `workspaceId`); `profiles.*` manage named Codex/Claude Code profiles and the Default configuration's name and environment overrides (§5.54; prepared, administrator-only) |
+| remoteLinkTraffic | 3 | snapshot, start, stop — executor-link traffic capture (§5.50), owner-only, daemon-global |
+| remoteMachines | 7 | add, backendInfo, claim, list, models, refresh, remove — daemon-to-daemon exposed machines (§5.50), owner-only, daemon-global; `models` is experimental and gated by `remoteMachineModels: 1`; `claim` is gated by `remoteMachineClaim: 1` |
 | repo | 3 | list, remove, warmCache — opportunistic background repo-cache refresh for one GitHub repo (§5.11; v6.10, daemon-global — no `workspaceId`) |
 | repoConfig | 4 | ensureDir, get, has, save |
 | rules | 3 | get, list, update |
-| sandbox | 2 | cow.discard, cow.merge |
 | script | 12 | archive, create, get, list, output, remove, restart, restore, run, start, status, stop |
-| scriptMonitor | 4 | cancel, cancelRun, get, list — prepared script run monitors (§5.8a); registration is MCP-only |
+| scriptMonitor | 4 | cancel, cancelRun, get, list — script run monitors (§5.8a); registration is MCP-only |
 | search | 7 | cancel, codebase, events, fileNames, inFiles, messages, notes |
+| secret | 4 | dismiss, forget, list, provide — secret requests (§5.56); values held in daemon memory only, request creation is MCP-only |
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
 | settings | 4 | get, list, reset, update |
 | skill | 1 | list |
-| sourceControl | 25 | authStatus, cancelAuth, checkout.branches, checkout.capture, checkout.project, checkout.projects, checkout.release, checkout.repoConfig, checkout.warm, connect, getUser, gitlab.childGit.get, gitlab.childGit.set, identityProof.create, identityProof.delete, read.capture, read.captureScoped, read.detail, read.detailScoped, read.discussions, read.list, read.release, read.releaseScoped, read.resolveKnownRepository, revoke — the provider-generic forge auth surface (§5.27 "Provider-generic auth — `sourceControl.*`"; v10.5, daemon-global; optional routing-only `workspaceId` on `authStatus` / `getUser` only) plus, in v10.8, the provider-generic guest half of the invite identity proof (`identityProof.create` / `identityProof.delete`, §5.27 "Identity proof"; `github.identityProof.*` are their `provider: "github"` aliases, separate dispatchable names like the auth rows). The `github.authStatus` / `connect` / `cancelAuth` / `revoke` / `getUser` rows of the `github` namespace are aliases of these with `provider: "github"` pinned; they remain separate dispatchable names (not `METHOD_ALIASES` entries) because their result shapes are the byte-identical pre-v10.5 projections. The seven prepared `checkout.*` methods (§5.53) require an explicit destination and original connection, without workspace routing |
+| sourceControl | 25 | authStatus, cancelAuth, checkout.branches, checkout.capture, checkout.project, checkout.projects, checkout.release, checkout.repoConfig, checkout.warm, connect, getUser, gitlab.childGit.get, gitlab.childGit.set, identityProof.create, identityProof.delete, read.capture, read.captureScoped, read.detail, read.detailScoped, read.discussions, read.list, read.release, read.releaseScoped, read.resolveKnownRepository, revoke — the provider-generic forge auth surface (§5.27 "Provider-generic auth — `sourceControl.*`"; v10.5, daemon-global; optional routing-only `workspaceId` on `authStatus` / `getUser` only) plus, in v10.8, the provider-generic guest half of the invite identity proof (`identityProof.create` / `identityProof.delete`, §5.27 "Identity proof"; `github.identityProof.*` are their `provider: "github"` aliases, separate dispatchable names like the auth rows). The `github.authStatus` / `connect` / `cancelAuth` / `revoke` / `getUser` rows of the `github` namespace are aliases of these with `provider: "github"` pinned; they remain separate dispatchable names (not `METHOD_ALIASES` entries) because their result shapes are the byte-identical pre-v10.5 projections. The seven `checkout.*` methods (§5.53) require an explicit destination and original connection, without workspace routing |
 | specialist | 5 | create, delete, edit, get, list |
 | stats | 2 | getRateHistory, getUsage — `getRateHistory` is daemon-global (§5.39; v2.9, no `workspaceId`) |
 | system (router) | 1 | capabilities — machine-level capabilities, optional routing-only workspaceId; distinct from the `system.*` fast-path controls below (v2.3, see the note after the fast-path catalog) |
@@ -172,7 +197,7 @@ pin, while all existing methods and prepared extensions remain present.
 | terminal | 7 | create, getBuffer, kill, list, readOutput, resize, write |
 | unsloth | 2 | status, stop — observe / gracefully stop the daemon-managed singleton Unsloth server (§5.37; v2.5, daemon-global — no `workspaceId`) |
 | voice | 2 | getWorkspaceVocabulary, transcribe — `getWorkspaceVocabulary` is the auto-derived per-workspace vocabulary served for client-side transcription engines (§5.41; v5.1, `workspaceId` req); `transcribe` is daemon-owned speech-to-text via the configured provider (§5.41; v4.3, daemon-global — no required `workspaceId`; optional `workspaceId?` workspace-vocabulary injection since v5.1) |
-| workspace | 56 | archive, cancelDelete, cleanup, create, delete, detectProjectType, diskUsage, dismissAttention, duplicate, export.abort, export.finalize, export.read, export.start, findByPullRequest, findRepositories, generateSetupScript, get, getAutoCommit, getBrowserClient, getContext, getSetupScript, getTokenUsage, getUiContext, import.abort, import.begin, import.chunk, import.commit, initializeRepository, invite.list, invite.revoke, list, localChanges, markSeen, members.add, members.leave, members.list, members.remove, members.setRole, repositoryContext, repositoryContext.capture, repositoryContext.release, repositorySelection.capture, repositorySelection.reconcile, repositorySelection.release, repositorySelection.reset, repositorySelection.save, restore, retire, saveSetupScript, setAutoCommit, setBrowserClient, transfer.plan, unarchive, update, updateContext, updateUiContext — the multiplayer membership surface (§5.48; shipped in intentd b518d31): `members.list` → `{ members: [{ principal fields…, role }] }` (any member); `members.add { principalId }` → `{ added, memberCount }` (owner-only; attaches a credentialed guest from `principal.list` as a collaborator without an invite link, idempotent — a repeat answers `added: false`; an unknown principal, the primary principal or a principal with no active credential is `-32602`, a spent guest cap `-32602 { code: "guest-limit" }`; publishes the same `addedPrincipalId` `workspace:updated` an invite join does — [intent-hq/intentd#2025](https://github.com/intent-hq/intentd/pull/2025)); `members.remove` → `{ removed }` (owner-only; the owner row is `-32602`, a non-member is `removed: false`) and `members.leave` (the caller drops its **own** collaborator membership; owners cannot leave) both publish the `removedPrincipalId` `workspace:updated` (§6.5); `invite.list` → `{ invites: [WorkspaceInvite] }` (no secrets) and `invite.revoke` → `{ revoked }` are owner-only, with `invite.create` on the fast path, below |
+| workspace | 55 | archive, cancelDelete, cleanup, create, delete, detectProjectType, diskUsage, dismissAttention, export.abort, export.finalize, export.read, export.start, findByPullRequest, findRepositories, generateSetupScript, get, getAutoCommit, getBrowserClient, getContext, getSetupScript, getTokenUsage, getUiContext, import.abort, import.begin, import.chunk, import.commit, initializeRepository, invite.list, invite.revoke, list, localChanges, markSeen, members.add, members.leave, members.list, members.remove, members.setRole, repositoryContext, repositoryContext.capture, repositoryContext.release, repositorySelection.capture, repositorySelection.reconcile, repositorySelection.release, repositorySelection.reset, repositorySelection.save, restore, retire, saveSetupScript, setAutoCommit, setBrowserClient, transfer.plan, unarchive, update, updateContext, updateUiContext — the multiplayer membership surface (§5.48; shipped in intentd b518d31): `members.list` → `{ members: [{ principal fields…, role }] }` (any member); `members.add { principalId }` → `{ added, memberCount }` (owner-only; attaches a credentialed guest from `principal.list` as a collaborator without an invite link, idempotent — a repeat answers `added: false`; an unknown principal, the primary principal or a principal with no active credential is `-32602`, a spent guest cap `-32602 { code: "guest-limit" }`; publishes the same `addedPrincipalId` `workspace:updated` an invite join does — [intent-hq/intentd#2025](https://github.com/intent-hq/intentd/pull/2025)); `members.remove` → `{ removed }` (owner-only; the owner row is `-32602`, a non-member is `removed: false`) and `members.leave` (the caller drops its **own** collaborator membership; owners cannot leave) both publish the `removedPrincipalId` `workspace:updated` (§6.5); `invite.list` → `{ invites: [WorkspaceInvite] }` (no secrets) and `invite.revoke` → `{ revoked }` are owner-only, with `invite.create` on the fast path, below |
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9 and the `browser.*` tab-registry methods are in §5.45.
 
@@ -183,7 +208,7 @@ The following 58 methods are intercepted **before** the main router for performa
 agent.workers.subscribe, browser.closeTab, browser.exec, browser.listTabs, browser.navigateTab, browser.removeTab, browser.syncTabs, browser.upsertTab, client.hello, drafts.clear, drafts.get, drafts.set, events.fence, events.subscribe, events.unsubscribe, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.invite.create, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.prepareProviderAdapters, host.providerAuthStatus, host.providerDiscovery, host.providerTestPrompt, host.status, host.toolAvailability, invite.accept, invite.challenge, invite.inspect, invite.prove, note.presence.update, pairing.getInfo, pairing.getSelfInfo, presence.update, providers.setup.cancel, providers.setup.login, providers.setup.start, providers.setup.status, server.pairingInfo, server.rotateToken, system.gitCredential, system.requestUpdate, system.shutdown, system.startupStatus, system.status, workspace.invite.create
 
 The multiplayer methods (presence §5.47, invites §5.48) are fast-path because they act on per-connection state: `presence.update` sets the connection's **own** focus set and typing target (member workspaces only; transient, never persisted; returns the connection's opaque typing source handle) and `note.presence.update` the caller's own caret on a note it holds a `note.presence.subscribe` lease for (coalesced daemon-side, never persisted) — both feed the `presence:changed` / `note:presence` events (§6.5);
-`workspace.invite.create` (owner/member under §5.49; no linked-forge prerequisite with `hostMembership: 1`; otherwise the legacy owner-only policy; optional `pinLogin` with its v10.8 `pinProvider` / `pinHost`, `expiresInSecs` default 7 days) mints an invite the transport wraps into the `intent://invite?…` link, and the four `invite.*` methods are the unauthenticated join served on the `/invite` endpoint only: `invite.inspect` previews an open `(inviteId, secret)` → `{ workspaceId, workspaceTitle, hostname, prettyHostname, pinIdentity }`, with the required `pinIdentity` triple or explicit `null` (10.8; see [Selecting the guest identity](./methods/multiplayer.md#selecting-the-guest-identity) for the triple shape, legacy pins, and older-daemon omission rules);
+`workspace.invite.create` (owner/member under §5.49; requires a connected owner forge — GitHub or GitLab — else `-32603 { code: "github-identity-required" }`, or `github-unreachable` when neither is connected and one cannot be reached; the legacy owner-only policy without `hostMembership: 1`; optional `pinLogin` with its v10.8 `pinProvider` / `pinHost`, `expiresInSecs` default 7 days) mints an invite the transport wraps into the `intent://invite?…` link, and the four `invite.*` methods are the unauthenticated join served on the `/invite` endpoint only: `invite.inspect` previews an open `(inviteId, secret)` → `{ workspaceId, workspaceTitle, hostname, prettyHostname, pinIdentity }`, with the required `pinIdentity` triple or explicit `null` (10.8; see [Selecting the guest identity](./methods/multiplayer.md#selecting-the-guest-identity) for the triple shape, legacy pins, and older-daemon omission rules);
 `invite.challenge` returns the same preview plus the single-use `nonce` and `nonceExpiresAt`, and the guest publishes the nonce under its forge account (`sourceControl.identityProof.create`);
 `invite.prove { …, nonce, login, proofId, provider?, host? }` verifies that proof and commits the join → `{ status: "authorized", token, principalId, login, workspaceId }` exactly once, and `invite.accept { …, credential }` is the returning guest's proof-less join with a credential this host minted earlier ([intent-hq/intentd#1963](https://github.com/intent-hq/intentd/pull/1963), [#1965](https://github.com/intent-hq/intentd/pull/1965)).
 `invite.redeem` — the earlier two-phase, host-run GitHub device-flow join — was removed from intentd by [#1969](https://github.com/intent-hq/intentd/pull/1969); its name stays listed above only until the pinned intentd advances past that removal, then this entry is dropped.
@@ -194,16 +219,16 @@ The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, `n
 
 **UDS-only methods:** `system.shutdown` and `system.gitCredential` (v2.5) are only available on the Unix-domain socket transport (a remote WSS/TCP caller is rejected with `-32001`). `system.status` and `system.requestUpdate` (v8.6, see below) are available on both UDS and WSS transports. `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown; both are consumed by `intentd status` / `intentd stop`. `system.gitCredential` resolves the daemon-managed GitHub credential for the `intentd git-credential` helper (see below). `pairing.getInfo`, `server.pairingInfo`, and `server.rotateToken` are likewise local-only: they are gated on the real connection origin (UDS vs TCP), so a remote (TCP/WSS) caller is rejected with `-32001` regardless of locality flags.
 
-**`system.capabilities` is a router method, not a fast-path control (v2.3).** Unlike the `system.*` fast-path methods above (which are answered by the composition root's control surface), `system.capabilities` dispatches through the main router to the service layer and is available on **both** UDS and WSS. It accepts optional routing-only `workspaceId` under the prepared contract and returns the same machine-level capabilities; `{}` remains compatible on direct daemons:
+**`system.capabilities` is a router method, not a fast-path control (v2.3).** Unlike the `system.*` fast-path methods above (which are answered by the composition root's control surface), `system.capabilities` dispatches through the main router to the service layer and is available on **both** UDS and WSS. It accepts optional routing-only `workspaceId` under the prepared contract and returns the machine-level capability flags; `{}` remains compatible on direct daemons:
 
 ```json
 // → request
 { "jsonrpc": "2.0", "id": 1, "method": "system.capabilities", "params": {} }
 // ← response
-{ "jsonrpc": "2.0", "id": 1, "result": { "cowSupported": true } }
+{ "jsonrpc": "2.0", "id": 1, "result": { "workspaceLabels": 1 } }
 ```
 
-- `cowSupported?: boolean` — the cached CoW-reflink probe of the **workspaces root** filesystem, the same probe that fills `Workspace.cowSupported` (§5.1): `true`/`false` when the probe ran, **omitted** (never `null`) when it could not run — clients detect by presence. Because it is workspace-independent, the FE gates the `workspace.cowIsolation` opt-in toggle (§5.12) on this method rather than reading `cowSupported` off a hydrated workspace payload.
+- Each key is a feature flag (`1` when supported); clients detect support by presence. Protocol 17.0 removed `cowSupported` with the `workspace.cowIsolation` setting.
 
 #### `drafts.*` — draft attachments (additive, optional)
 
@@ -433,6 +458,26 @@ The `system.status` result additionally reports the daemon's **in-flight turn co
 - Timestamps are RFC 3339 UTC strings projected from the daemon's monotonic clock at read time (whole-second precision).
 - **Additive** response fields carrying the **v10.2** minor bump (the method surface is unchanged). **Absent on older daemons** — clients must detect them by **presence**, not by protocol version, and tolerate their absence.
 
+#### `system.status` — connected-daemon counts (additive)
+
+The `system.status` result additionally counts the live daemon-to-daemon links of [remote machines](./methods/nodes.md#daemon-to-daemon-remote-machines), in both directions:
+
+```jsonc
+{
+  "remoteLinks": {
+    "backends": 1, // other daemons (backends) this machine runs agents for, linked now
+    "machines": 2  // exposed machines this daemon, as backend, is linked to now
+  }
+  // ...existing status fields (running, listenMode, transports, port, ...)
+}
+```
+
+- `backends` counts the executor credentials with at least one open inbound link to this machine — the `executor.list` rows with `connected: true`. Each credential is minted for one backend, so this is one per linked backend; a backend holding two connected credentials counts twice.
+- `machines` counts exposed machines this daemon holds a live outbound link to — the `remoteMachines.list` rows in state `connected`.
+- Both are live counts: `0` when nothing is linked, and they drop as soon as a link closes.
+- Follows the **presence-detection convention**: a daemon that implements it always serves the object; older daemons **omit** `remoteLinks` (never `null`). Clients must detect it by **presence**, not by protocol version.
+- The per-agent memory of agents run for a backend is on `agent.memoryUsage` (§5.5), tagged `remoteOwner`.
+
 #### `system.gitCredential` (UDS-only, v2.5)
 
 Resolves the daemon-managed GitHub credential for the `intentd git-credential` helper (monorepo#884): the daemon-spawned children (PTY terminals, agent provider shells) run the helper as a github.com-scoped git credential helper, and the helper fetches the credential from the daemon over UDS on demand — no token bytes in child environments.
@@ -534,17 +579,19 @@ Returns the structured QR pairing payload so local clients (the `intentd pair` C
   "fingerprint": "AA:BB:...",
   "token": "abab...",
   "version": 1,
-  "tcAddress": "tcoWFwWCAAAQIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHw"
+  "tcAddress": "tcoWFwWCAAAQIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHw",
+  "daemonMode": "regular"
 }
 ```
 
-- `uri` is the plaintext payload encoded in the QR code: `intent://pair?v=1&host=<ip[,ip...]>&port=<p>&fp=<sha256>&token=<t>[&tc=<addr>]` (query values percent-encoded where needed; `host=` may be **empty** — the hostless form, see the `hosts` bullet). The component fields (`hosts`, `port`, `fingerprint`, `token`, `version`, and — when the tunnel is up — `tcAddress`) are provided so clients can render their own payloads.
+- `uri` is the plaintext payload encoded in the QR code: `intent://pair?v=1&host=<ip[,ip...]>&port=<p>&fp=<sha256>&token=<t>[&mode=node][&tc=<addr>]` (query values percent-encoded where needed; `host=` may be **empty** — the hostless form, see the `hosts` bullet). The component fields (`hosts`, `port`, `fingerprint`, `token`, `version`, `daemonMode`, and — when the tunnel is up — `tcAddress`) are provided so clients can render their own payloads.
 - `hosts` is the **dialable pairing host set** — bind-aware and **never containing loopback** ([intent-hq/intentd#1656](https://github.com/intent-hq/intentd/pull/1656), [intent-hq/intentd#1672](https://github.com/intent-hq/intentd/pull/1672)): a listener bound to specific addresses advertises exactly those, an unspecified bind (`0.0.0.0` / `::`) enumerates the machine's local addresses (virtual/container interfaces skipped; `::` adds non-link-local IPv6 — link-local needs a zone index, ULA included; its listener is dual-stack), and loopback (`127.0.0.1` / `::1`) is filtered out even when explicitly bound: pairing hosts feed remote devices, and loopback is not dialable from another device. With a loopback-only bind and the tunnel **up**, `hosts` is **empty** and the payload pairs **hostless** — the `host=` URI param is empty and the `tc=` route alone carries the connection. TLS fingerprint and bearer token come from the same sources as `intentd pair` and `server.pairingInfo`, so all pairing surfaces stay consistent.
 - `tcAddress` (additive, [intent-hq/intentd#1623](https://github.com/intent-hq/intentd/pull/1623)) is the tailcat tunnel's stable `tc…` address (`server.tunnel.*`, §5.12). Present only while the tunnel sidecar is running; **omitted** — never `null` — when the tunnel is disabled or down; detect by presence. When present it is also appended to `uri` as the **final** `tc=` query param (percent-encoded); when absent the URI carries no `tc=` param. The param is additive: clients that predate it tolerate the unknown query param, so the URI stays parseable everywhere.
+- `daemonMode` (additive, docs first) is `"regular"` or `"node"`, the running mode ([reported daemon mode](./methods/nodes.md#reported-daemon-mode)); older daemons omit it. In node mode `uri` also carries the hint `mode=node` before any `tc=` param; a regular daemon's `uri` has no `mode` param, and a link without one means a full daemon. The hint is not authoritative: a client trusts the mode the daemon reports after connecting. Parsers ignore unknown query params, so older clients read the link unchanged.
 - **Local-only:** the payload embeds the long-lived bearer token, so remote (TCP/WSS) callers are rejected with `-32001` regardless of locality flags. Call it over UDS.
 - Errors (`-32603`) when pairing is impossible, instead of minting a payload no other device can connect through:
   - **Listener down** — the TCP (WSS) listener is not running, so there is no port to embed. Carries the machine-readable discriminator `error.data = { "code": "listener-down" }` on the otherwise-unchanged `-32603` envelope ([intent-hq/intentd#1065](https://github.com/intent-hq/intentd/pull/1065); monorepo#1822) — clients (e.g. the `intentd pair` auto-enable flow) match `error.data.code` first and keep the message-prose match only as a fallback for older daemons that predate the discriminator.
-  - **No dialable route** ([intent-hq/intentd#1672](https://github.com/intent-hq/intentd/pull/1672)) — the listener is up but the advertised host set is empty and no tunnel is active. A loopback-only `server.bindAddress` gets actionable guidance naming both remediations: `"listener is bound to loopback only and no tunnel is active — set server.bindAddress to a LAN address or enable the tunnel (server.tunnel.enabled) before pairing"`. An unspecified/unknown bind whose enumeration found no dialable address keeps the plain `"no non-loopback IPv4 address found — connect this machine to a network before pairing"`. Neither no-route variant carries `error.data`. (Before intentd#1672 a loopback-only bind returned a success payload advertising loopback; clients must now handle the error.)
+  - **No dialable route** ([intent-hq/intentd#1672](https://github.com/intent-hq/intentd/pull/1672)) — the listener is up but the advertised host set is empty and no tunnel is active. A loopback-only `server.bindAddress` gets actionable guidance naming both remediations: `"listener is bound to loopback only and no tunnel is active — set server.bindAddress to a LAN address or enable the tunnel (server.tunnel.enabled) before pairing"`. An unspecified/unknown bind whose enumeration found no dialable address keeps the plain `"no non-loopback IPv4 address found — connect this machine to a network before pairing"`. Neither no-route variant carries `error.data`. When `intentd pair` turns the listener on with a loopback-only bind (the fresh-install default), it turns the tunnel on too and waits for its address, so it hits the loopback-only error only when the tunnel fails to start ([node setup and pairing](./methods/nodes.md#node-setup-and-pairing)). (Before intentd#1672 a loopback-only bind returned a success payload advertising loopback; clients must now handle the error.)
 
 #### `server.pairingInfo` (local-only)
 
@@ -643,12 +690,22 @@ Daemon-owned provider auth probes: reports whether each CLI-backed agent provide
 }
 ```
 
-- Without `providerId`, the sweep covers all probe-able providers: `auggie`, `claude-code`, `codex`, `opencode`, `droid`, `grok`, `pi`, `antigravity`. With `providerId`, the `providers` array contains only that provider.
-- `authenticated` is tri-state: `true` (probe confirmed logged in), `false` (probe confirmed logged out), `null` (unknown — probe failed or timed out, or the provider is not installed). Not-installed providers are never probed. Installed-ness comes from the daemon's provider discovery, which resolves `opencode` and `grok` from their native installer locations (`~/.opencode/bin/opencode`, `~/.grok/bin/grok`) ahead of the `PATH` scan (see §5.30), so a natively installed CLI is probed even when the daemon's `PATH` does not include it. Since intentd#725, the install gate also honors **valid `providers.paths` overrides** for the providers whose gate command is the registry primary — `auggie`, `opencode`, `droid`, `grok` — so an override-only install is probed, while an invalid override contributes nothing and the gate falls through to auto-detection. For `opencode` / `droid` / `grok` a valid override is an absolute path to an executable file (the same validation as spawn resolution); `auggie`'s gate instead follows the `host.checkAuggie` precedence (`context.auggiePath` setting → `providers.paths.auggie`, with checkAuggie's file/symlink validation) before falling through to auggie auto-detection. `claude-code`, `codex`, and `pi` gate on the real `claude` / `codex` / `pi` CLIs — distinct from the adapter binaries their `providers.paths` keys describe — so adapter overrides are ignored for their gates.
-- **Probe mechanics.** CLI-probed providers run their registry `auth_check_args`; `auggie` and `codex` ride a **generic exit-code arm** — exit 0 ⇒ `true`, non-zero ⇒ `false`, except exit 127 (command-resolution failure), spawn errors, and timeouts yield `null` — with the child's stdout and stderr **discarded**, never captured, logged, or surfaced. `grok` and `opencode` keep bespoke output-sniffing arms (their stdout is piped: `grok models` exits 0 in both auth states so its output is parsed for explicit auth markers, and `opencode models` requires at least one `provider/model` line beyond exit 0), while `droid` and `pi` probe via their adapters instead of `auth_check_args`. `auggie` probes with `auggie token print` ([intent-hq/intentd#977](https://github.com/intent-hq/intentd/pull/977)): it has no bespoke probe any more, and the discarded output matters here because the command prints the auth session secret. The former `auggie model list` output-sniffing probe is retired.
+- Without `providerId`, the sweep covers all probe-able providers: `auggie`, `claude-code`, `codex`, `opencode`, `droid`, `grok`, `pi`, `antigravity`, `cursor`. With `providerId`, the `providers` array contains only that provider.
+- `authenticated` is tri-state: `true` (probe confirmed logged in), `false` (probe confirmed logged out), `null` (unknown — probe failed or timed out, or the provider is not installed). Not-installed providers are never probed. Installed-ness comes from the daemon's provider discovery, which resolves `opencode` and `grok` from their native installer locations (`~/.opencode/bin/opencode`, `~/.grok/bin/grok`) ahead of the `PATH` scan (see §5.30), so a natively installed CLI is probed even when the daemon's `PATH` does not include it. Since intentd#725, the install gate also honors **valid `providers.paths` overrides** for the providers whose gate command is the registry primary — `auggie`, `opencode`, `droid`, `grok`, `cursor` — so an override-only install is probed, while an invalid override contributes nothing and the gate falls through to auto-detection. For `opencode` / `droid` / `grok` / `cursor` a valid override is an absolute path to an executable file (the same validation as spawn resolution); `auggie`'s gate instead follows the `host.checkAuggie` precedence (`context.auggiePath` setting → `providers.paths.auggie`, with checkAuggie's file/symlink validation) before falling through to auggie auto-detection. `claude-code`, `codex`, and `pi` gate on the real `claude` / `codex` / `pi` CLIs — distinct from the adapter binaries their `providers.paths` keys describe — so adapter overrides are ignored for their gates.
+- **Probe mechanics.** CLI-probed providers run their registry `auth_check_args`; `auggie` and `codex` ride a **generic exit-code arm** — exit 0 ⇒ `true`, non-zero ⇒ `false`, except exit 127 (command-resolution failure), spawn errors, and timeouts yield `null` — with the child's stdout and stderr **discarded**, never captured, logged, or surfaced. `grok`, `opencode`, and `cursor` keep bespoke output-sniffing arms (their stdout is piped: `grok models` exits 0 in both auth states so its output is parsed for explicit auth markers, `opencode models` requires at least one `provider/model` line beyond exit 0, and for `cursor` both stdout and stderr are piped and `cursor-agent models` is parsed as described in the Cursor note below), while `droid` and `pi` probe via their adapters instead of `auth_check_args`. `auggie` probes with `auggie token print` ([intent-hq/intentd#977](https://github.com/intent-hq/intentd/pull/977)): it has no bespoke probe any more, and the discarded output matters here because the command prints the auth session secret. The former `auggie model list` output-sniffing probe is retired.
 - **Claude authentication.** `claude-code` runs the real `claude auth status` CLI and privately parses stdout as JSON; stderr is discarded, and neither the payload nor parsing errors are logged or surfaced. A top-level boolean `loggedIn` determines `authenticated: true` or `false` regardless of ordinary exit code, and both verdicts skip ACP. Missing/non-boolean `loggedIn`, malformed JSON, spawn/output errors, exit 127, signal termination, and the 8-second CLI timeout are inconclusive. Only inconclusive CLI outcomes fall back to the pinned Claude ACP adapter: an explicit auth-required error yields `false`; everything else, including a served model catalog or a failed/timed-out adapter probe, yields `null`. The catalog never proves authentication, and the fallback never confirms `true`.
 - **Provider identity** *(v9.4; [intent-hq/intentd#1685](https://github.com/intent-hq/intentd/pull/1685))*: entries carry the optional `identity` object — `{ "email"?, "orgName"?, "subscriptionType"? }`, each field an optional string — captured from the same `claude auth status` JSON that decides the verdict, and **omitted entirely** when the provider supplies no identity (every provider except `claude-code` today), so pre-9.4 clients and identity-less entries see the previous shape byte-for-byte. Identity rides the cached verdict entry under the same TTL/epoch semantics as the verdict itself: a test-prompt **promotion** to a hard `true` (`host.providerTestPrompt` below) preserves the identity captured by the CLI probe, while a **demotion** to a hard `false` clears it — a logged-out provider never serves stale identity.
 - **Antigravity:** discovery resolves the official ACP server, not the separate `agy` CLI. Auth, model discovery, and sessions honor `providers.paths.antigravity`. A guarded, temporary ACP session confirms personal OAuth without prompting or opening a browser. Explicit authentication-required responses return `false`; inconclusive errors return `null`. A valid session confirms authentication even when it reports no models. To sign in, run `intentd provider login antigravity` on the daemon host. This terminal command uses the official personal Google OAuth flow and verifies a fresh session afterward. There is no login RPC, and no credential or OAuth URL enters the auth-status response.
+- **Cursor** *([intent-hq/intentd#3073](https://github.com/intent-hq/intentd/pull/3073))*: discovery resolves the Cursor CLI `cursor-agent`, never a bare `agent` (a generic name that Cursor's Grok agent host channel repoints).
+  Precedence: a valid `providers.paths.cursor` override; then `cursor-agent` on the enhanced `PATH`, skipped when it resolves to the Grok agent host or while Cursor's `grok-switch.json` records an active switch (the file is read from Cursor's config dir — `$CURSOR_CONFIG_DIR`, or `~/.cursor` when that is unset or empty — and only `state: "active"` counts; `"pending"` or a missing or unreadable file does not); then the newest versioned install under `~/.local/share/cursor-agent/versions/<version>/cursor-agent`.
+  An override or `PATH` hit that is the Grok agent host (its real path is named `agent-host*` or lies under a non-empty `$GROK_HOME`, default `~/.grok`; an empty `$GROK_HOME` is ignored) is ignored, and a binary whose `--version` reports the Grok agent host is marked unavailable (see `host.providerDiscovery` below).
+  Auth, model discovery, and sessions honor `providers.paths.cursor`.
+  The auth probe runs `cursor-agent models` and parses both its stdout and its stderr (`Authentication required` is matched on either stream), never trusting the exit code alone: model rows ⇒ `true`; the explicit `Authentication required` error ⇒ `false`; a run that lists no models, or a failed or timed-out run, ⇒ `null`.
+  The probe starts no chat in the user's Cursor history, and neither stream is ever logged or surfaced.
+  It covers a stored `cursor-agent login` and a `CURSOR_API_KEY` in the daemon's environment alike; when both exist, the stored login wins over the key.
+  The daemon never sends ACP `authenticate` to Cursor.
+  To sign in, run `cursor-agent login` on the daemon host (the catalog's `loginCommandHint`).
+  Model listing is session-free (`cursor/list_available_models`, with Cursor's Auto model as the default row; §5.30), and `supportsTestPrompt` is `true`, so `host.providerTestPrompt` runs a live prompt for Cursor.
 - Results are cached with a **60-second TTL** and probes are single-flighted (concurrent callers join the in-flight probe). `force: true` bypasses the cache read but still joins any in-flight probe.
 
 #### `host.providerTestPrompt` *(v9.3; [intent-hq/intentd#1657](https://github.com/intent-hq/intentd/pull/1657))*
@@ -668,7 +725,7 @@ Live end-to-end provider test: spawns the provider's ACP adapter through the sam
 - Unlike `agent.completeOnce` (curated to claude-code / codex / pi because its *answer* is the product), the test prompt covers the whole catalog: every provider is driven through the same ACP adapter and launch args real agent sessions spawn, and only turn completion matters. Providers outside the completeOnce set are intentionally best-effort — an adapter that cannot complete a bare one-shot turn surfaces a structured failure, never a wire error.
 - **Any successfully completed turn is a pass** — the answer is never surfaced or streamed, and a turn that completes with no assistant text still passes. The prompt phase budget is **90 seconds** (absorbs a first-run npx package download); setup keeps the launch's npx-aware staged budgets, and the run claims a slot in the same daemon-wide adapter bound as `agent.completeOnce` (§5.32).
 - **Auth-verdict cache coupling:** a passed test **promotes** the provider's cached `host.providerAuthStatus` verdict to a hard `true`; an `auth-required` failure **demotes** it to a hard `false` (the same demotion seam as the runtime spawn/prompt auth mapping) — in both directions the live result supersedes any probe already in flight. Other failure reasons leave the cache untouched.
-- `providers.catalog` rows (§5.38) always include `supportsTestPrompt`, which tells clients whether a provider supports this probe. It is `false` for `unsloth` because its first prompt can trigger a long model download or load. It is also `false` for `antigravity`, which requires a private guarded profile.
+- `providers.catalog` rows (§5.38) always include `supportsTestPrompt`, which tells clients whether a provider supports this probe. It is `false` for `unsloth` because its first prompt can trigger a long model download or load. It is also `false` for `antigravity`, which requires a private guarded profile. It is `true` for the other providers, including `cursor`.
 
 #### `host.prepareProviderAdapters` (13.6, prepared)
 
@@ -804,6 +861,20 @@ Daemon-owned provider discovery: reports which CLI-backed agent providers are in
       "cliVersionOk": false,
       "cliRequirement": "Pi CLI 0.81.0+",
       "unavailableReason": "pi CLI 0.79.0 is too old — Pi CLI 0.81.0+ is required by pi-acp@0.0.34"  // optional — present iff the CLI gate fires
+    },
+    {
+      "id": "cursor",
+      "displayName": "Cursor",
+      "command": "cursor-agent",
+      "installed": true,
+      "resolvedPath": "/home/me/.local/bin/cursor-agent",
+      "hasNpxFallback": false,
+      "npxOnly": false,
+      "cliCommand": "cursor-agent",             // cursor row — the probed Cursor CLI
+      "cliResolved": true,
+      "cliResolvedPath": "/home/me/.local/bin/cursor-agent",
+      "cliVersion": "2026.11.05-86047df"          // optional — present when `--version` answered
+      // unavailableReason (optional) — present only when the binary is the Grok agent host; installed is then false
     }
   ],
   "npx": { "resolvedPath": "/usr/local/bin/npx", "version": "10.2.4", "versionOk": true }
@@ -832,13 +903,18 @@ Daemon-owned provider discovery: reports which CLI-backed agent providers are in
   This gate does not introduce a launch gate for other providers.
   Startup warning eligibility requires `cliMinimumVersion`, `cliResolved: true`, a detected `cliVersion`, and `cliVersionOk: false`.
   The legacy Pi gate below has no `cliMinimumVersion` unless its adapter independently declares a CLI requirement, so its legacy fields alone never trigger the new warning.
+- **Display `cliVersion`** *(additive, optional string)* — an installed, non-gated, non-npx-only row without its own CLI probe (every provider except `cursor`, which reports its version above, and the npx-only `claude-code`, `codex` and `pi`, which report it through their CLI requirement; the test-only `mock` is skipped) carries the first non-empty stdout line of its CLI's `--version`, omitted (never null) when the probe fails or times out, or the line is longer than 80 characters or contains control characters. A failed probe is remembered for a few minutes, a successful one until the binary changes.
+  The probed CLI is resolved like `installed` (`providers.paths` override first, then auto-detection); `auggie` reports the first candidate that is not below its CLI minimum, as launches select it, and `unsloth` reports its own `unsloth` CLI, not the shared `opencode` primary.
+  The field is descriptive only: it never changes `installed`, adds no `cliVersionOk`/`cliCommand`, and clients display just the version number.
 - **`cliBundledVersion`** *(additive, optional string)* — present on a `codex` or `claude-code` row only when `cliVersionOk` is `false`: the exact version of Intent's bundled CLI that launches use instead of the installed CLI (`@openai/codex` at the adapter-declared minimum; `@anthropic-ai/claude-code` at the SDK's `claudeCodeVersion`).
   The other CLI fields keep describing the installed CLI.
   The daemon installs that exact package with the host's npm on first use (under `~/.local/share/intent/providers/bundled-cli`) and reuses it afterwards; discovery never installs, so the field does not mean the download has happened or will succeed.
   Absent for missing, unknown, current, or newer CLIs, for other providers, and from older daemons — consumers must not infer a bundled launch from `cliVersionOk: false` alone.
   Clients use it to say Intent is running its bundled CLI rather than that the provider is broken.
-- **`pi` CLI verdict fields** *(additive, intentd#1044 / monorepo#1662)* — the `pi` row additionally folds in a probe of the real `pi` CLI (the binary the pinned `pi-acp` adapter spawns — distinct from npx, which only launches the adapter). These legacy fields appear on the pi row when it is not `gatedOff`; other providers may reuse them for the adapter-declared check above (gated rows are never probed). The probed pi row **always** carries `cliCommand` (the command probed: a non-empty `PI_ACP_PI_COMMAND` daemon-env override, else bare `pi`), `cliResolved` (whether the command resolved to an executable), `cliVersionOk` (`true` **iff** the probe confirmed the minimum version or newer), and `cliRequirement` (the pinned adapter's human-readable requirement, e.g. `"Pi CLI 0.81.0+"` for `pi-acp@0.0.34`; this value can change with the adapter pin). `cliResolvedPath` (absolute path) is present only when the CLI resolved, and `cliVersion` (the trimmed first line of `pi --version` output) only when the version probe succeeded — both **omitted (never null)** otherwise. A bare command name is resolved against the **spawn-time enhanced PATH** (npx's parent dir and `~/.augment/bin` ahead of the enriched/inherited dirs), so the probe reports the same binary the spawned pi-acp child would actually exec.
-- **`pi` CLI gating** — a **missing** or **confirmed-too-old** CLI marks the pi row unavailable (it never sets `gatedOff`, which stays reserved for the env-var/feature-code mechanism above): `installed` is forced to `false` and `unavailableReason` (optional string, pi row only) carries an actionable message naming the found version (when too old), the requirement, and the adapter pin (e.g. `"pi CLI not found — Pi CLI 0.81.0+ is required by pi-acp@0.0.34"`). An **inconclusive** probe — spawn failure, timeout, unparseable `--version` output, or a relative separator-carrying `PI_ACP_PI_COMMAND` override that did not resolve from the daemon's CWD — is **permissive**: the daemon logs a WARN and does not gate, so `cliVersionOk` is `false` but `installed` is untouched and `unavailableReason` is omitted (a changed `--version` format never false-negatives the provider). Invariant: `unavailableReason` present ⇒ `installed: false` and `cliVersionOk: false`. The same gate fails agent creation fast with a clear error (instead of a silent hang) when a Pi agent is spawned against a missing/too-old CLI.
+- **`pi` CLI verdict fields** *(additive, intentd#1044 / monorepo#1662)* — the `pi` row additionally folds in a probe of the real `pi` CLI (the binary the pinned `pi-acp` adapter spawns — distinct from npx, which only launches the adapter). These legacy fields appear on the pi row when it is not `gatedOff`; other providers may reuse them for the adapter-declared check above or, like `cursor` below, to describe their own CLI (gated rows are never probed). The probed pi row **always** carries `cliCommand` (the command probed: a non-empty `PI_ACP_PI_COMMAND` daemon-env override, else bare `pi`), `cliResolved` (whether the command resolved to an executable), `cliVersionOk` (`true` **iff** the probe confirmed the minimum version or newer), and `cliRequirement` (the pinned adapter's human-readable requirement, e.g. `"Pi CLI 0.81.0+"` for `pi-acp@0.0.34`; this value can change with the adapter pin). `cliResolvedPath` (absolute path) is present only when the CLI resolved, and `cliVersion` (the trimmed first line of `pi --version` output) only when the version probe succeeded — both **omitted (never null)** otherwise. A bare command name is resolved against the **spawn-time enhanced PATH** (npx's parent dir and `~/.augment/bin` ahead of the enriched/inherited dirs), so the probe reports the same binary the spawned pi-acp child would actually exec.
+- **`pi` CLI gating** — a **missing** or **confirmed-too-old** CLI marks the pi row unavailable (it never sets `gatedOff`, which stays reserved for the env-var/feature-code mechanism above): `installed` is forced to `false` and `unavailableReason` (optional string, pi row only) carries an actionable message naming the found version (when too old), the requirement, and the adapter pin (e.g. `"pi CLI not found — Pi CLI 0.81.0+ is required by pi-acp@0.0.34"`). `unavailableReason` is also emitted on the `cursor` row (below); it is not limited to pi. An **inconclusive** probe — spawn failure, timeout, unparseable `--version` output, or a relative separator-carrying `PI_ACP_PI_COMMAND` override that did not resolve from the daemon's CWD — is **permissive**: the daemon logs a WARN and does not gate, so `cliVersionOk` is `false` but `installed` is untouched and `unavailableReason` is omitted (a changed `--version` format never false-negatives the provider). Invariant for pi: `unavailableReason` present ⇒ `installed: false` and `cliVersionOk: false`. The same gate fails agent creation fast with a clear error (instead of a silent hang) when a Pi agent is spawned against a missing/too-old CLI.
+- **`cursor` CLI fields and gating** *(additive, [intent-hq/intentd#3073](https://github.com/intent-hq/intentd/pull/3073))* — when the `cursor` row is not `gatedOff` and a binary resolved (see the Cursor note under `host.providerAuthStatus` for the precedence), the daemon runs `<resolved> --version` on the binary a launch would exec (`providers.paths.cursor` honored) and folds in `cliCommand` (`"cursor-agent"`), `cliResolved` (`true`), `cliResolvedPath` (the resolved absolute path; unlike `resolvedPath` it is reported for an override too), and `cliVersion` (the trimmed first line of the `--version` output — the Cursor date-hash version such as `2026.11.05-86047df`, or the raw line otherwise) when the probe answered. The cursor row never carries `cliVersionOk`, `cliRequirement`, or the adapter-declared minimum fields. When `--version` reports the Grok agent host (`grok <x.y.z> …`) instead of a Cursor version, `installed` is forced to `false` and `unavailableReason` says so, naming `cursor-agent update --channel cursor` and `providers.paths.cursor` as fixes; spawning a Cursor agent against that binary fails fast with the same reason. A failed or unrecognized `--version` probe is **permissive** (a WARN is logged; `installed` is untouched and `unavailableReason` omitted), so a changed version format never takes the provider away. Invariant for cursor: `unavailableReason` present ⇒ `installed: false`. When nothing resolved, the row has `installed: false` and no `cli*` fields.
+- **`antigravity` CLI fields** *(additive)* — a non-gated `antigravity` row carries `cliCommand` (`"agy"`), `cliResolved` (`true` iff `installed`), `cliRequirement` (`"agy >=1.5.0"`), `cliVersionRange` (`">=1.5.0"`) and `cliMinimumVersion` (`"1.5.0"`, the first agy release with `agy acp`). When the display `cliVersion` parses, `cliVersionOk` says whether it meets the minimum; it is omitted for an unknown version. A confirmed-old agy is not gated: before the next Antigravity agent launch or model refresh, the daemon runs the CLI's own `agy update` once and checks the version again. Discovery never updates. **`cliUpdateError`** *(additive, optional string)* is present only while `cliVersionOk` is `false` and the last automatic update failed within its ten-minute retry pause; it carries the actionable launch error. Clients show it as the row's warning and suggest `agy update`.
 - `npx` reports the daemon's npx probe: `resolvedPath` is `null` when npx is not found; `version` is `null` when npx is missing **or** the version probe fails (a failed probe leaves `resolvedPath` set); `versionOk` is whether the resolved version meets the minimum requirement (`false` whenever `version` is `null`).
 
 ### Method aliases (0 total)
@@ -850,7 +926,7 @@ No entries remain in this alias catalog. Use `git.diffs` and `git.commits` for G
 Of these 6 method names, `browser.exec` and `host.openInEditor` are **client-callable triggers**: the daemon validates the envelope, then serves the request. `browser.exec`'s real work always happens on the connected frontend via a reverse RPC (synthetic `rev-<n>` request id) whose result is echoed back to the original caller. `host.openInEditor`'s real work happens on the daemon host on a local connection (no reverse RPC is dispatched, §5.14) and on the connected frontend via that same reverse RPC mechanism on a remote connection. These 2 method names are **dual-role**: they appear in the dispatchable method catalog AND are also issued daemon→client as reverse RPCs on remote connections. `host.openExternal`, `host.pickApplication`, `providers.setup.openLogin` and `desktop.control` are **daemon→client-only**: they are never dispatched client→server and do not appear in the dispatchable method catalog. On a remote connection the daemon is always the requester (synthetic `rev-<n>` id) and the connected client returns the result; on a local connection the daemon serves the `host.*` intents directly on the daemon host without a reverse dispatch (§5.14).
 
 - `browser.exec` — browser automation (Chrome DevTools) — §5.9 (dual-role). When the caller is a client connection the reverse RPC goes back on that same connection; when the caller is an **agent** (MCP `ws.browser.exec`) or a tab-addressed `browser.navigateTab` / `browser.closeTab` (§5.45), the daemon selects the target connection under the REV-2 rules in §5.9 (capability gate `capabilities.browserExec`, §5.17; workspace pin `workspace.setBrowserClient`, §5.1)
-- `desktop.control` — typed desktop preparation, startControl/endControl, lease renewal and action execution (§5.51; prepared, daemon→client only)
+- `desktop.control` — typed desktop preparation, startControl/endControl, lease renewal and action execution (§5.51; daemon→client only)
 - `host.openExternal` — open a URL in the default browser — §5.14 (daemon→client only)
 - `host.openInEditor` — open a file or directory in the user's editor — §5.14 (dual-role)
 - `host.pickApplication` — prompt the user to select an application — §5.14 (daemon→client only)
@@ -868,4 +944,4 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 
 ### §5.x subsection index
 
-The per-namespace subsections (§5.1–§5.55) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).
+The per-namespace subsections (§5.1–§5.57) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).

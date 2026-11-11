@@ -12,6 +12,23 @@ watch for a condition (CI results, file changes) without burning turns polling. 
 watching specifically, agents are steered to the centralized `ws.pr.monitor` instead —
 §5.42, v6.1 — since a hook's TTL expires while a PR sits blocked and a monitor's does
 not.)
+**API surface per run.** A hook has no long-lived MCP bridge: the daemon builds a
+fresh `ws.*` host for every run, including the schedule-time validation run, from the
+**live** `[agentFeatures]` settings at that moment, with the owner as caller and the
+owner's sub-agent status re-derived each run. A toggle change therefore reaches an
+existing hook at its next run, unlike an agent session, whose bridge keeps the
+surface captured at creation (§5.12 Settings). The one exception is
+`agentFeatures.secretRequests` (§5.56), which is always off in a hook run: hooks can
+neither request nor use the owner's secrets.
+
+**Remote agents.** An agent on a remote machine schedules, reads and cancels hooks
+through the [executor link](../workspace-routing.md#remote-agents-on-the-executor-link),
+and owns its hooks as a local agent does. The hook still runs on the backend: its
+code, its `ws.*` calls and its `ws.host.exec` run in the backend's runtime and see
+the backend's worktree, not the agent's checkout on the machine. A dispatch or
+eviction wakes the remote agent with an ordinary agent message, delivered as its
+next prompt.
+
 Per the §6.8 principle, **scheduling is not on the wire**: hooks are created only by
 agents via the `ws.hook.schedule` MCP binding (`{ name ≤ 50 chars, code, delayMs ≥
 10000 | cron | runAt, ttlMs?, perpetual? }` — exactly ONE schedule kind is required
@@ -58,7 +75,7 @@ delete cascade). The FE
 
 | Method | Params | Result |
 | --- | --- | --- |
-| hook.list | workspaceId (req), includeRetired? (bool, default `false`) | `{ hooks: (Hook \| HookSummary)[] }` — oldest first. By default the **active** hooks only (`scheduled` / `running`), each a full Hook (`code` included), so a default read is `{ hooks: Hook[] }`. With `includeRetired: true` the retired rows (`dispatched` / `evicted` / `cancelled` / `expired`) are listed too, each as a **HookSummary** — the light projection below with `code`, `lastState`, `lastLogs` omitted; every other Hook field kept (within v10.2, [intent-hq/intent#5307](https://github.com/intent-hq/intent/issues/5307) — see "Active-only default" below) |
+| hook.list | workspaceId (req), includeRetired? (bool, default `false`), limit? (1–200, default 100), cursor? (`boundedReads: 1`) | `{ hooks: (Hook \| HookSummary)[], nextCursor? }` — one page, oldest first (default 100 rows, max 200, ≤ 480,000 bytes; see "Pages" below). By default the **active** hooks only (`scheduled` / `running`), each a full Hook (`code` included), so a default read is `{ hooks: Hook[] }`. With `includeRetired: true` the retired rows (`dispatched` / `evicted` / `cancelled` / `expired`) are listed too, each as a **HookSummary** — the light projection below with `code`, `lastState`, `lastLogs` omitted; every other Hook field kept (within v10.2, [intent-hq/intent#5307](https://github.com/intent-hq/intent/issues/5307) — see "Active-only default" below) |
 | hook.cancel | workspaceId (req), hookId (req) | `{ ok: true, hook }` — the cancelled Hook; the wire path may cancel **any** hook in the workspace and the owning agent is woken with a cancellation notice (an owner-initiated `ws.hook.cancel` does not self-wake — see the ownership scoping below) |
 | hook.runNow | workspaceId (req), hookId (req) | `{ ok: true, hookId }` — ack only; the triggered run's outcome surfaces as `hook:*` events. The hook's inter-run timer resets after the run (a `cron` hook's next fire is recomputed from the expression; a `runAt` hook fires its one shot early and retires — schedule-kinds block below) |
 
@@ -137,6 +154,28 @@ full-row recovery path for a retired hook's `code` and is unchanged. The MCP bin
 takes the flag as `ws.hook.list({ includeRetired: true })`; a bare `ws.hook.list()` stays
 valid and is the active-only read. Active rows are byte-for-byte unchanged in both modes.
 
+**Pages (`boundedReads: 1`) — behaviour change.** Exact integer
+`server.capabilities.boundedReads: 1` in `client.hello` means this host pages its lists
+by default. Wire `hook.list` is then **always paged**: it accepts `limit?` (integer
+1–200, **default 100**) and `cursor?` (nonempty opaque string); other values fail
+`-32602`, and a request with neither returns the first page. Before this change the
+list was unpaged; a client that does not follow `nextCursor` now sees only the first
+page. A page
+holds at most `limit` rows and at most 480,000 bytes of row JSON, but always at
+least one row, so a reply stays under the 500 KiB read budget. A hook too big on its own
+drops its largest fields (usually `code`), largest first, until it fits: each becomes
+`<field>Omitted: true` plus `<field>Bytes` (a string's UTF-8 length, otherwise its JSON
+size). There is no wire read for an omitted field: agents read the hook whole with
+`ws.hook.get(hookId)`, which reads `code` too big for one reply in parts and joins them,
+while the app shows that the script is too large to display, with its `codeBytes` size.
+Rows keep the order above
+(oldest first, ties by `hookId`) and their shapes; `nextCursor` is present only while more
+rows follow. The cursor is bound to the workspace and `includeRetired`; reuse the same
+`includeRetired` with it. Clients that show every hook (the hook chip row, delete
+warnings) send `limit` and follow `nextCursor` until it is absent; this works without
+checking the capability, because older hosts ignore `limit`/`cursor` and return the
+whole list without `nextCursor`.
+
 **Schedule kinds: `cron` and `runAt`** (within v8.7 — additive Hook wire fields plus
 MCP-only schedule params, no method-catalog change;
 [intent-hq/intentd#1586](https://github.com/intent-hq/intentd/pull/1586)).
@@ -151,7 +190,11 @@ the next fire and the TTL are computed:
   (≥ 10 000), `ttlMs` clamped into `[10000, 86400000]` with the 24-hour default/cap.
 - **`cron`** is a recurring standard **5-field** cron expression (minute hour
   day-of-month month day-of-week — no seconds field), evaluated in **UTC**. Invalid or
-  six-field expressions are rejected at schedule time. The next fire is recomputed from
+  six-field expressions are rejected at schedule time, as is an expression longer than
+  **4 KiB** (4,096 UTF-8 bytes, measured before trimming), with `-32602` naming `cron` and
+  the limit. Hooks scheduled before that limit keep their stored expression and stay
+  readable. `name` keeps its 50-character limit and `code` has none (`ws.hook.get` joins
+  oversized code read in parts). The next fire is recomputed from
   the expression after **every** run — natural ticks, `hook.runNow`, and the perpetual
   dispatch re-arm alike — so a triggered early run never skews the cadence. An
   expression with no computable future occurrence at schedule time is rejected; one

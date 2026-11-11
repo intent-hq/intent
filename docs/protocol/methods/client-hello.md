@@ -33,18 +33,18 @@ hello completes. Initial hydration and reconnect/event-gap recovery remain requi
 A bundled daemon upgrade does not upgrade older remote hosts. This capability
 does not change experimental Multiplayer readiness.
 
-**Workspace guest roles (prepared).** Exact integer
+**Workspace guest roles.** Exact integer
 `server.capabilities.workspaceGuestRoles: 1`, also returned by
-`system.capabilities`, gates the complete [Participant/Manager contract](./multiplayer.md#workspace-guest-roles-prepared).
+`system.capabilities`, gates the complete [Participant/Manager contract](./multiplayer.md#workspace-guest-roles).
 It is support discovery, not caller authority. Guest Managers retain
 `canManage: false`; clients derive narrowly scoped controls from the current
 workspace role. Missing, malformed or unknown capability values hide role
 mutation controls. Refresh on each admitted connection; older remote hosts are
 not upgraded by installing a newer desktop client.
 
-**Submission correlation (prepared).**
+**Submission correlation.**
 `server.capabilities.submissionCorrelation: 1` gates the complete
-[optimistic submission contract](./agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension):
+[optimistic submission contract](./agents.md#submission-correlation-and-optimistic-display-additive-extension):
 optional queue `messageId`, full submission alias sets across replies/queue/delivery,
 per-source `recoverySources` for combined retries, and trustworthy live-row merge
 eligibility with false flags on draining overlays. Enable queue optimism only for exact integer
@@ -58,7 +58,7 @@ only when this capability is present; older daemons omit it. This is a server su
 flag, independent of the model's `agentFeatures.peerAgents` gate, and does not grant
 caller authority: workspace lifecycle permissions still apply.
 
-**PR workspace lookup (prepared).** `server.capabilities.prWorkspaceLookup: 1`
+**PR workspace lookup.** `server.capabilities.prWorkspaceLookup: 1`
 advertises [§5.1 `workspace.findByPullRequest`](./workspace.md#pull-request-workspace-lookup)
 and the PR-to-workspace link recording behind it. Clients offer the
 "Open in Original Workspace" link action only for exact integer `1`; older daemons
@@ -78,7 +78,7 @@ an unknown create option was
 honored just because creation succeeded. Gate lifecycle controls/options on this
 capability, independently of numeric version.
 
-**Worker observations (prepared additive extension).**
+**Worker observations (additive extension).**
 `server.capabilities.agentWorkers: 1` advertises the list/subscription/stop
 contract in [§5.5b](./agent-workers.md), not process liveness or exit evidence.
 Provider-session support is reported independently; older daemons omit this flag.
@@ -92,31 +92,135 @@ of `scriptLifecycle`. Without it, clients must not send readiness options or
 interpret successful creation/URL detection as proof of readiness. Scripts
 without a contract omit `ready` and `readiness` even when support is advertised.
 
-**Desktop control (prepared additive extension).**
+**Desktop control (additive extension; macOS and Windows clients).**
 `server.capabilities.desktopControl: 1` and the execution connection’s
 `capabilities.desktopControl: 1` gate [§5.51](./desktop.md) independently.
 Resolve the existing workspace primary before testing this capability; never
 choose another computer because the primary lacks support. The flag grants no
-permission and does not assert current native readiness. Current browser-only
-capability behavior below remains unchanged until this extension is implemented.
+permission and does not assert current native readiness. The browser capability
+behavior below is unchanged apart from §5.51's active-session browser routing rule.
 
-**Script run monitoring (prepared additive extension).**
-`server.capabilities.scriptMonitors: 1` advertises the entire
+**Secret requests (additive extension).** Exactly integer
+`server.capabilities.secretRequests: 1` advertises [§5.56](./secrets.md):
+secret-request resource blocks and the `secret.*` router methods. Clients render
+secret-request cards and call those methods only when it is present. The flag
+grants no permission and says nothing about the agent feature setting.
+
+**Agent Plugins (additive extension).** Exactly integer
+`server.capabilities.agentPlugins: 1` advertises [§5.57](./plugins.md): the
+`plugin.*` router methods and the loading of user-scope plugins into agent
+sessions. Clients show plugin management only when it is present. The flag grants
+no permission.
+
+**Capped message block reads (additive).** Exactly integer
+`server.capabilities.messageBlockPages: 1`, also returned by `system.capabilities`, advertises the
+[§5.5 capped and paged `agent.getMessageBlock` contract](./agents.md#55-agent) (`offset` /
+`maxBytes`, the `truncated` / `field` / `encoding` / `totalBytes` / `nextOffset` result fields, a
+480,000-byte cap on the served block) and the stored image block references accepted by
+`agent.editAndRegenerate`. Clients page large blocks and regenerate by reference only for exact
+integer `1`; older daemons omit it and serve every block whole.
+
+**Remote agent skills (additive).** Exactly integer
+`server.capabilities.remoteAgentSkills: 1`, also returned by `system.capabilities`,
+advertises the [§5.34 skills of a remote agent](./agent-aux.md#skills-of-a-remote-agent)
+contract: the `agentId` param of `skill.list` with its `stale` / `unavailable` result
+fields, `agentId` on `skills:changed`, and the `skill_unavailable` system notice. Clients send `agentId` only for exact integer
+`1`; older daemons omit it, and clients keep the workspace-only call.
+
+**Workspace labels (additive).** Exactly integer `server.capabilities.workspaceLabels: 1`,
+also returned by `system.capabilities`, advertises the
+[§5.1 workspace label contract](./workspace.md#workspace-labels): the optional
+`Workspace.label` field, the clearable `label` param on `workspace.update` and
+`changes.label` on `workspace:updated`. Unlabeled workspaces omit the field, so clients
+cannot detect support by presence; they offer label actions only for exact integer `1`,
+and older daemons omit it.
+
+**Workspace auto-archive opt-out (additive).** Exactly integer
+`server.capabilities.workspaceAutoArchiveOptOut: 1`, also returned by `system.capabilities`,
+advertises the [§5.1 auto-archive opt-out contract](./workspace.md#auto-archive-opt-out): the
+optional `Workspace.autoArchiveDisabled` field, the `autoArchiveDisabled` param on
+`workspace.update` and `changes.autoArchiveDisabled` on `workspace:updated`. Workspaces that
+have not opted out omit the field, so clients cannot detect support by presence; they offer
+the opt-out only for exact integer `1`, and older daemons omit it.
+
+**Bounded reads (behaviour change).** Exactly integer `server.capabilities.boundedReads: 1`,
+also returned by `system.capabilities`, says the daemon answers read methods with bounded
+defaults: a default page size and a maximum where a method takes a limit, and a 480,000-byte
+budget per reply, so every reply stays under the 500 KiB read payload budget. Each method's
+section names its defaults, maximums and the marker (`truncated`, `hasMore` or `nextToken`)
+it sets when it cuts. The defaults apply to every caller; clients that see the flag page
+the rest, and older daemons omit it and keep their unbounded defaults.
+
+**Script run monitoring (additive extension).**
+`server.capabilities.scriptMonitors` advertises the entire
 [§5.8a contract](./script-monitors.md): durable run identity, required one-shot
 TTL, optional single-line regex/line-count triggers, single-owner registration,
 guarded run cancellation and silent lifecycle
-cleanup including queued wakes. Independent of scriptLifecycle/scriptReadiness;
+cleanup including queued wakes. intentd advertises `scriptMonitors: 2`, the
+protocol-14 active-only replacement; `1` was the protocol-13 contract with
+terminal history. Independent of scriptLifecycle/scriptReadiness;
 absence means unavailable, not permission to infer support from version numbers.
 
-**Workspace discussions (prepared additive extension).**
+**Remote initial agent (additive).** Exact integer
+`server.capabilities.remoteInitialAgent: 1` means `workspace.create` accepts
+`initialAgent.placement` under the daemon-to-daemon
+[placement subset](./nodes.md#placement-subset). It is advertised only together with
+`remoteMachines: 1`. A backend with `remoteMachines: 1` and no `remoteInitialAgent`
+may ignore the field and start the initial agent locally, so clients offer a remote
+initial agent only when this flag is exactly `1`. It grants no caller authority.
+
+**Cloud machines (additive).** Exact integer
+`server.capabilities.cloudMachines: 1` means the backend implements the
+[cloud machines](./nodes.md#cloud-machines-e2b): the `cloudMachines.*` methods,
+the placement `target: "e2b"`, the `cloud` and `cloudStart` fields and the
+`cloudMachine:changed` event. It is advertised only together with
+`remoteMachines: 1`. Clients offer E2B only when it is exactly `1`; it grants no
+caller authority.
+
+**Named E2B entries (additive).** Exact integer
+`server.capabilities.cloudMachineEntries: 1` means the backend keeps several
+[named E2B entries](./nodes.md#named-e2b-entries): `cloudMachines.configure`
+takes `cloudMachineId`, `name` and `apiKeyFrom`, `cloudMachines.remove` takes
+`cloudMachineId`, and placement takes `target: "e2b"` with `cloudMachineId`.
+It is advertised only together with `cloudMachines: 1`. Clients send these
+members, and offer more than one entry, only when it is exactly `1`; it grants
+no caller authority.
+
+**Remote scripts (additive).** Exact integer `server.capabilities.remoteScripts: 1`
+means a remote agent's `ws.script.*` calls are forwarded and the scripts it starts run on
+its machine, listed in `machineRuns` on their rows ([§5.8](./scripts.md#scripts-of-remote-agents-remotescripts-1)).
+It is advertised only together with `remoteMachines: 1`. Clients show remote-script
+affordances only when it is exactly `1`; it grants no caller authority.
+
+**Remote machine models (additive, experimental).** Exact integer
+`server.capabilities.remoteMachineModels: 1` means the backend implements
+[`remoteMachines.models`](./nodes.md#machine-model-lookup). It is advertised only
+together with `remoteMachines: 1`. Clients and the agent binding
+call it only when it is exactly `1`; it grants no caller authority.
+
+**Remote machine claim (additive).** Exact integer
+`server.capabilities.remoteMachineClaim: 1` means the backend implements
+[`remoteMachines.claim`](./nodes.md#node-invites-and-claim), which adds a machine
+from an `intent://node` link. It is advertised only together with
+`remoteMachines: 1`. Clients accept `intent://node` links only when it is exactly
+`1`; it grants no caller authority.
+
+**Workspace discussions (additive extension).**
 Exactly integer `server.capabilities.discussionConversations: 1` advertises the
 [§5.55 contract](./multiplayer.md#555-workspace-discussions): conversation and
-recipient discovery, atomic creation with the first message, participant-gated
-history and delivery, and conversation-scoped typing. The same flag is returned
-by `system.capabilities`. Clients require this flag before sending private
-conversation IDs or recipient lists, because earlier single-discussion daemons
-may silently ignore unknown targeting fields. The flag grants no membership or
-participant access and does not enable the desktop Multiplayer Labs setting.
+recipient discovery, participant-gated history and delivery, and conversation-scoped
+typing. The same flag is returned by `system.capabilities`. Clients require it
+before sending non-default conversation IDs because earlier single-discussion
+daemons may ignore targeting fields. The flag grants no membership or participant
+access and does not enable the desktop Multiplayer Labs setting.
+Exactly integer `discussionManagement: 1` on both surfaces adds first-send
+`createConversation: true`, optional conversation names, Owner/Manager rename,
+Owner-only deletion (including default), and created/updated/deleted events.
+All new conversations include current workspace members; legacy private histories
+remain participant-scoped and read-only. Never silently drop the creation flag
+or redirect an unsupported operation to the default discussion. The flag also
+extends independently gated agent messaging, reactions and Stop/Retry to named
+workspace-wide conversations; it grants no access without an explicit agent grant.
 The separate exact integer `discussionMessageActions: 1` capability, advertised
 on hello and `system.capabilities`, gates same-conversation replies and
 per-viewer reaction aggregates. Never discard an unsupported reply target or
@@ -126,14 +230,15 @@ the five-choice picker, bounded immutable reactor snapshots, and explicitly
 granted agent reactions (§5.55). Missing or unknown versions do not enable them.
 Exactly integer `discussionAgentMessaging: 1`, also on both discovery surfaces,
 gates explicit `recipientAgentIds` on a message and agent-authored replies in the
-workspace-wide discussion. It grants no agent access by itself: the agent must
+workspace-wide discussions (named conversations additionally require
+`discussionManagement: 1`). It grants no agent access by itself: the agent must
 first be explicitly addressed in that conversation. Clients must not silently
 strip recipients when this flag is absent or unknown. Agents still cannot
 subscribe to discussion events, and private discussions remain human-only.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| client.hello | clientId?, connectionRole? *(prepared; see attachment contract below)*, name?, capabilities?, hostname? *(v9.9)*, prettyHostname? *(v9.9)*, deviceKind? *(v9.9)* | { clientId, connectionRole? *(prepared attachment acknowledgement only)*, protocolVersion, server: { locality, hasDisplay, osArch, version, buildCommit?, protocolVersion, capabilities } } |
+| client.hello | clientId?, connectionRole? *(prepared; see attachment contract below)*, name?, capabilities?, hostname? *(v9.9)*, prettyHostname? *(v9.9)*, deviceKind? *(v9.9)* | { clientId, connectionRole? *(prepared attachment acknowledgement only)*, protocolVersion, server: { locality, hasDisplay, osArch, version, buildCommit?, protocolVersion, daemonMode?, capabilities } } |
 | client.list *(v9.9)* | workspaceId? | { clients: [{ clientId, name?, hostname?, prettyHostname?, deviceKind?, capabilities, connections, transports, connectedAt }] } — the **live, hello'd** connections grouped by logical `clientId`; see the `client.list` block below |
 
 - **Global handshake.** `client.hello` does **not** require `workspaceId` (§3.6); it is the
@@ -145,6 +250,21 @@ subscribe to discussion events, and private discussions remain human-only.
   `clientId` is namespaced as `{principalId}:{presented}` — idempotent, so a client that persists
   the returned id re-hellos to the same identity — and a collaborator can only ever act as a
   client id inside its own namespace; the administrator, agents and the daemon keep the raw id.
+- **Superseded-id tab rehome.** A `clientId` carrying earlier namespace prefixes
+  (`{a}:{b}:{raw}`) still names the device that once hello'd as each shorter `:`-suffix
+  (`{b}:{raw}`, `{raw}`). On a successful hello the daemon moves the **open** browser tabs
+  (§5.45) hosted by such a suffix to the presented id and publishes `browser:tab-updated
+  { changes: { hostClientId, displayed?: null } }` for each, so a device whose id was
+  re-prefixed recovers its tabs ([intent-hq/intent#8045](https://github.com/intent-hq/intent/issues/8045)).
+  A suffix qualifies only when the caller currently holds browser-management authority
+  (the same host-role check as the `browser.*` methods; a collaborator must also manage the
+  browser in every workspace that suffix has open tabs in), the caller may already act as
+  it (the namespacing above would return it unchanged), it has no live connection (when liveness cannot be determined
+  nothing moves), and the move does not change who may act as the host: an id's namespace
+  owner is its head segment when that names a principal of this daemon, and a suffix moves
+  only when its namespace owner equals the presented id's (prefixes left by other
+  backends' principals add no one). Tombstoned rows stay with their old host. A failed
+  rehome is logged and never fails the hello.
 - **Connection → client mapping.** The daemon maps each live connection to its logical
   `clientId`; **multiple connections may share one `clientId`** (the same client reconnecting, or
   several windows of one app).
@@ -159,6 +279,10 @@ subscribe to discussion events, and private discussions remain human-only.
   surface version from [Protocol Version & Compatibility](../versioning.md)), and
   `capabilities` (feature-detection flags, e.g. `{ "liveState": true }` for the snapshot+delta
   channels of §6.9).
+- **`server.daemonMode`** (additive, docs first). `"regular"` or `"node"`: the mode of the
+  running daemon ([reported daemon mode](./nodes.md#reported-daemon-mode)). Older daemons omit
+  it; absence means unknown, so clients fall back to the `node-mode` refusal probe described
+  there. It grants no caller authority.
 - **`protocolVersion`.** The top-level `protocolVersion` is an explicit copy of
   `server.protocolVersion` so clients can version-check without digging into the `server` block
   (see [Protocol Version & Compatibility](../versioning.md)).
@@ -230,17 +354,17 @@ Ordinary hellos retain their existing profile-update behavior.
 
 #### GitLab checkout capability
 
-**Prepared additive contract, protocol 13.5.**
+**Additive contract, protocol 13.5.**
 `server.capabilities.gitlabCheckout: 1` announces the complete
 [pre-workspace project checkout contract](repository-checkout.md). Accept exactly
 integer `1` on the selected destination's original physical connection. The
-capability does not enable the GitLab experiment, grant host membership or prove
-that a configured account can access a project. A higher protocol version, the
+capability does not grant host membership or prove that a configured account can
+access a project. A higher protocol version, the
 existing repository resource/context capabilities, or a guest's collaboration
 identity cannot substitute for it.
 
 Require this same capability before sending `instanceBaseUrl` to the
-[prepared full-instance auth operations](integrations.md#full-instance-gitlab-authentication-prepared-v135),
+[full-instance auth operations](integrations.md#full-instance-gitlab-authentication-v135),
 including auth-status reads. An older parser may ignore an unknown field;
 request success alone cannot establish full-root support. Its historical
 bare-host behavior does not authorize a prefix-bearing instance.
@@ -248,31 +372,31 @@ bare-host behavior does not authorize a prefix-bearing instance.
 Capture before browsing and retain the original destination through pagination,
 warming, creation and release. Reconnect, host/auth/settings changes or
 retirement require a new capture; a stable client ID cannot transfer the old
-reference. See the [client lifecycle](../10-thin-client.md#gitlab-checkout-lifecycle-prepared).
+reference. See the [client lifecycle](../10-thin-client.md#gitlab-checkout-lifecycle).
 
 #### GitLab checkout owner-avatar capability
 
-**Prepared additive extension, protocol 13.7.**
+**Additive extension, protocol 13.7.**
 `server.capabilities.gitlabCheckoutOwnerAvatar: 1` allows an explicit
 `includeOwnerAvatar: true` on checkout capture. Require exactly integer `1` on
 the same original socket, in addition to `gitlabCheckout: 1`. Only opted-in
 captures may receive optional `ownerAvatarUrl` on project page/detail rows.
 Legacy captures keep their original shape, including on a newer daemon.
 Clients connected to older daemons omit the request member and retain image
-fallbacks. See the [owner-avatar contract](repository-checkout.md#owner-avatar-extension-prepared-protocol-137).
+fallbacks. See the [owner-avatar contract](repository-checkout.md#owner-avatar-extension-protocol-137).
 
 #### GitLab checkout configuration capability
 
-**Prepared additive extension, protocol 13.8.**
+**Additive extension, protocol 13.8.**
 `server.capabilities.gitlabCheckoutRepoConfig: 1`, alongside `gitlabCheckout: 1`,
 allows the fixed pre-workspace configuration read on the original socket.
 Require exactly integer `1` for both capabilities. A numeric protocol version,
 method catalog entry or successful unrelated call is insufficient. See the
-[configuration contract](repository-checkout.md#selected-repository-configuration-prepared-protocol-138).
+[configuration contract](repository-checkout.md#selected-repository-configuration-protocol-138).
 
 #### Repository context capability
 
-**Prepared additive contract.** `server.capabilities.repositoryContext: 1`
+**Additive contract.** `server.capabilities.repositoryContext: 1`
 announces the complete context-read lifecycle. Feature-detect the capability
 on the physical connection captured for the
 [repository context lifecycle](workspace.md#repository-context).
@@ -286,7 +410,7 @@ frontend clients implement the feature.
 
 #### Repository selection capability
 
-**Prepared additive contract.** `server.capabilities.repositorySelection: 1`
+**Additive contract.** `server.capabilities.repositorySelection: 1`
 is separate from `repositoryContext: 1`.
 Feature-detect it on the original confirmed physical connection used for the
 [selection editing operation](workspace.md#repository-selection).
@@ -303,13 +427,13 @@ specifies required integration behavior, not an already shipped frontend flow.
 
 #### Native review capability
 
-**Prepared additive contract.** `server.capabilities.nativeReview: 1` announces
+**Additive contract.** `server.capabilities.nativeReview: 1` announces
 qualified native review preparation, execution and receipts. Feature-detect it on
 the original confirmed physical connection before the
 [qualified native review workflow](change-tracking.md#native-review-preparation-and-receipts).
 It announces the contract, not current host/workspace permission, configured
-provider readiness or unconditional admission. Prepared facts and the public
-capability cannot replace fresh server checks.
+provider readiness or unconditional admission. Facts returned by preparation and
+the public capability cannot replace fresh server checks.
 
 Install that connection's [private retirement handler](../06-events.md#private-native-review-retirement)
 before preparation, and retain the same connection through confirmation,
@@ -322,7 +446,7 @@ provider guarantee. Capabilities, rather than an older experimental version numb
 
 #### Commit companion capability
 
-**Prepared additive contract.** `server.capabilities.nativeReviewCompanion: 1`
+**Additive contract.** `server.capabilities.nativeReviewCompanion: 1`
 is advertised alongside `nativeReview: 1`.
 Check the companion capability on the original confirmed physical connection
 **before** a [marked commit preparation](change-tracking.md#commit-companion-preparation).
@@ -340,7 +464,7 @@ guarantee. The companion does not add method or notification names.
 
 #### Resource-read capability
 
-**Prepared additive contract.** The hello response advertises
+**Additive contract.** The hello response advertises
 `result.server.capabilities.repositoryResourceRead: 1` for the
 [explicit GitLab resource-read contract](repository-resources.md). Documentation alone does not establish availability. Detect support on the original physical connection before
 capture and install that connection's [private retirement handler](../06-events.md#private-resource-read-retirement)
@@ -356,22 +480,22 @@ native review capabilities do not imply this explicit-resource capability.
 These are client integration obligations, not a shipped frontend guarantee;
 documentation alone does not establish deployed availability.
 
-The separate [prepared project-page and discussion extension](repository-resources.md#prepared-project-pages-and-discussions)
+The separate [project-page and discussion extension](repository-resources.md#project-pages-and-discussions)
 is additive in protocol 15.1 and uses `repositoryResourcePages: 1`. Keep
 `repositoryResourceRead: 1` unchanged for
 detail-only clients; it does not imply support for the new operations. Detect
 the page capability on the same physical connection that supplies the read
-lifetime. Its prepared `context` is either an explicitly authorized workspace or
+lifetime. Its `context` is either an explicitly authorized workspace or
 the original durable Host Owner; Home cannot borrow a workspace or infer the
 owner role from checkout access. A capability cannot authorize another instance
 or account, or supply a fallback after denial. A numeric protocol version or
 catalog entry does not replace the exact capability check.
 
-#### GitLab child Git policy capability (prepared)
+#### GitLab child Git policy capability
 
 The protocol 15.1 capability `result.server.capabilities.gitlabChildGitPolicy: 1`
 gates the separate
-[owner-only policy control](settings.md#prepared-gitlab-child-git-credential-policy).
+[owner-only policy control](settings.md#gitlab-child-git-credential-policy).
 An absent or unsupported value means the control is unsupported, not disabled.
 Detect it on the connection whose policy binding will be read and changed.
 Neither this capability nor `gitlabCheckout` grants the owner role, enables the
@@ -559,7 +683,7 @@ and whole-envelope wake/history replay gating. Neither side advertises support y
 
 ### Generic event stream recovery capability
 
-**Prepared additive contract.** `server.capabilities.eventStreamRecovery: 1`
+**Additive contract.** `server.capabilities.eventStreamRecovery: 1`
 (exact integer) advertises the complete [generic loss contract](../event-stream-recovery.md).
 It also guarantees `events.fence` raw-bus/bulk-lane boundaries for recovery reads.
 Each recovering `events.subscribe` lease must separately request and acknowledge
@@ -571,4 +695,11 @@ readiness. It is advertised only after the transport and membership-loss cases p
 Exactly integer `discussionAgentActivity: 1`, on hello and `system.capabilities`,
 adds request-correlated discussion activity, immutable selected mention spans,
 and human `discussion.stopAgent` / `discussion.retryAgent` controls. This is a
-prepared Multiplayer Labs extension; see [the activity contract](./multiplayer.md#correlated-agent-activity-and-controls-prepared).
+Multiplayer Labs extension; see [the activity contract](./multiplayer.md#correlated-agent-activity-and-controls).
+
+Exactly integer `discussionPrincipalMentions: 1`, on hello and
+`system.capabilities`, enables explicit human discussion notification identities.
+See [person mentions](./multiplayer.md#explicit-person-mentions) for
+selected UTF-16 spans, membership checks, retry identity, and import behavior.
+Clients must preserve selected drafts on absent or unknown capability values.
+This remains an unreleased Multiplayer Labs feature and grants no access.

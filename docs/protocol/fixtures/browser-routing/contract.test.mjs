@@ -1,0 +1,160 @@
+// Browser-routing (REV-2, §5.9) contract checks. A reference resolver recomputes
+// every case's expectation from its inputs, and every case must quote its rule's
+// text in files-terminal-browser.md. intentd's copy is checked by the shared
+// fixture-copy tool (`node scripts/browser-routing-contract.mjs check`, revision
+// provenance), and intentd's routing unit tests run the same cases against the
+// real code, so a rule change that skips the docs, the fixture or the daemon
+// fails a check.
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import test from 'node:test';
+import { COPY } from '../../../../scripts/browser-routing-contract.mjs';
+
+const fixtureUrl = new URL('./routing.json', import.meta.url);
+const fixture = JSON.parse(await readFile(fixtureUrl, 'utf8'));
+const docs = await readFile(new URL('../../methods/files-terminal-browser.md', import.meta.url), 'utf8');
+const ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
+
+const normalise = text => text.replace(/^> ?/gm, '').replace(/\s+/g, ' ').trim();
+
+// The REV-2 block, from its heading to the next block heading, and its
+// numbered rules: rules[n] is the text of rule n, ending at the next rule or
+// at the end of the list's paragraph.
+function rev2Rules(markdown) {
+  const start = markdown.indexOf('**Agent-initiated `browser.exec` — REV-2 target selection');
+  const end = markdown.indexOf('**Registry-backed agent actions', start);
+  assert.ok(start >= 0 && end > start, 'REV-2 block not found in files-terminal-browser.md');
+  const raw = markdown.slice(start, end);
+  const list = raw.split(/\n>\s*\n/).find(p => /^> 1\. \*\*/m.test(p));
+  assert.ok(list, 'REV-2 numbered rules not found');
+  const text = normalise(list);
+  const marks = [...text.matchAll(/(?:^| )(\d+)\. \*\*/g)].map(m => ({ n: Number(m[1]), at: m.index }));
+  const rules = {};
+  marks.forEach((m, i) => {
+    rules[m.n] = text.slice(m.at, i + 1 < marks.length ? marks[i + 1].at : text.length);
+  });
+  return { block: normalise(raw), rules };
+}
+
+// Reference implementation of the documented rules.
+function workspaceTarget({ chief, pin, desktopSession, tabs, recentFocus = [] }) {
+  if (chief) return { kind: 'default' };
+  if (pin) return { kind: 'pinned', clientId: pin };
+  if (desktopSession) return { kind: 'client', clientId: desktopSession };
+  const claimed = tabs.find(t => t.owner);
+  if (claimed) return { kind: 'client', clientId: claimed.host };
+  return recentFocus.length > 0 ? { kind: 'preferred', clientIds: recentFocus } : { kind: 'default' };
+}
+
+function resolveConnection({ connections, drops }, target) {
+  const dropped = new Set(drops);
+  const eligible = connections.filter(c => !dropped.has(c.id) && c.hello && c.browserExec);
+  let clientId = target.clientId;
+  if (target.kind === 'preferred') {
+    clientId = target.clientIds.find(id => eligible.some(c => c.client === id));
+  }
+  if (target.kind === 'default' || (target.kind === 'preferred' && clientId === undefined)) {
+    if (eligible.length === 0) return { error: { kind: 'no-client' } };
+    clientId = eligible[0].client;
+  }
+  const newest = eligible.filter(c => c.client === clientId).at(-1);
+  if (!newest) return { error: { kind: 'client-offline', clientId, pinned: target.kind === 'pinned' } };
+  return { connection: newest.id };
+}
+
+function expectFor(c) {
+  const target = workspaceTarget(c.workspace);
+  return { target, ...resolveConnection(c, target) };
+}
+
+const { block, rules } = rev2Rules(docs);
+
+test('fixture shape', () => {
+  assert.equal(fixture.schema, 'browser-routing/v1');
+  assert.ok(Number.isInteger(fixture.revision) && fixture.revision > 0, 'revision is a positive integer');
+  const ids = fixture.cases.map(c => c.id);
+  assert.equal(new Set(ids).size, ids.length, 'case ids are unique');
+  for (const c of fixture.cases) {
+    const ws = c.workspace;
+    const keys = Object.keys(ws).filter(k => k !== 'recentFocus').sort();
+    assert.deepEqual(keys, ['chief', 'desktopSession', 'pin', 'tabs'], c.id);
+    if ('recentFocus' in ws) {
+      assert.ok(Array.isArray(ws.recentFocus) && ws.recentFocus.length > 0, `${c.id}: recentFocus is a non-empty array when present`);
+      assert.equal(new Set(ws.recentFocus).size, ws.recentFocus.length, `${c.id}: recentFocus lists each client once`);
+    }
+    if (ws.chief) assert.equal(ws.pin, null, `${c.id}: the Chief workspace cannot be pinned`);
+    for (const t of ws.tabs) assert.deepEqual(Object.keys(t).sort(), ['host', 'owner', 'tabId'], c.id);
+    const tabIds = ws.tabs.map(t => t.tabId);
+    assert.deepEqual(tabIds, [...tabIds].sort(), `${c.id}: tabs are listed oldest first in ascending tabId order`);
+    const conns = c.connections.map(x => x.id);
+    assert.equal(new Set(conns).size, conns.length, `${c.id}: connection ids are unique`);
+    for (const x of c.connections) {
+      assert.deepEqual(Object.keys(x).sort(), ['browserExec', 'client', 'hello', 'id'], `${c.id}/${x.id}`);
+      if (!x.hello) assert.ok(x.client === null && x.browserExec === false, `${c.id}/${x.id}: un-hello'd`);
+      else assert.equal(typeof x.client, 'string', `${c.id}/${x.id}`);
+    }
+    for (const d of c.drops) assert.ok(conns.includes(d), `${c.id}: drop ${d} is a connection`);
+    if (c.helloOrder) {
+      const hellod = c.connections.filter(x => x.hello).map(x => x.id);
+      assert.deepEqual([...c.helloOrder].sort(), hellod.sort(), `${c.id}: helloOrder lists every hello'd connection`);
+    }
+    assert.ok(['default', 'client', 'pinned', 'preferred'].includes(c.expect.target.kind), c.id);
+    assert.ok(('connection' in c.expect) !== ('error' in c.expect), `${c.id}: exactly one of connection / error`);
+    if (c.expect.error) assert.ok(['no-client', 'client-offline'].includes(c.expect.error.kind), c.id);
+  }
+});
+
+for (const c of fixture.cases) {
+  test(`reference resolver: ${c.id}`, () => {
+    assert.deepEqual(c.expect, expectFor(c));
+  });
+}
+
+test('every case quotes its rule in REV-2', () => {
+  for (const c of fixture.cases) {
+    assert.ok(rules[c.rule], `${c.id}: REV-2 has no rule ${c.rule}`);
+    assert.ok(rules[c.rule].includes(normalise(c.docText)), `${c.id}: rule ${c.rule} does not say: ${c.docText}`);
+  }
+});
+
+test('every REV-2 rule has a case, and the edge cases stay covered', () => {
+  for (const n of Object.keys(rules)) {
+    assert.ok(fixture.cases.some(c => c.rule === Number(n)), `REV-2 rule ${n} has no fixture case`);
+  }
+  const has = (what, pred) => assert.ok(fixture.cases.some(pred), `no ${what} case`);
+  has('unpinned', c => !c.workspace.pin && !c.workspace.chief);
+  has('pinned', c => c.workspace.pin);
+  has('claimed-tab', c => c.workspace.tabs.some(t => t.owner) && !c.workspace.pin && !c.workspace.desktopSession);
+  has('user-tab', c => c.workspace.tabs.some(t => !t.owner));
+  has('Chief', c => c.workspace.chief);
+  has('desktop-session', c => c.workspace.desktopSession && !c.workspace.chief);
+  has('dropped-connection', c => c.drops.length > 0);
+  has('hello-order', c => c.helloOrder);
+  has('recent-focus', c => c.expect.target.kind === 'preferred' && c.expect.connection);
+  has('recent-focus fallback', c => {
+    const chosen = c.connections.find(x => x.id === c.expect.connection);
+    return c.expect.target.kind === 'preferred' && chosen && !c.expect.target.clientIds.includes(chosen.client);
+  });
+  has('recent-focus under a claimed tab', c => c.workspace.recentFocus && c.workspace.tabs.some(t => t.owner));
+  has('Chief with recent focus', c => c.workspace.chief && c.workspace.recentFocus);
+  has('stale-connection', c => {
+    const chosen = c.connections.find(x => x.id === c.expect.connection);
+    return chosen && c.connections.findIndex(x => x.client === chosen.client) < c.connections.indexOf(chosen);
+  });
+  for (const kind of ['no-client', 'client-offline']) has(kind, c => c.expect.error?.kind === kind);
+  has('pinned offline', c => c.expect.error?.pinned === true);
+});
+
+test('REV-2 links the fixture', () => {
+  assert.ok(block.includes('fixtures/browser-routing/routing.json'));
+});
+
+// Docs lead the pin: a docs change bumps `revision` and lands first, so the
+// copy may lag behind (a warning); a copy ahead of the docs, one that differs
+// at the same revision, or one intentd references but no longer has, fails.
+test("intentd's copy follows the shared fixture-copy revision rules", () => {
+  const { report, warnings } = COPY.checkCopies(ROOT);
+  for (const line of warnings) console.warn(`::warning::${line}`);
+  assert.match(report, /^browser-routing: canonical valid at revision \d+/);
+});

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 from itertools import product
@@ -98,8 +99,11 @@ class PlannedRunHarness:
         self.root = root
         self.runs = list(runs)
         self.listing = None
+        self.ignored_listing = None
         self.selection_index = 0
         self.list_commands = []
+        self.ignored_list_commands = []
+        self.relist_pending = False
         self.run_commands = []
         self.run_environments = []
         self.stdout = io.StringIO()
@@ -108,8 +112,22 @@ class PlannedRunHarness:
         if command[:2] == ["cargo", "metadata"]:
             return json.dumps({"target_directory": str(self.root / "target")})
         assert command[:3] == ["cargo", "nextest", "list"], command
+        if self.relist_pending:
+            # The --run-ignored all re-listing; by default the filter matched
+            # every test the selection listing skipped as ignored.
+            self.relist_pending = False
+            self.ignored_list_commands.append(command)
+            if self.ignored_listing is not None:
+                return self.ignored_listing
+            data = json.loads(self.listing)
+            for suite in data["rust-suites"].values():
+                for metadata in suite["testcases"].values():
+                    if metadata.get("filter-match", {}).get("reason") == "ignored":
+                        metadata["filter-match"] = {"status": "matches"}
+            return json.dumps(data)
         self.list_commands.append(command)
         if self.listing is not None:
+            self.relist_pending = gate.ignored_filter_pending(self.listing)
             return self.listing
         # These transport/policy tests use tiny canned children. Give each one
         # its actual inventory; coverage tests supply independent explicit lists.
@@ -119,6 +137,8 @@ class PlannedRunHarness:
             return LISTING
         suites = {}
         for line in rows:
+            if not line.startswith("{"):
+                continue
             item = json.loads(line)
             if item.get("type") == "test":
                 alias, _, name = item["name"].partition("$")
@@ -148,7 +168,11 @@ class PlannedRunHarness:
 
     def execute(self, args):
         self.selection_index = 0
-        with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+        # The storage policy logs (and may sweep) when the machine running the
+        # tests has little free disk, leaking host state into exact stdout
+        # expectations (a CI runner with 86 GiB free did); test_gate_storage covers it.
+        with mock.patch.object(gate, "apply_storage_policy"), mock.patch.object(
+            gate, "tree_key", return_value=KEY), mock.patch.object(
             gate, "run", side_effect=self.fake_run
         ), mock.patch.object(
             gate.subprocess, "Popen", side_effect=self.fake_popen
@@ -551,11 +575,14 @@ class CallbackPreflightTests(unittest.TestCase):
                 record.mkdir(parents=True)
                 (record / "complete").write_text("complete\n")
                 (record / "passed.jsonl").write_text(gate.record_line("alpha::one", "passes", "ok"))
-                # A temporary HOME has no verified cache, so nothing is auto-prepared.
+                # A temporary HOME has no verified cache; its source build fails offline here.
+                failed = subprocess.CompletedProcess([], 1, "", None)
                 with mock.patch.dict(os.environ, {"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE": "",
                                                   "HOME": str(root / "home")}), mock.patch.object(
                     gate, "isolated_output_args", return_value=[]
-                ) as cargo, mock.patch.object(gate, "tree_key", return_value=KEY) as key:
+                ) as cargo, mock.patch.object(gate, "tree_key", return_value=KEY) as key, mock.patch.object(
+                    gate.subprocess, "run", return_value=failed
+                ), contextlib.redirect_stderr(io.StringIO()):
                     with self.assertRaisesRegex(RuntimeError, "INTENT_ACP_CALLBACK_ADAPTER_FIXTURE") as refused:
                         gate.run_nextest(make_args(root, plan=plans, resume="1"))
                     self.assertIn("CONTRIBUTING.md#linux-x64-callback-gates", str(refused.exception))
@@ -612,6 +639,7 @@ class CallbackValidatorTests(unittest.TestCase):
         self.patch(self.node_patch)
         self.patch(mock.patch.dict(os.environ, {
             gate.CALLBACK_FIXTURE_ENV: str(self.fixture.payload), "NODE_OPTIONS": "", "COMPACT": "0",
+            "NVM_DIR": str(self.root / "no-nvm"),
         }))
         self.patch(mock.patch.object(self.validator.urllib.request, "urlopen",
                                      side_effect=AssertionError("preflight attempted network")))
@@ -642,7 +670,8 @@ class CallbackValidatorTests(unittest.TestCase):
         with mock.patch.object(self.validator, "platform_check",
                                side_effect=lambda: (seen.append(os.environ.get("NODE_OPTIONS")), check())[1]):
             self.assertEqual(self.identity()["root"], str(self.fixture.payload))
-        self.assertEqual(seen, [None])
+        self.assertTrue(seen)
+        self.assertEqual(set(seen), {None})
         self.assertEqual(os.environ["NODE_OPTIONS"], injected)
 
     def test_fixture_runs_drop_host_node_options(self):
@@ -672,7 +701,8 @@ class CallbackValidatorTests(unittest.TestCase):
         # The verifier sanitizes loader paths; the version stub needs no Python runtime.
         self.node.write_text("#!/bin/sh\nprintf '%s\\n' 'v24.21.0'\n")
         self.node.chmod(0o755)
-        env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"]}
+        env = {**os.environ, "PATH": str(self.root) + os.pathsep + "/usr/bin:/bin",
+               "NVM_DIR": str(self.root / "no-nvm")}
         command = [sys.executable, "-S", "-B", str(SCRIPT),
                    "--check-callback-fixture", str(self.component)]
         valid = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
@@ -682,7 +712,7 @@ class CallbackValidatorTests(unittest.TestCase):
         invalid = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
         self.assertEqual(invalid.returncode, 2, invalid.stderr)
         self.assertIn("Node version mismatch", invalid.stderr)
-        self.assertIn("No downloads or repairs were attempted", invalid.stderr)
+        self.assertIn("no installed Node v24.21.0 was found", invalid.stderr)
 
     def test_relative_fixture_reaches_test_children_as_absolute_path(self):
         os.environ[gate.CALLBACK_FIXTURE_ENV] = "../original"
@@ -749,7 +779,7 @@ class CallbackValidatorTests(unittest.TestCase):
         # Keep imports by the child harness outside both source worktrees.
         runner = self.root / "runner"
         runner.mkdir()
-        for name in ("resumable_nextest.py", "test_resumable_nextest.py"):
+        for name in ("resumable_nextest.py", "gate_storage.py", "test_resumable_nextest.py"):
             shutil.copy(SCRIPT.parent / name, runner)
         shutil.copytree(SCRIPT.parent / "_vendor", runner / "_vendor",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -866,6 +896,135 @@ with mock.patch.object(gate, 'transfer_fixture_identity', return_value=None):
         ):
             with self.assertRaisesRegex(RuntimeError, "Node version mismatch"):
                 self.identity()
+
+    def fake_node(self, directory, version):
+        directory.mkdir(parents=True, exist_ok=True)
+        node = directory / "node"
+        node.write_text(f"#!/bin/sh\nprintf '%s\\n' '{version}'\n")
+        node.chmod(0o755)
+        return node
+
+    def child_env(self):
+        env, _identity, _transfer, _config = gate.prepare_test_env(
+            self.root, self.component, [["-p", "intent-acp", "--lib"]], "test")
+        return env
+
+    def test_installed_pinned_node_goes_first_on_path_for_checks_and_test_runs(self):
+        self.node_patch.stop()
+        required = self.fixture.descriptor["tools"]["node"]
+        wrong = self.fake_node(self.root / "active", "v24.19.0")
+        pinned = self.fake_node(self.root / "nvm/versions/node" / required / "bin", required)
+        path = f"{wrong.parent}{os.pathsep}/usr/bin:/bin"
+        os.environ.update({"PATH": path, "NVM_DIR": str(self.root / "nvm")})
+        with tempfile.TemporaryFile("w+") as stderr, contextlib.redirect_stderr(stderr):
+            env = self.child_env()
+            identity = self.identity()
+            stderr.seek(0)
+            output = stderr.read()
+        self.assertEqual(env["PATH"].split(os.pathsep)[0], str(pinned.parent))
+        self.assertEqual(shutil.which("node", path=env["PATH"]), str(pinned))
+        self.assertIn(f"using Node {required} from {pinned.parent}", output)
+        self.assertEqual(os.environ["PATH"], path)
+        self.assertEqual(identity["node"], str(pinned.resolve()))
+
+    def test_active_pinned_node_leaves_path_unchanged(self):
+        self.node_patch.stop()
+        required = self.fixture.descriptor["tools"]["node"]
+        active = self.fake_node(self.root / "active", required)
+        self.fake_node(self.root / "nvm/versions/node" / required / "bin", required)
+        path = f"{active.parent}{os.pathsep}/usr/bin:/bin"
+        os.environ.update({"PATH": path, "NVM_DIR": str(self.root / "nvm")})
+        with tempfile.TemporaryFile("w+") as stderr, contextlib.redirect_stderr(stderr):
+            self.assertEqual(self.child_env()["PATH"], path)
+            self.assertEqual(self.identity()["node"], str(active.resolve()))
+
+    def test_pinned_node_is_used_when_no_node_is_on_path(self):
+        self.node_patch.stop()
+        required = self.fixture.descriptor["tools"]["node"]
+        pinned = self.fake_node(self.root / "nvm/versions/node" / required / "bin", required)
+        empty = self.root / "empty-bin"
+        empty.mkdir()
+        os.environ.update({"PATH": str(empty), "NVM_DIR": str(self.root / "nvm")})
+        with tempfile.TemporaryFile("w+") as stderr, contextlib.redirect_stderr(stderr):
+            identity = self.identity()
+        self.assertEqual(identity["node"], str(pinned.resolve()))
+        self.assertEqual(os.environ["PATH"], str(empty))
+
+    def test_without_installed_pinned_node_the_mismatch_still_refuses(self):
+        self.node_patch.stop()
+        wrong = self.fake_node(self.root / "active", "v24.19.0")
+        os.environ.update({"PATH": f"{wrong.parent}{os.pathsep}/usr/bin:/bin",
+                           "NVM_DIR": str(self.root / "no-nvm")})
+        with self.assertRaisesRegex(RuntimeError, "Node version mismatch.*no installed Node"):
+            self.identity()
+
+    def missing_cache_home(self):
+        (self.component / "scripts").mkdir(exist_ok=True)
+        (self.component / "scripts/prepare-acp-callback-fixture.py").write_text("")
+        os.environ.update({gate.CALLBACK_FIXTURE_ENV: "", "HOME": str(self.root / "home")})
+        return self.root / "home/.cache/intent/acp-callback-fixture"
+
+    def test_missing_cache_is_built_from_verified_source_once(self):
+        cache = self.missing_cache_home()
+        calls = []
+
+        def build(command, **kwargs):
+            calls.append((command, kwargs))
+            return subprocess.CompletedProcess(command, 0, f"{self.fixture.payload}\n", "")
+
+        stderr = io.StringIO()
+        with mock.patch.object(gate, "run_callback_build", side_effect=build), \
+                contextlib.redirect_stderr(stderr):
+            identity = self.identity()
+        self.assertEqual(identity["root"], str(self.fixture.payload))
+        self.assertEqual(len(calls), 1)
+        command, kwargs = calls[0]
+        self.assertEqual(command[-3:], ["--build-from-source", "--cache-dir", str(cache)])
+        self.assertNotIn("NODE_OPTIONS", kwargs["env"])
+        self.assertIn("building it from verified source", stderr.getvalue())
+
+    def test_failed_source_build_is_one_refusal_naming_its_log(self):
+        cache = self.missing_cache_home()
+
+        def build(command, **kwargs):
+            kwargs["stderr"].write("{\"event\": \"command-start\"}\ncallback fixture: download failed\n")
+            kwargs["stderr"].flush()
+            return subprocess.CompletedProcess(command, 1, "", None)
+
+        with mock.patch.object(gate, "run_callback_build", side_effect=build), \
+                mock.patch.object(gate, "isolated_output_args") as cargo, \
+                contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, "could not be built from source: download failed") as refused:
+                gate.run_nextest(make_args(self.root, plan=["-p intent-acp --lib"]))
+            cargo.assert_not_called()
+        logs = list(cache.parent.glob("acp-callback-fixture-build-*.log"))
+        self.assertEqual(len(logs), 1)
+        self.assertIn(str(logs[0]), str(refused.exception))
+        self.assertIn("download failed", logs[0].read_text())
+
+    def test_fixture_env_mode_prints_fixture_and_node_directory(self):
+        stdout = io.StringIO()
+        with mock.patch.object(sys, "argv", [str(SCRIPT), "--callback-fixture-env", str(self.component)]), \
+                contextlib.redirect_stdout(stdout):
+            self.assertEqual(gate.main(), 0)
+        self.assertEqual(stdout.getvalue().splitlines(),
+                         [str(self.fixture.payload), str(self.node.parent)])
+        self.node.write_text("#!/bin/sh\n")
+        self.node.chmod(0o755)
+        stdout = io.StringIO()
+        with mock.patch.dict(os.environ, {"PATH": f"{self.node.parent}{os.pathsep}/usr/bin:/bin"}), \
+                mock.patch.object(sys, "argv", [str(SCRIPT), "--callback-fixture-env", str(self.component)]), \
+                contextlib.redirect_stdout(stdout):
+            self.assertEqual(gate.main(), 0)
+        # The active Node is already the verified one: PATH stays as it is.
+        self.assertEqual(stdout.getvalue().split("\n"), [str(self.fixture.payload), "", ""])
+        stdout = io.StringIO()
+        with mock.patch.object(self.validator.sys, "platform", "darwin"), \
+                mock.patch.object(sys, "argv", [str(SCRIPT), "--callback-fixture-env", str(self.component)]), \
+                contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(gate.main(), 0)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("callback fixture tests will fail", stderr.getvalue())
 
     def test_unsupported_host_points_to_linux_recipe_before_cargo_or_resume(self):
         # Diagnostic coverage through the real launcher/platform check, not a
@@ -1465,6 +1624,308 @@ class ResumableNextestTests(unittest.TestCase):
                 {("alpha::one", "passes"), ("alpha::one", "fails"), ("other", "elsewhere")},
             )
 
+    @staticmethod
+    def _filtered_listing(testcases):
+        return json.dumps({"rust-suites": {"alpha::one": {
+            "package-name": "alpha", "binary-name": "one", "binary-id": "alpha::one",
+            "testcases": testcases}}})
+
+    def test_fresh_skipped_only_selection_passes_with_warning(self):
+        # Regression: a branch changing only an all-#[ignore] test file failed a
+        # fresh run with nextest's exit 4 ("no tests to run") while CI passed it.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            # Mirrors cargo-nextest 0.9.143 for an ignored-only selection: the
+            # binary still runs, reporting the skipped test in its suite summary.
+            lines = [
+                suite_event("started", test_count=1),
+                event("started", "alpha::one$skipped"),
+                suite_event("ok", passed=0, failed=0, ignored=1, measured=0, filtered_out=0),
+            ]
+            harness = PlannedRunHarness(root, [(lines, 0)])
+            harness.listing = self._filtered_listing({
+                "skipped": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}},
+                "unrelated": {"ignored": False, "filter-match": {"status": "mismatch", "reason": "expression"}},
+            })
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(harness.execute(make_args(root)), 0)
+            self.assertEqual(harness.run_commands[0][-2:], ["--no-tests", "warn"])
+            self.assertIn("[test-changed] WARNING: selection 1 matched only skipped/ignored tests (1); "
+                          "passed with no tests run", stderr.getvalue())
+
+            run_dir = root / "cache" / KEY
+            record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            self.assertTrue((record_dir / "complete").is_file())
+            attempt = latest_attempt(record_dir)
+            proof = json.loads((attempt / "coverage.json").read_text())
+            self.assertTrue(proof["complete"], proof["errors"])
+            self.assertEqual(proof["categories"]["ignored"], [["alpha::one", "skipped"]])
+            self.assertEqual(proof["categories"]["executed-passed"], [])
+            self.assertEqual(gate.load_passed(run_dir / "passed.jsonl"), set())
+
+            # The saved receipt validates against its verified listing; a dropped
+            # or altered empty-run policy is rejected.
+            receipt = json.loads((attempt / "run.json").read_text())
+            result = receipt["results"][0]
+            members = gate.receipt_inventories(attempt, receipt)[0]
+            gate.validate_result_config(attempt, receipt, result, set(), members)
+            for command in (result["command"][:-2], [*result["command"][:-1], "pass"]):
+                with self.assertRaisesRegex(ValueError, "saved command disagrees"):
+                    gate.validate_result_config(attempt, receipt, dict(result, command=command), set(), members)
+
+    def test_failed_skipped_only_selection_does_not_claim_a_pass(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = PlannedRunHarness(root, [([], 101)])
+            harness.listing = self._filtered_listing({
+                "skipped": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}},
+            })
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(harness.execute(make_args(root)), 101)
+            self.assertEqual(harness.run_commands[0][-2:], ["--no-tests", "warn"])
+            self.assertNotIn("WARNING", stderr.getvalue())
+
+    def test_fresh_empty_selection_still_fails_closed(self):
+        # Nothing matched at all usually means a selection or change-map bug:
+        # keep nextest's default so the run fails instead of passing vacuously.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = PlannedRunHarness(root, [([], 4)])
+            harness.listing = self._filtered_listing({
+                "unrelated": {"ignored": False, "filter-match": {"status": "mismatch", "reason": "expression"}},
+                "skipped": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "expression"}},
+            })
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(harness.execute(make_args(root)), 4)
+            self.assertNotIn("--no-tests", harness.run_commands[0])
+            self.assertNotIn("WARNING", stderr.getvalue())
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            self.assertFalse((record_dir / "complete").exists())
+
+    def test_filter_matching_nothing_fails_despite_ignored_tests(self):
+        # Regression (intentd#2941): nextest reports every #[ignore] test as
+        # mismatch reason "ignored" before evaluating the filter, so a filter
+        # matching nothing passed as "matched only skipped/ignored tests".
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            # Mirrors cargo-nextest 0.9.143 for a filter matching nothing: it
+            # still announces each ignored test, then exits 4 (no tests to run).
+            lines = [
+                suite_event("started", test_count=1),
+                event("started", "alpha::one$skipped"),
+                suite_event("ok", passed=0, failed=0, ignored=1, measured=0, filtered_out=0),
+            ]
+            harness = PlannedRunHarness(root, [(lines, 4)])
+            harness.listing = self._filtered_listing({
+                "skipped": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}},
+                "unrelated": {"ignored": False, "filter-match": {"status": "mismatch", "reason": "expression"}},
+            })
+            harness.ignored_listing = self._filtered_listing({
+                "skipped": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "expression"}},
+                "unrelated": {"ignored": False, "filter-match": {"status": "mismatch", "reason": "expression"}},
+            })
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(harness.execute(make_args(root)), 4)
+            self.assertEqual(len(harness.ignored_list_commands), 1)
+            relist = harness.ignored_list_commands[0]
+            self.assertEqual(relist[3:8], ["-p", "alpha", "--test", "one", "--run-ignored"])
+            self.assertEqual(relist[8], "all")
+            self.assertNotIn("--no-tests", harness.run_commands[0])
+            self.assertNotIn("WARNING", stderr.getvalue())
+            self.assertIn("[test-changed] ERROR: selection 1 matched no tests: -p alpha --test one; "
+                          "check the filter", stderr.getvalue())
+
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            self.assertFalse((record_dir / "complete").exists())
+            attempt = latest_attempt(record_dir)
+            self.assertTrue((attempt / "listing-1-run-ignored.json").is_file())
+            receipt = json.loads((attempt / "run.json").read_text())
+            members = gate.receipt_inventories(attempt, receipt)[0]
+            self.assertFalse(any(meta["active"] for meta in members.values()))
+            gate.validate_result_config(attempt, receipt, receipt["results"][0], set(), members)
+            proof = json.loads((attempt / "coverage.json").read_text())
+            self.assertFalse(proof["complete"])
+            self.assertEqual(proof["errors"], [])
+            self.assertEqual(proof["active"], [])
+
+    def test_filter_matching_a_real_ignored_test_still_warns_and_passes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lines = [
+                suite_event("started", test_count=1),
+                event("started", "alpha::one$skipped"),
+                event("started", "alpha::one$other_ignored"),
+                suite_event("ok", passed=0, failed=0, ignored=2, measured=0, filtered_out=0),
+            ]
+            harness = PlannedRunHarness(root, [(lines, 0)])
+            harness.listing = self._filtered_listing({
+                "skipped": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}},
+                "other_ignored": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}},
+            })
+            harness.ignored_listing = self._filtered_listing({
+                "skipped": {"ignored": True, "filter-match": {"status": "matches"}},
+                "other_ignored": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "expression"}},
+            })
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(harness.execute(make_args(root)), 0)
+            self.assertEqual(harness.run_commands[0][-2:], ["--no-tests", "warn"])
+            self.assertIn("matched only skipped/ignored tests (1); passed with no tests run", stderr.getvalue())
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            self.assertTrue((record_dir / "complete").is_file())
+            attempt = latest_attempt(record_dir)
+            proof = json.loads((attempt / "coverage.json").read_text())
+            self.assertTrue(proof["complete"], proof["errors"])
+            self.assertEqual(proof["active"], [["alpha::one", "skipped"]])
+            self.assertEqual(proof["categories"]["ignored"], [["alpha::one", "skipped"]])
+
+    def test_unmatched_ignored_test_cannot_report_an_outcome(self):
+        # Announcements of unmatched ignored tests are tolerated, but a pass or
+        # failure reported for one is not evidence for the selection.
+        for outcome, expected in (("ignored", 0), ("ok", 2), ("failed", 2)):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                lines = [
+                    suite_event("started", test_count=2),
+                    event("started", "alpha::one$skipped"),
+                    event(outcome, "alpha::one$skipped"),
+                    event("started", "alpha::one$passes"),
+                    event("ok", "alpha::one$passes"),
+                    suite_event("ok", passed=1, failed=0, ignored=1, measured=0, filtered_out=0),
+                ]
+                harness = PlannedRunHarness(root, [(lines, 0)])
+                harness.listing = self._filtered_listing({
+                    "skipped": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}},
+                    "passes": {"ignored": False, "filter-match": {"status": "matches"}},
+                })
+                harness.ignored_listing = self._filtered_listing({
+                    "skipped": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "expression"}},
+                    "passes": {"ignored": False, "filter-match": {"status": "matches"}},
+                })
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(harness.execute(make_args(root)), expected)
+                attempt = latest_attempt(root / "cache" / KEY / "changed" /
+                                         gate.plan_key(gate.split_plans(["-p alpha --test one"])))
+                proof = json.loads((attempt / "coverage.json").read_text())
+                self.assertEqual(proof["active"], [["alpha::one", "passes"]])
+                self.assertEqual(proof["complete"], expected == 0, proof["errors"])
+                if expected == 0:
+                    self.assertEqual(proof["categories"]["executed-passed"], [["alpha::one", "passes"]])
+                    self.assertEqual(proof["categories"]["ignored"], [])
+
+    def test_listing_without_ignored_reason_is_not_relisted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = PlannedRunHarness(root, [([], 4)])
+            harness.listing = self._filtered_listing({
+                "unrelated": {"ignored": False, "filter-match": {"status": "mismatch", "reason": "expression"}},
+            })
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(harness.execute(make_args(root)), 4)
+            self.assertEqual(harness.ignored_list_commands, [])
+
+    def test_run_ignored_selection_replaces_existing_policy(self):
+        self.assertEqual(gate.run_ignored_selection(["-E", "test(=a)"]), ["-E", "test(=a)", "--run-ignored", "all"])
+        self.assertEqual(gate.run_ignored_selection(["--run-ignored", "only", "-E", "x"]),
+                         ["-E", "x", "--run-ignored", "all"])
+        self.assertEqual(gate.run_ignored_selection(["--run-ignored=only", "-E", "x"]),
+                         ["-E", "x", "--run-ignored", "all"])
+
+    def test_inventory_counts_ignored_tests_only_when_the_filter_matches(self):
+        listing = self._filtered_listing({
+            "hit": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}},
+            "miss": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}},
+        })
+        members, _ = gate.inventory(listing, {("alpha::one", "hit")})
+        self.assertEqual({i for i, m in members.items() if m["active"]}, {("alpha::one", "hit")})
+        self.assertTrue(gate.skipped_only(members))
+        nothing, _ = gate.inventory(listing, set())
+        self.assertFalse(any(m["active"] for m in nothing.values()))
+        self.assertEqual(gate.no_tests_args(set(), nothing), [])
+        # Legacy receipts (no re-listing) keep their original reading.
+        legacy, _ = gate.inventory(listing)
+        self.assertTrue(all(m["active"] for m in legacy.values()))
+
+    def test_resumed_empty_selection_fails_unless_it_reuses_its_own_passes(self):
+        # Regression: a sibling selection's reused pass gave a matched-nothing
+        # selection `--no-tests pass`, so a resumed run passed it vacuously.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            seed = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(seed.execute(make_args(root, resume="1")), 0)
+
+            plans = ["-p alpha --test one", "-p beta --test two"]
+            listings = {
+                "alpha": json.dumps({"rust-suites": {"alpha::one": {
+                    "package-name": "alpha", "binary-name": "one", "binary-id": "alpha::one",
+                    "testcases": {"passes": {"ignored": False, "filter-match": {"status": "matches"}}}}}}),
+                "beta": json.dumps({"rust-suites": {"beta::two": {
+                    "package-name": "beta", "binary-name": "two", "binary-id": "beta::two",
+                    "testcases": {"unrelated": {"ignored": False, "filter-match": {
+                        "status": "mismatch", "reason": "expression"}}}}}}),
+            }
+            harness = PlannedRunHarness(root, [([], 0), ([], 0)])
+            original_run = harness.fake_run
+
+            def fake_run(command, cwd, env=None):
+                if command[:3] == ["cargo", "nextest", "list"]:
+                    harness.list_commands.append(command)
+                    return listings[command[command.index("-p") + 1]]
+                return original_run(command, cwd, env)
+
+            def fake_popen(command, **kwargs):
+                # nextest exits 4 for an empty run unless --no-tests relaxes it.
+                harness.run_commands.append(command)
+                harness.runs.pop(0)
+                empty_ok = command[-2:] in (["--no-tests", "pass"], ["--no-tests", "warn"])
+                return FakeProcess([], 0 if empty_ok else 4)
+
+            harness.fake_run = fake_run
+            harness.fake_popen = fake_popen
+            self.assertEqual(harness.execute(make_args(root, plan=plans, resume="1")), 4)
+            self.assertEqual(len(harness.run_commands), 2)
+            self.assertEqual(harness.run_commands[0][-2:], ["--no-tests", "pass"])
+            self.assertNotIn("--no-tests", harness.run_commands[1])
+
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(plans))
+            self.assertFalse((record_dir / "complete").exists())
+            attempt = latest_attempt(record_dir)
+            receipt = json.loads((attempt / "run.json").read_text())
+            resumed = gate.identity_set(receipt["resumed_tests"])
+            self.assertEqual(resumed, {("alpha::one", "passes")})
+            inventories = gate.receipt_inventories(attempt, receipt)
+            for result in receipt["results"]:
+                gate.validate_result_config(attempt, receipt, result, resumed,
+                                            inventories[result["selection_index"] - 1])
+            # A saved command that relaxes the empty selection is rejected.
+            empty = receipt["results"][1]
+            legacy = dict(empty, command=[*empty["command"], "--no-tests", "pass"])
+            with self.assertRaisesRegex(ValueError, "saved command disagrees"):
+                gate.validate_result_config(attempt, receipt, legacy, resumed, inventories[1])
+
+    def test_skipped_only_policy_requires_matched_tests(self):
+        skipped = {"active": True, "skipped": True}
+        runnable = {"active": True, "skipped": False}
+        unmatched = {"active": False, "skipped": False}
+        self.assertTrue(gate.skipped_only({"a": skipped, "b": unmatched}))
+        self.assertFalse(gate.skipped_only({}))
+        self.assertFalse(gate.skipped_only({"b": unmatched}))
+        self.assertFalse(gate.skipped_only({"a": skipped, "c": runnable}))
+        self.assertEqual(gate.no_tests_args(set(), {"a": skipped}), ["--no-tests", "warn"])
+        self.assertEqual(gate.no_tests_args(set(), {"b": unmatched}), [])
+        # Only passes reused by this selection's runnable members relax the policy.
+        self.assertEqual(gate.no_tests_args({("x", "y")}, {"a": skipped}), ["--no-tests", "warn"])
+        self.assertEqual(gate.no_tests_args({("x", "y")}, {"b": unmatched}), [])
+        self.assertEqual(gate.no_tests_args({"b"}, {"b": unmatched}), [])
+        self.assertEqual(gate.no_tests_args({"a"}, {"a": skipped}), ["--no-tests", "warn"])
+        self.assertEqual(gate.no_tests_args({"c"}, {"b": unmatched, "c": runnable}), ["--no-tests", "pass"])
+        # A selection that runs real tests but reused none keeps nextest's default.
+        self.assertEqual(gate.no_tests_args({"a"}, {"c": runnable}), [])
+
     def test_planned_complete_marker_short_circuits_unless_forced(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1510,6 +1971,34 @@ class ResumableNextestTests(unittest.TestCase):
             self.assertEqual(
                 gate.load_passed(run_dir / "passed.jsonl"), {("alpha::one", "passes")}
             )
+
+    def test_terminal_output_omits_raw_json_events_but_keeps_them_on_disk(self):
+        # Agents pipe a noisy gate through `| tail`, which hides its exit code
+        # (two failing runs looked green). The events file keeps every line.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lines = [
+                event("ok", "alpha::one$passes"),
+                suite_event("failed", passed=1, failed=1, ignored=0),
+                "not json from the child\n",
+                event("failed", "alpha::one$fails"),
+            ]
+            harness = PlannedRunHarness(root, [(lines, 100)])
+            self.assertEqual(harness.execute(make_args(root)), 100)
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            raw = [line for line in harness.output_lines if line.lstrip().startswith("{")]
+            self.assertEqual(raw, [], harness.output_lines)
+            self.assertIn("not json from the child", harness.output_lines)
+            self.assertEqual(
+                harness.output_lines[-2:],
+                [
+                    "[test-changed] summary: 1 passed, 1 failed, 0 skipped/ignored, 0 resumed "
+                    "(tests already passed for this tree); "
+                    "test time limits x1 (INTENTD_TEST_TIMEOUT_MULTIPLIER unset)",
+                    f"[test-changed] record: {latest_attempt(record_dir)}",
+                ],
+            )
+            self.assertEqual((latest_attempt(record_dir) / "events-1.jsonl").read_text(), "".join(lines))
 
     def test_no_fail_fast_flag_is_forwarded_only_when_enabled(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1913,8 +2402,6 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
                 harness.output_lines[2:],
                 [
                     "[test-intentd] no passed-test record for this tree; running the complete suite",
-                    event("ok", "alpha::one$passes").rstrip("\n"),
-                    event("ignored", "alpha::one$skipped").rstrip("\n"),
                     summary,
                     f"[test-intentd] record: {latest_attempt(run_dir)}",
                 ],
@@ -2430,11 +2917,13 @@ class ResumeSelectionTests(unittest.TestCase):
                 resumed = set(map(tuple, receipt['resumed_tests']))
                 receipt['receipt_schema'] = 3
                 with self.assertRaisesRegex(ValueError, 'config disagrees'):
-                    gate.validate_result_config(completed, receipt, receipt['results'][0], resumed)
+                    gate.validate_result_config(completed, receipt, receipt['results'][0], resumed,
+                                                gate.receipt_inventories(completed, receipt)[0])
                 receipt['receipt_schema'] = schema
                 receipt['results'][0]['command'].extend(['-E', gate.remaining_filter(resumed)])
                 with self.assertRaisesRegex(ValueError, 'command disagrees'):
-                    gate.validate_result_config(completed, receipt, receipt['results'][0], resumed)
+                    gate.validate_result_config(completed, receipt, receipt['results'][0], resumed,
+                                                gate.receipt_inventories(completed, receipt)[0])
 
 
 class ProjectDefaultFilterTests(unittest.TestCase):
@@ -2991,7 +3480,7 @@ class FilterSelectionTests(unittest.TestCase):
     def test_unset_fixture_help_lists_test_select_among_preparing_targets(self):
         with tempfile.TemporaryDirectory() as temporary:
             help_text = gate.callback_setup_help(Path(temporary))
-        self.assertIn("make test, test-changed, test-select and gate prepare", help_text)
+        self.assertIn("make test, test-changed, test-select, gate, coverage-all and", help_text)
 
 
 class TransferFixtureSelectionTests(unittest.TestCase):
@@ -3917,7 +4406,7 @@ class CapturedNextestTests(unittest.TestCase):
             listings = iter(fixtures)
             original_run = harness.fake_run
             def run(command, cwd, env=None):
-                if command[:3] == ['cargo', 'nextest', 'list']:
+                if command[:3] == ['cargo', 'nextest', 'list'] and not harness.relist_pending:
                     harness.listing = next(listings)['listing']
                 return original_run(command, cwd, env)
             harness.fake_run = run
@@ -4289,6 +4778,245 @@ class TimeoutMultiplierTests(unittest.TestCase):
                 self.assertIn(summary.rstrip("\n"), harness.output_lines)
                 self.assertEqual(json.loads((attempt / "run.json").read_text())["test_timeout_multiplier"], setting)
                 self.assertEqual({env.get(name) for env in harness.run_environments}, {setting})
+
+
+
+OLD = "0" * 16
+NEW = "1" * 16
+
+
+class StaleExecutableTests(unittest.TestCase):
+    """A gate keeps only the newest build of each listed test executable."""
+
+    def gate_root(self, root):
+        owner = hashlib.sha256(os.fsencode((root / "intentd").resolve())).hexdigest()
+        return root / "target" / "intent-gates" / owner
+
+    def output_args(self, gate_root, build_root=None):
+        build = json.dumps(str(build_root or gate_root))
+        return ["--target-dir", str(gate_root), "--config", f"build.build-dir={build}"]
+
+    def unit(self, profile, package, name, digest, kind="test-integration-test", body=b"x" * 64):
+        deps = profile / "deps"
+        deps.mkdir(parents=True, exist_ok=True)
+        (profile / ".cargo-lock").touch()
+        fingerprint = profile / ".fingerprint" / f"{package}-{digest}"
+        fingerprint.mkdir(parents=True, exist_ok=True)
+        target = name.replace("_", "-") if kind == "bin" else name
+        (fingerprint / f"{kind}-{target}").write_text("0")
+        (fingerprint / f"{kind}-{target}.json").write_text("{}")
+        (fingerprint / f"dep-{kind}-{target}").write_text("")
+        executable = deps / f"{name}-{digest}"
+        executable.write_bytes(body)
+        executable.chmod(0o755)
+        (deps / f"{name}-{digest}.d").write_text(f"{executable}: src/lib.rs\n")
+        return executable
+
+    def listing(self, *paths):
+        suites = {}
+        for path in paths:
+            name = path.name.rsplit("-", 1)[0]
+            suites[f"alpha::{name}"] = {
+                "package-name": "alpha", "binary-name": name, "binary-id": f"alpha::{name}",
+                "kind": "test", "binary-path": str(path), "testcases": {},
+            }
+        return json.dumps({"rust-suites": suites})
+
+    def prune(self, output_args, *paths, open_paths=frozenset()):
+        out = io.StringIO()
+        with mock.patch.object(gate, "open_paths", return_value=set(map(str, open_paths))), \
+                contextlib.redirect_stdout(out):
+            freed = gate.prune_stale_executables(output_args, [self.listing(*paths)], None, "gate")
+        return freed, out.getvalue()
+
+    def test_superseded_test_executables_and_companions_are_removed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            gate_root = self.gate_root(root)
+            profile = gate_root / "debug"
+            stale = self.unit(profile, "alpha", "one", OLD)
+            (stale.parent / f"one-{OLD}.dwp").write_text("dwarf")
+            (stale.parent / f"one-{OLD}.dSYM" / "Contents").mkdir(parents=True)
+            current = self.unit(profile, "alpha", "one", NEW)
+            unlisted = self.unit(profile, "alpha", "other", "3" * 16)
+            freed, output = self.prune(self.output_args(gate_root), current)
+            self.assertFalse(stale.exists())
+            for suffix in (".d", ".dwp", ".dSYM"):
+                self.assertFalse((stale.parent / f"one-{OLD}{suffix}").exists(), suffix)
+            self.assertTrue(current.exists())
+            self.assertTrue((current.parent / f"one-{NEW}.d").exists())
+            self.assertTrue(unlisted.exists())
+            self.assertEqual(freed, 64 + len(f"{stale}: src/lib.rs\n") + len("dwarf"))
+            self.assertIn("removed 1 superseded test executable", output)
+
+    def test_separate_build_dir_is_pruned_inside_its_owned_child(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            gate_root = self.gate_root(root)
+            build_root = root / "build" / "intent-gates" / gate_root.name
+            stale = self.unit(build_root / "debug", "alpha", "one", OLD)
+            current = self.unit(build_root / "debug", "alpha", "one", NEW)
+            gate_root.mkdir(parents=True)
+            self.prune(self.output_args(gate_root, build_root), current)
+            self.assertFalse(stale.exists())
+            self.assertTrue(current.exists())
+
+    def test_non_test_units_with_the_same_name_are_kept(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile = self.gate_root(root) / "debug"
+            real_binary = self.unit(profile, "alpha", "two_bin", OLD, kind="bin")
+            unknown = profile / "deps" / f"two_bin-{'2' * 16}"
+            unknown.write_bytes(b"no fingerprint")
+            current = self.unit(profile, "alpha", "two_bin", NEW, kind="test-bin")
+            self.prune(self.output_args(self.gate_root(root)), current)
+            self.assertTrue(real_binary.exists())
+            self.assertTrue(unknown.exists())
+
+    def test_hardlinked_or_open_stale_executables_are_kept(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile = self.gate_root(root) / "debug"
+            linked = self.unit(profile, "alpha", "one", OLD)
+            os.link(linked, profile / "one-copy")
+            running = self.unit(profile, "alpha", "two", OLD)
+            current = [self.unit(profile, "alpha", "one", NEW), self.unit(profile, "alpha", "two", NEW)]
+            self.prune(self.output_args(self.gate_root(root)), *current, open_paths={running})
+            self.assertTrue(linked.exists())
+            self.assertTrue(running.exists())
+
+    @unittest.skipUnless(Path("/proc/self/fd").is_dir(), "needs /proc")
+    def test_proc_scan_sees_files_this_process_has_open(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "held"
+            path.write_text("x")
+            with path.open() as handle:
+                self.assertIn(str(path.resolve()), gate.open_paths([path]))
+            del handle
+
+    def test_nothing_is_removed_when_open_files_cannot_be_checked(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile = self.gate_root(root) / "debug"
+            stale = self.unit(profile, "alpha", "one", OLD)
+            current = self.unit(profile, "alpha", "one", NEW)
+            out = io.StringIO()
+            with mock.patch.object(gate, "open_paths", return_value=None), contextlib.redirect_stdout(out):
+                self.assertEqual(gate.prune_stale_executables(
+                    self.output_args(self.gate_root(root)), [self.listing(current)], None, "gate"), 0)
+            self.assertTrue(stale.exists())
+            self.assertIn("cannot check which files are open", out.getvalue())
+
+    def test_held_cargo_lock_or_another_gate_skips_pruning(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            gate_root = self.gate_root(root)
+            profile = gate_root / "debug"
+            stale = self.unit(profile, "alpha", "one", OLD)
+            current = self.unit(profile, "alpha", "one", NEW)
+            with (profile / ".cargo-lock").open("a") as cargo_lock:
+                fcntl.flock(cargo_lock, fcntl.LOCK_EX)
+                _, output = self.prune(self.output_args(gate_root), current)
+            self.assertTrue(stale.exists())
+            self.assertIn("Cargo build lock", output)
+            other_gate = gate.acquire_gate_lock(self.output_args(gate_root))
+            try:
+                _, output = self.prune(self.output_args(gate_root), current)
+            finally:
+                os.close(other_gate)
+            self.assertTrue(stale.exists())
+            self.assertIn("another gate", output)
+            self.prune(self.output_args(gate_root), current)
+            self.assertFalse(stale.exists())
+
+    def test_executables_outside_the_owned_gate_folder_are_never_touched(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            normal = root / "target" / "debug"
+            stale = self.unit(normal, "alpha", "one", OLD)
+            current = self.unit(normal, "alpha", "one", NEW)
+            gate_root = self.gate_root(root)
+            gate_root.mkdir(parents=True)
+            self.assertEqual(self.prune(self.output_args(gate_root), current)[0], 0)
+            self.assertEqual(self.prune(self.output_args(root / "target"), current)[0], 0)
+            self.assertEqual(self.prune([], current)[0], 0)
+            self.assertTrue(stale.exists())
+
+    def gate_run(self, root, plan, setup=None, pruning=None):
+        harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+        profile = self.gate_root(root) / "debug"
+        oldest = self.unit(profile, "alpha", "one", OLD)
+        previous = self.unit(profile, "alpha", "one", "2" * 16)
+        os.utime(oldest, (1, 1))
+        current = self.unit(profile, "alpha", "one", NEW)
+        listing = json.loads(LISTING)
+        listing["rust-suites"]["alpha::one"].update(kind="test", **{"binary-path": str(current)})
+        listing["rust-suites"]["alpha::one"]["testcases"] = {"passes": {}}
+        harness.listing = json.dumps(listing)
+        args = make_args(root, plan=plan, label=gate.DEFAULT_LABEL) if plan is None else make_args(root, plan=plan)
+        stderr = io.StringIO()
+        with mock.patch.object(gate, "transfer_fixture_identity", return_value=None), \
+                mock.patch.object(gate, "callback_fixture_identity", return_value=None), \
+                mock.patch.object(gate, "open_paths", return_value=set()), \
+                contextlib.ExitStack() as stack, contextlib.redirect_stderr(stderr):
+            if pruning is not None:
+                stack.enter_context(mock.patch.object(gate, "prune_stale_executables", side_effect=pruning))
+            if setup is not None:
+                stack.enter_context(setup)
+            status = harness.execute(args)
+        return status, harness, stderr.getvalue(), (oldest, previous, current)
+
+    def test_whole_workspace_gate_run_removes_every_stale_copy(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            status, harness, _, (oldest, previous, current) = self.gate_run(Path(temporary), None)
+            self.assertEqual(status, 0)
+            self.assertFalse(oldest.exists())
+            self.assertFalse(previous.exists())
+            self.assertTrue(current.exists())
+            self.assertFalse(any("ERROR" in line for line in harness.output_lines), harness.output_lines)
+
+    def test_package_scoped_gate_run_keeps_the_newest_other_build(self):
+        # -p selections resolve features differently from --workspace, so the
+        # full suite's build of the same target must survive a test-changed run.
+        with tempfile.TemporaryDirectory() as temporary:
+            status, _, _, (oldest, previous, current) = self.gate_run(Path(temporary), ["-p alpha --test one"])
+            self.assertEqual(status, 0)
+            self.assertFalse(oldest.exists())
+            self.assertTrue(previous.exists())
+            self.assertTrue(current.exists())
+        self.assertTrue(gate.whole_workspace([["--workspace", "-E", "test(x)"]]))
+        self.assertFalse(gate.whole_workspace([["--workspace", "-p", "alpha"]]))
+        self.assertFalse(gate.whole_workspace([["--workspace"], ["--package=alpha", "--workspace"]]))
+
+    def test_pruning_failure_or_interrupt_never_changes_the_recorded_run(self):
+        for failure in (RuntimeError("symlink loop"), KeyboardInterrupt(), gate.Terminated("SIGTERM")):
+            with self.subTest(failure=type(failure).__name__), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                status, harness, stderr, (oldest, _, _) = self.gate_run(root, None, pruning=failure)
+                self.assertEqual(status, 0)
+                self.assertTrue(oldest.exists())
+                self.assertIn("stale executables kept", stderr)
+                self.assertTrue(any(line.startswith(f"[{gate.DEFAULT_LABEL}] record: ") for line in harness.output_lines))
+                attempt = latest_attempt(root / "cache" / KEY)
+                receipt = json.loads((attempt / "run.json").read_text())
+                self.assertEqual(receipt["exit_code"], 0)
+                self.assertIsNotNone(receipt["finished_at"])
+                self.assertTrue((root / "cache" / KEY / "complete").is_file())
+
+    def test_unusable_gate_folder_means_no_lock_and_no_pruning(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            blocker = root / "target" / "intent-gates"
+            blocker.parent.mkdir(parents=True)
+            blocker.write_text("not a directory")
+            self.assertIsNone(gate.acquire_gate_lock(self.output_args(blocker / ("a" * 64))))
+            failing = mock.patch.object(gate, "acquire_gate_lock", return_value=None)
+            (root / "elsewhere").mkdir()
+            status, _, _, (oldest, previous, _) = self.gate_run(root / "elsewhere", None, setup=failing)
+            self.assertEqual(status, 0)
+            self.assertTrue(oldest.exists())
+            self.assertTrue(previous.exists())
 
 
 if __name__ == "__main__":

@@ -77,6 +77,7 @@ jobs:
                 "cargo:" \
                 "Rust toolchain:" \
                 "cargo-nextest:" \
+                "cargo-shear:" \
                 "Node:" \
                 "Corepack:" \
                 "frontend package manager:" \
@@ -85,4 +86,64 @@ jobs:
                 "jq:"; do
                 grep -F "[ok]       $prefix" check.log
               done
+              grep -F "[optional] xvfb-run: installed" check.log
+            '
+
+  # Runs the real .intent/config.json setupScript (scripts/workspace-setup.sh)
+  # as root on a minimal Debian image with only git, as a fresh Intent node
+  # (an E2B sandbox) has: no make, curl, compiler or Rust. Setup must install
+  # them, leave cargo + clippy/rustfmt + cargo-nextest + cargo-sweep usable,
+  # and be a no-op on a second run. scripts/workspace-setup.test.sh covers the
+  # non-root and no-network branches hermetically.
+  workspace-setup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select workspace setup changes
+        id: select
+        env:
+          EVENT: ${{ github.event_name }}
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+          QUEUE_HEAD: ${{ github.event.merge_group.head_sha }}
+        run: |
+          set -euo pipefail
+          selected=true
+          if [ "$EVENT" = merge_group ]; then
+            [[ "$QUEUE_BASE" =~ ^[0-9a-f]{40}$ ]]
+            test "$(git rev-parse HEAD)" = "$QUEUE_HEAD"
+            changed=$(mktemp)
+            git diff --name-only "$QUEUE_BASE" HEAD -- .intent/config.json scripts/workspace-setup.sh scripts/workspace-setup.test.sh scripts/retry.sh Makefile .gitmodules packages/intentd packages/cloudlands-fe .github/workflows/bootstrap-install.yml > "$changed"
+            if [ ! -s "$changed" ]; then selected=false; fi
+            rm "$changed"
+          fi
+          echo "selected=$selected" >> "$GITHUB_OUTPUT"
+      - name: Extract the setupScript
+        if: steps.select.outputs.selected == 'true'
+        run: python3 -c 'import json; print(json.load(open(".intent/config.json"))["setupScript"])' > "$RUNNER_TEMP/setup-script.sh"
+      - name: Run workspace setup in clean Debian
+        if: steps.select.outputs.selected == 'true'
+        run: |
+          sudo -n docker run --rm --init \
+            --env CI=true \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/source,readonly" \
+            --mount "type=bind,source=$RUNNER_TEMP/setup-script.sh,target=/setup-script.sh,readonly" \
+            debian:bookworm-slim bash -euxo pipefail -c '
+              apt-get update
+              apt-get install -y --no-install-recommends git
+              git config --global --add safe.directory "*"
+              mkdir /workspace
+              cp -a /source/. /workspace/
+              cd /workspace
+              if command -v cargo; then echo "cargo is preinstalled" >&2; exit 1; fi
+              MAIN_CHECKOUT=/workspace WORKTREE_PATH=/workspace bash /setup-script.sh </dev/null
+              test -e packages/intentd/.git
+              test -e packages/cloudlands-fe/.git
+              bash -lc "cargo --version && cargo clippy --version && cargo fmt --version && cargo nextest --version && cargo sweep --version"
+              MAIN_CHECKOUT=/workspace WORKTREE_PATH=/workspace bash /setup-script.sh </dev/null 2>&1 | tee rerun.log
+              if grep -E "installing|NOTE:" rerun.log; then echo "second setup run was not a no-op" >&2; exit 1; fi
             '

@@ -120,6 +120,14 @@ debug = 1
         included.write_text('[profile.test.package.included]\ndebug=1\n')
         self.assertNotEqual(before, gate.build_settings(self.repo))
 
+    def test_parallel_front_end_has_separate_resume_identity(self):
+        before = gate.build_settings(self.repo)
+        os.environ["INTENT_PARALLEL_THREADS"] = "8"
+        threaded = gate.build_settings(self.repo)
+        self.assertNotEqual(before, threaded)
+        os.environ["INTENT_PARALLEL_THREADS"] = "4"
+        self.assertNotEqual(threaded, gate.build_settings(self.repo))
+
     def test_invalid_compact_config_fails_before_cargo(self):
         os.environ["COMPACT"] = "1"
         (self.repo / "Cargo.toml").write_text('invalid = [')
@@ -301,7 +309,9 @@ class CompactMakeTests(unittest.TestCase):
         (self.root / "scripts").mkdir()
         shutil.copy(ROOT / "Makefile", self.root)
         shutil.copy(ROOT / "scripts/resumable_nextest.py", self.root / "scripts")
+        shutil.copy(ROOT / "scripts/gate_storage.py", self.root / "scripts")
         shutil.copy(ROOT / "scripts/check_watch_capacity.py", self.root / "scripts")
+        shutil.copy(ROOT / "scripts/intentd_tree_preflight.py", self.root / "scripts")
         shutil.copytree(ROOT / "scripts/_vendor", self.root / "scripts/_vendor",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         self.log = self.root / "commands.jsonl"
@@ -323,7 +333,7 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
         # Contract/formatting tools are unrelated to this fixture; retain the
         # real check prerequisites and real clippy/lint-sources recipes.
         self.skips = ["-o", "check-makefile-targets", "-o", "check-protocol-field-parity",
-                      "-o", "lint-shell-sleeps", "-o", "fmt", "-o", "check-transfer-fixture"]
+                      "-o", "lint-shell-sleeps", "-o", "fmt", "-o", "shear", "-o", "check-transfer-fixture"]
 
     def run_make(self, *args, env=None, cwd=None):
         self.log.unlink(missing_ok=True)
@@ -343,11 +353,13 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
                                                env={"RUSTFLAGS": "--cfg caller -C debuginfo=2"})
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual([call["args"][0] for call in calls], ["clippy", "test"])
+                # Compact is the default; only an explicit COMPACT=0 opts out.
+                compact = mode != "0"
                 for call in calls:
                     self.assertEqual(call["env"]["RUSTFLAGS"], "--cfg caller -C debuginfo=2")
-                    self.assertEqual("--config" in call["args"], mode == "1")
-                    self.assertEqual(call["env"].get("CARGO_INCREMENTAL"), "0" if mode == "1" else None)
-                if mode == "1":
+                    self.assertEqual("--config" in call["args"], compact)
+                    self.assertEqual(call["env"].get("CARGO_INCREMENTAL"), "0" if compact else None)
+                if compact:
                     self.assertLess(calls[0]["args"].index("--config"), calls[0]["args"].index("--"))
                     self.assertIn("COMPACT=1", result.stdout)
 
@@ -359,6 +371,20 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
                 self.assertIn("COMPACT=1", result.stderr)
                 self.assertIn("coverage", result.stderr)
                 self.assertEqual(calls, [])
+
+    def test_coverage_goals_default_to_ordinary_builds(self):
+        for goals in (("coverage-changed",), ("check", "coverage-all")):
+            with self.subTest(goals=goals):
+                result, _ = self.run_make("-n", "--eval", "show-compact: ; @echo COMPACT=$(COMPACT)",
+                                          "show-compact", *goals)
+                self.assertNotIn("incompatible", result.stderr)
+                self.assertIn("COMPACT=0", result.stdout)
+        result, _ = self.run_make("--eval", "show-compact: ; @echo COMPACT=$(COMPACT)", "show-compact")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("COMPACT=1", result.stdout)
+        result, _ = self.run_make("--eval", "show-compact: ; @echo COMPACT=$(COMPACT)", "show-compact",
+                                  env={"COMPACT": "0"})
+        self.assertIn("COMPACT=0", result.stdout)
 
     def test_gate_preserves_check_dependency_and_skip_semantics(self):
         for parallel in ([], ["-j2"]):

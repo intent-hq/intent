@@ -5,6 +5,9 @@
 # (INTENTD_USER_SPECIALISTS_DIR, under DEV_DATA_DIR) so specialist Settings can
 # be exercised without touching ~/.intent/specialists; null for ui/app, which
 # do not own a daemon.
+# mockAgent is true when a stack sandbox runs with MOCK_AGENT=1: the daemon
+# gets the scripted e2e ACP agent (MOCK_AGENT_SCRIPT_PATH) and a separate
+# config file (mockAgentConfig) whose model.defaultProvider is "mock".
 #
 # Test-only hook: SANDBOX_TEST_FORK_HOLD=<path> pauses the script between each
 # child fork and its pid capture for as long as <path> exists, so a test can
@@ -39,9 +42,12 @@ intentd_profile=${INTENTD_PROFILE:-dev}
 intentd_bin=${INTENTD_BIN:-}
 build_jobs=${BUILD_JOBS:--2}
 socket_path=${INTENTD_SOCKET:-}
+mock_agent=${MOCK_AGENT:-0}
+mock_agent_config=""
 user_specialists_dir=""
 fe_pid=""
 daemon_pid=""
+settings_pid=""
 pending_sig=""
 fork_hold=${SANDBOX_TEST_FORK_HOLD:-}
 cleaning=0
@@ -126,6 +132,11 @@ if [[ "$mode" == ui || "$mode" == app || "$mode" == stack ]]; then
   [[ "$dev_tcp_port" =~ ^[0-9]+$ ]] || { echo "[dev-sandbox-$mode] ERROR: DEV_TCP_PORT must be numeric." >&2; exit 2; }
   [[ "$ready_timeout" =~ ^[1-9][0-9]*$ ]] || { echo "[dev-sandbox-$mode] ERROR: SANDBOX_READY_TIMEOUT must be a positive integer." >&2; exit 2; }
   [[ "$warm_timeout" =~ ^[1-9][0-9]*$ ]] || { echo "[dev-sandbox-$mode] ERROR: SANDBOX_WARM_TIMEOUT must be a positive integer." >&2; exit 2; }
+  case "$mock_agent" in
+    ""|0) mock_agent=0 ;;
+    1) [[ "$mode" == stack ]] || { echo "[dev-sandbox-$mode] ERROR: MOCK_AGENT=1 needs 'make dev-sandbox-stack'; only the stack sandbox owns a daemon it can configure." >&2; exit 2; } ;;
+    *) echo "[dev-sandbox-$mode] ERROR: MOCK_AGENT must be 0 or 1." >&2; exit 2 ;;
+  esac
   derived_dev_port=$dev_port
   if [[ "$dev_port_explicit" -eq 0 ]] && pinned_port=$(pinned_value DEV_PORT) && [[ "$pinned_port" != "$dev_port" ]]; then
     if [[ "$pinned_port" == "$dev_tcp_port" && "$dev_tcp_port_explicit" -eq 1 ]]; then
@@ -248,10 +259,11 @@ else:
         specialists_hint = ""
         if state.get("userSpecialistsDir"):
             specialists_hint = f" specialists={state['userSpecialistsDir']}"
+        mock_hint = " mockAgent=1" if state.get("mockAgent") else ""
         print(
             f"{state['mode']}: pid={state['pid']} url={state['url']} "
             f"source={state['intentdSource']} socket={state['socket'] or '-'}"
-            f"{specialists_hint}{supervisor_hint}"
+            f"{specialists_hint}{mock_hint}{supervisor_hint}"
         )
     if not live:
         print("No running sandboxes.", file=sys.stderr)
@@ -413,18 +425,18 @@ cleanup() {
   [[ "$cleaning" -eq 0 ]] || return
   cleaning=1
   remove_state_file
-  for pid in "$fe_pid" "$daemon_pid"; do
+  for pid in "$fe_pid" "$daemon_pid" "$settings_pid"; do
     [[ -n "$pid" ]] && signal_tree TERM "$pid"
   done
   for _ in {1..50}; do
     local alive=0
-    for pid in "$fe_pid" "$daemon_pid"; do
+    for pid in "$fe_pid" "$daemon_pid" "$settings_pid"; do
       [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && alive=1
     done
     [[ "$alive" -eq 0 ]] && break
     sleep 0.1
   done
-  for pid in "$fe_pid" "$daemon_pid"; do
+  for pid in "$fe_pid" "$daemon_pid" "$settings_pid"; do
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
       signal_tree KILL "$pid"
     fi
@@ -569,14 +581,15 @@ write_state_file() {
   mkdir -p "$state_dir"
   python3 - "$temp_file" "$state_file" "$mode" "$$" "$dev_port" "$dev_tcp_port" \
     "$socket_path" "$intentd_source" "$started_at" "$ready_at" "$warm_ok" "$warm_ms" \
-    "$user_specialists_dir" <<'PY'
+    "$user_specialists_dir" "$mock_agent" "$mock_agent_config" <<'PY'
 import json
 import os
 import subprocess
 import sys
 
 (temp_path, state_path, mode, pid, dev_port, tcp_port, socket_path,
- source, started_at, ready_at, warm_ok, warm_ms, user_specialists_dir) = sys.argv[1:]
+ source, started_at, ready_at, warm_ok, warm_ms, user_specialists_dir,
+ mock_agent, mock_agent_config) = sys.argv[1:]
 pid = int(pid)
 stat_path = f"/proc/{pid}/stat"
 if os.path.exists(stat_path):
@@ -606,6 +619,8 @@ state = {
     "socket": None if mode == "ui" else socket_path,
     "intentdSource": source,
     "userSpecialistsDir": user_specialists_dir or None,
+    "mockAgent": mock_agent == "1",
+    "mockAgentConfig": mock_agent_config or None,
     "startedAt": started_at,
     "readyAt": ready_at,
     "warm": {"ok": warm_ok == "true", "ms": int(warm_ms)},
@@ -676,6 +691,26 @@ elif [[ "$mode" == stack ]]; then
   else
     echo "[dev-sandbox-stack] WARNING: $intentd_bin does not support INTENTD_USER_SPECIALISTS_DIR; specialist Settings changes will edit ~/.intent/specialists." >&2
   fi
+  daemon_env=(env)
+  if [[ "$mock_agent" == 1 ]]; then
+    mock_agent_script="$fe_dir/e2e/mock-acp-agent.js"
+    if [[ ! -f "$mock_agent_script" ]]; then
+      echo "[dev-sandbox-stack] ERROR: MOCK_AGENT=1 needs the scripted agent at $mock_agent_script." >&2
+      exit 1
+    fi
+    command -v node >/dev/null 2>&1 || { echo "[dev-sandbox-stack] ERROR: MOCK_AGENT=1 needs node on PATH; run 'make bootstrap-dev-host'." >&2; exit 1; }
+    # A separate config file keeps defaultProvider = "mock" out of the
+    # ordinary sandbox config, so a later run without MOCK_AGENT is unchanged.
+    mock_agent_config="$dev_data_dir/config.mock-agent.toml"
+    [[ "$mock_agent_config" == /* ]] || mock_agent_config="$PWD/$mock_agent_config"
+    # Only the daemon (and the agents it spawns) gets these; the frontend does not.
+    daemon_env+=("INTENTD_CONFIG=$mock_agent_config" "MOCK_AGENT_SCRIPT_PATH=$mock_agent_script")
+    if [[ -z ${MOCK_AGENT_BEHAVIOR:-} && -z ${MOCK_AGENT_BEHAVIOR_FILE:-} ]]; then
+      daemon_env+=('MOCK_AGENT_BEHAVIOR={"response":"Scripted reply from the sandbox mock agent (MOCK_AGENT=1)."}')
+    fi
+    echo "[dev-sandbox-stack] Mock agent: $mock_agent_script is the default provider (config $mock_agent_config)."
+    echo "[dev-sandbox-stack] Mock agent: set MOCK_AGENT_BEHAVIOR or MOCK_AGENT_BEHAVIOR_FILE to change its reply (see the script header)."
+  fi
   daemon_args=(serve)
   if [[ ${SANDBOX_TCP:-0} == 1 ]]; then
     daemon_args+=(--insecure)
@@ -685,7 +720,7 @@ elif [[ "$mode" == stack ]]; then
   INTENTD_DATA_DIR="$dev_data_dir" INTENTD_TCP_PORT="$dev_tcp_port" \
     INTENTD_WORKSPACES_DIR="$dev_data_dir/workspaces" INTENTD_ASSERT_HERMETIC_ROOT=1 \
     INTENTD_LEGACY_IMPORT_ROOTS="" INTENTD_USER_SPECIALISTS_DIR="$specialists_request" \
-    "$intentd_bin" "${daemon_args[@]}" &
+    "${daemon_env[@]}" "$intentd_bin" "${daemon_args[@]}" &
   hold_fork_window
   capture_child_pid daemon_pid
 fi
@@ -722,6 +757,34 @@ while true; do
   fi
   sleep 0.1
 done
+
+# The setting is applied over RPC, not by editing TOML, so it also holds on a
+# reused config whose default a previous mock run changed in Settings. The call
+# runs in the background under the readiness budget: the settings client has
+# no timeout of its own, and a foreground call would also hold off signal traps.
+if [[ "$mock_agent" == 1 ]]; then
+  defer_signals
+  INTENTD_DATA_DIR="$dev_data_dir" INTENTD_CONFIG="$mock_agent_config" \
+    "$intentd_bin" settings model.defaultProvider mock >/dev/null &
+  hold_fork_window
+  capture_child_pid settings_pid
+  settings_deadline=$((SECONDS + ready_timeout))
+  while kill -0 "$settings_pid" 2>/dev/null; do
+    if (( SECONDS >= settings_deadline )); then
+      echo "[dev-sandbox-stack] ERROR: the daemon did not accept the mock default provider within ${ready_timeout}s." >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+  wait "$settings_pid"
+  settings_status=$?
+  settings_pid=""
+  if [[ "$settings_status" -ne 0 ]]; then
+    echo "[dev-sandbox-stack] ERROR: could not make the mock agent the default provider." >&2
+    exit 1
+  fi
+  child_is_running "$daemon_pid" "intentd" || exit "$child_exit_status"
+fi
 
 if [[ "$mode" != ui ]]; then
   warm_vite || exit $?

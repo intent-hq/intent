@@ -20,6 +20,17 @@
 // (`cfg_attr`, `cfg`, unknown serde arguments) fail closed. A pair whose
 // submodule is not initialized is skipped; a manifest path missing from an
 // initialized submodule fails.
+//
+// `--base <ref>` (the Makefile passes origin/main) is the comparison the
+// upstream monorepo-consumer-checks job makes: monorepo main's staged table,
+// the component under test at its own head, the other component at main's
+// pin. When a component checkout is off its recorded pin (or dirty) and a
+// missing field would fail, the field is compared again with the staged table
+// from <ref>'s versioning.md and every component still at its pin read from the
+// gitlink <ref> records. A field <ref> stages, or whose frontend type at <ref>'s
+// pin declares it, is a `pin drift` warning (this monorepo worktree is older
+// than <ref>); any other missing field stays an error.
+// Nothing changes at the pins or when <ref> is HEAD or does not resolve.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -28,14 +39,22 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { scanMarkdown, splitRow } from './lib/markdown-tables.mjs';
-import { describeCheckout, formatBanner, formatOffPinWarning, submoduleOf } from './submodule-ref.mjs';
+import { describeCheckout, formatBanner, formatOffPinWarning, gitOrNull, short, submoduleOf } from './submodule-ref.mjs';
 
 const MODEL_RS = 'packages/intentd/crates/intent-core/src/model.rs';
 
 export const PAIRS = [
   {
     rust: { file: MODEL_RS, struct: 'AgentLite' },
-    ts: { file: 'packages/cloudlands-fe/src/shared/types/agent-session.ts', type: 'AgentSession' },
+    ts: {
+      file: 'packages/cloudlands-fe/src/shared/types/agent-session.ts',
+      type: 'AgentSession',
+      // `interface AgentSession extends AgentNodeFields`, where
+      // `type AgentNodeFields = z.infer<typeof AgentNodeFieldsSchema>`.
+      inherits: [
+        { file: 'packages/cloudlands-fe/src/shared/types/agent-node.ts', type: 'AgentNodeFields', schema: 'AgentNodeFieldsSchema' },
+      ],
+    },
     ignore: {
       contextUsage: 'not consumed by the FE today (no reader of the row field)',
       contextReferences: 'read untyped through the agent-session slice (DETAIL_ONLY_SESSION_FIELDS in agent-session-slice.ts); accepted FE typing debt, not declared on the type',
@@ -579,13 +598,102 @@ export function extractTsKeys(source, typeName) {
   return { keys, startLine: idx + 1, endLine };
 }
 
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** `source` with comments and template contents stripped, per line (see `stripNoise`). */
+function cleanLines(source) {
+  const state = { block: false, template: false };
+  return source.split('\n').map((line) => stripNoise(line, state));
+}
+
+/**
+ * The base types named in the live `export interface <type>` declaration's
+ * own heritage clause (`extends A, B<X>` → `['A', 'B']`), read from cleaned
+ * text so comments and template literals do not count, and with the
+ * interface's generic parameters (whose constraints may also say `extends`)
+ * removed. `[]` when it extends nothing; `null` when the declaration is not
+ * found.
+ */
+export function interfaceHeritage(source, type) {
+  const clean = cleanLines(source);
+  const re = TS_INTERFACE_RE(type);
+  const idx = clean.findIndex((line) => re.test(line));
+  if (idx === -1) return null;
+  const open = findTsBodyOpen(clean, idx, type);
+  if (open === null) return null;
+  const head = clean[idx].match(re);
+  let text = '';
+  for (let i = idx; i <= open.line; i += 1) {
+    const start = i === idx ? head.index + head[0].length : 0;
+    const end = i === open.line ? open.col : clean[i].length;
+    text += `${clean[i].slice(start, end)} `;
+  }
+  let top = '';
+  let angle = 0;
+  for (let c = 0; c < text.length; c += 1) {
+    const ch = text[c];
+    if (ch === '=' && text[c + 1] === '>') {
+      if (angle === 0) top += '=>';
+      c += 1;
+    } else if (ch === '<') angle += 1;
+    else if (ch === '>') angle -= 1;
+    else if (angle === 0) top += ch;
+  }
+  const heritage = top.match(/^\s*extends\s+([\s\S]*)$/);
+  if (!heritage) return [];
+  return heritage[1]
+    .split(',')
+    .map((part) => part.trim().match(/^[A-Za-z_$][A-Za-z0-9_$.]*/)?.[0])
+    .filter(Boolean);
+}
+
+/** Whether the live `interface <type>` in `tsSource` extends `base` (an `inherits` entry applies). */
+export function extendsBase(tsSource, type, base) {
+  return (interfaceHeritage(tsSource, type) ?? []).includes(base);
+}
+
+/**
+ * Keys `pair.ts.type` inherits through its manifest `inherits` entries
+ * (`interface T extends Base`, `Base` an interface or
+ * `type Base = z.infer<typeof Schema>` declared in another file).
+ * `inheritedSources[i]` is the text of `pair.ts.inherits[i].file`. An entry
+ * the interface does not extend contributes nothing (its fields then count
+ * as missing, so dropping the `extends` still fails); a base that cannot be
+ * read is an error. Returns `{ keys: [{ name, line, file }], errors }`.
+ */
+export function inheritedTsKeys(pair, tsSource, inheritedSources = []) {
+  const keys = [];
+  const errors = [];
+  const label = pairLabel(pair);
+  for (const [i, base] of (pair.ts.inherits ?? []).entries()) {
+    if (!extendsBase(tsSource, pair.ts.type, base.type)) continue;
+    const source = inheritedSources[i] ?? '';
+    let target = base.type;
+    if (base.schema) {
+      const inferRe = new RegExp(`^\\s*export\\s+type\\s+${escapeRe(base.type)}\\s*=\\s*z\\.infer<\\s*typeof\\s+${escapeRe(base.schema)}\\s*>`);
+      if (!cleanLines(source).some((line) => inferRe.test(line))) {
+        errors.push({ file: base.file, line: 1, message: `${label}: type ${base.type} = z.infer<typeof ${base.schema}> not found; update its inherits entry in PAIRS` });
+        continue;
+      }
+      target = base.schema;
+    }
+    const found = extractTsKeys(source, target);
+    if (found === null) {
+      errors.push({ file: base.file, line: 1, message: `${label}: ${target} (inherited by ${pair.ts.type}) not found; update its inherits entry in PAIRS` });
+      continue;
+    }
+    for (const k of found.keys) keys.push({ ...k, file: base.file });
+  }
+  return { keys, errors };
+}
+
 /**
  * Compare one pair's emitted fields with its TS keys; returns diagnostics
  * (`{ file, line, message, severity? }`). Missing fields and parse failures are
  * errors; stale ignore entries and staged fields carry `severity: 'warning'`.
  * `staged` is this pair's Map from `parseStagedFields` (wire → `{ file, line, adoption }`).
  */
-export function comparePair(pair, rustSource, tsSource, staged = new Map()) {
+export function comparePair(pair, rustSource, tsSource, staged = new Map(), inheritedSources = []) {
   const label = pairLabel(pair);
   const rustFile = pair.rust.file;
   const tsFile = pair.ts.file;
@@ -598,9 +706,12 @@ export function comparePair(pair, rustSource, tsSource, staged = new Map()) {
   if (ts === null) {
     errors.push({ file: tsFile, line: 1, message: `${label}: export interface ${pair.ts.type} / export const ${pair.ts.type} = z.object({ not found` });
   }
+  const inherited = ts === null ? { keys: [], errors: [] } : inheritedTsKeys(pair, tsSource, inheritedSources);
+  errors.push(...inherited.errors);
   if (rust.fields === null || ts === null || errors.length > 0) return errors;
 
   const tsKeys = new Map(ts.keys.map((k) => [k.name, k.line]));
+  for (const k of inherited.keys) if (!tsKeys.has(k.name)) tsKeys.set(k.name, k.line);
   const tsRange = `${tsFile}:${ts.startLine}-${ts.endLine}`;
   const emitted = new Map(rust.fields.map((f) => [f.wire, f]));
   for (const f of rust.fields) {
@@ -618,6 +729,7 @@ export function comparePair(pair, rustSource, tsSource, staged = new Map()) {
     errors.push({
       file: rustFile,
       line: f.line,
+      missing: { struct: pair.rust.struct, wire: f.wire, rustName: f.rustName },
       message: `${label}: emitted field ${pair.rust.struct}.${f.wire} (Rust ${f.rustName}) is missing from ${pair.ts.type} (${tsRange}); add it to the TS type (and normalizer if needed), stage a daemon-first field in the "${STAGED_HEADING}" table of ${STAGED_DOC}, or add an ignore entry with a reason in scripts/check-protocol-field-parity.mjs for a field the FE never reads`,
     });
   }
@@ -693,19 +805,22 @@ async function readManifestFile(root, { file, sub, dir, explicit }) {
 }
 
 /**
- * Run every manifest pair against `root`; returns `{ errors, warnings, checked, skipped, refs }`.
- * `warnings` are stale ignore entries and staged daemon-first fields; only `errors` fail the check.
- * The staged table is read from `root`'s `STAGED_DOC` (monorepo docs, never a component root).
- * `refs` holds one submodule ref per distinct component a compared file was read from, in
- * first-read order. Optional `intentdDir` / `feDir` select roots relative to `root` (or absolute);
- * unlike absent default submodules, explicitly selected missing roots fail.
+ * Run every manifest pair against `root`; returns `{ errors, warnings, checked, skipped, refs, drift }`.
+ * `warnings` are stale ignore entries, staged daemon-first fields and pin-drift fields; only
+ * `errors` fail the check. The staged table is read from `root`'s `STAGED_DOC` (monorepo docs,
+ * never a component root). `refs` holds one submodule ref per distinct component a compared file
+ * was read from, in first-read order. Optional `intentdDir` / `feDir` select roots relative to
+ * `root` (or absolute); unlike absent default submodules, explicitly selected missing roots fail.
+ * Optional `base` names the ref of the upstream comparison (see the header); `drift` reports
+ * what it did (`{ status, base?, baseSha?, notes }`, status `off` when no base was given).
  */
-export async function runChecks(root, pairs = PAIRS, { intentdDir, feDir } = {}) {
+export async function runChecks(root, pairs = PAIRS, { intentdDir, feDir, base } = {}) {
   const errors = [];
   const warnings = [];
   const checked = [];
   const skipped = [];
   const refs = new Map();
+  const compared = [];
   let stagedSource = '';
   try {
     stagedSource = await fs.readFile(path.resolve(root, STAGED_DOC), 'utf8');
@@ -717,33 +832,162 @@ export async function runChecks(root, pairs = PAIRS, { intentdDir, feDir } = {})
   const dirs = { 'packages/intentd': intentdDir, 'packages/cloudlands-fe': feDir };
   for (const pair of pairs) {
     const sources = [selectFile(pair.rust.file, dirs), selectFile(pair.ts.file, dirs)];
-    const selectedPair = { ...pair, rust: { ...pair.rust, file: sources[0].file }, ts: { ...pair.ts, file: sources[1].file } };
     const [rust, ts] = await Promise.all(sources.map((source) => readManifestFile(root, source)));
-    for (const r of [rust, ts]) if (r.error) errors.push(r.error);
-    const missing = [rust.skipped && pair.rust.file, ts.skipped && pair.ts.file].filter(Boolean);
+    // Only the bases the interface actually extends are read and applied.
+    const inherits = ts.source === undefined ? [] : (pair.ts.inherits ?? []).filter((base) => extendsBase(ts.source, pair.ts.type, base.type));
+    const baseSources = inherits.map((base) => selectFile(base.file, dirs));
+    sources.push(...baseSources);
+    const selectedPair = {
+      ...pair,
+      rust: { ...pair.rust, file: sources[0].file },
+      ts: { ...pair.ts, file: sources[1].file, inherits: inherits.map((base, i) => ({ ...base, file: baseSources[i].file })) },
+    };
+    const bases = await Promise.all(baseSources.map((source) => readManifestFile(root, source)));
+    for (const r of [rust, ts, ...bases]) if (r.error) errors.push(r.error);
+    const missing = [rust.skipped && pair.rust.file, ts.skipped && pair.ts.file, ...bases.map((b, i) => b.skipped && inherits[i].file)].filter(Boolean);
     if (missing.length > 0) {
       skipped.push(`skipped: ${pairLabel(pair)} (${missing.join(', ')} missing — submodule not initialized)`);
       continue;
     }
-    if (rust.error || ts.error) continue;
+    if (rust.error || ts.error || bases.some((b) => b.error)) continue;
     for (const { sub, dir } of sources) {
       if (sub && !refs.has(sub)) refs.set(sub, describeCheckout(root, dir, { pinDir: sub }));
     }
-    for (const d of comparePair(selectedPair, rust.source, ts.source, staged.get(pair.rust.struct))) (d.severity === 'warning' ? warnings : errors).push(d);
+    const baseTexts = bases.map((b) => b.source);
+    for (const d of comparePair(selectedPair, rust.source, ts.source, staged.get(pair.rust.struct), baseTexts)) (d.severity === 'warning' ? warnings : errors).push(d);
+    compared.push({ pair, selectedPair, sources, texts: [rust.source, ts.source, ...baseTexts] });
     checked.push(pairLabel(pair));
   }
-  return { errors, warnings, checked, skipped, refs: [...refs.values()] };
+  const drift = base ? compareAgainstBase(root, base, { errors, warnings, refs, compared, pairs }) : { status: 'off', notes: [] };
+  return { errors: drift.errors ?? errors, warnings, checked, skipped, refs: [...refs.values()], drift: { status: drift.status, base: drift.base, baseSha: drift.baseSha, notes: drift.notes } };
+}
+
+const missingKey = ({ struct, wire }) => `${struct}.${wire}`;
+
+/** `git fetch <remote> <branch>` when `base` is a remote-tracking branch, plain `git fetch` otherwise. */
+function fetchCommand(base, cwd) {
+  const full = gitOrNull(['rev-parse', '--symbolic-full-name', base], cwd) ?? '';
+  let m = full.match(/^refs\/remotes\/([^/]+)\/(.+)$/);
+  // An unfetched origin/main does not resolve; trust the spelling when it names a configured remote.
+  if (!m && !full) {
+    const spelled = base.match(/^(?:refs\/remotes\/)?([^/]+)\/(.+)$/);
+    if (spelled && (gitOrNull(['remote'], cwd) ?? '').split('\n').includes(spelled[1])) m = spelled;
+  }
+  return m ? `git fetch ${m[1]} ${m[2]}` : 'git fetch';
+}
+
+/**
+ * Re-run each missing field the way monorepo-consumer-checks would against `base` and downgrade
+ * the ones that pass there to pin-drift warnings. Mutates `warnings`; returns
+ * `{ status, base, baseSha?, notes, errors? }` where `errors` replaces the first-pass errors.
+ * Statuses: `no-missing-fields`, `at-pins`, `unresolved`, `base-is-head`, `base-unreadable`, `compared`.
+ */
+function compareAgainstBase(root, base, { errors, warnings, refs, compared, pairs }) {
+  const absRoot = path.resolve(root);
+  const result = { base, notes: [] };
+  if (!errors.some((e) => e.missing)) return { ...result, status: 'no-missing-fields' };
+  // A component the checkout moved (off its pin, or dirty) plays the PR head upstream.
+  const moved = new Set([...refs].filter(([, ref]) => ref.checkout && ref.pin && (ref.checkout !== ref.pin || ref.dirty)).map(([sub]) => sub));
+  if (moved.size === 0) return { ...result, status: 'at-pins' };
+  const baseSha = gitOrNull(['rev-parse', '--verify', '--quiet', `${base}^{commit}`], absRoot);
+  const fetch = fetchCommand(base, absRoot);
+  const fetchHint = `If the missing field(s) above came from newer component main, run ${fetch} and rerun.`;
+  if (!baseSha) {
+    result.notes.push(`the comparison against ${base} that monorepo-consumer-checks makes was skipped: ${base} does not resolve to a commit. ${fetchHint}`);
+    return { ...result, status: 'unresolved' };
+  }
+  result.baseSha = baseSha;
+  if (baseSha === gitOrNull(['rev-parse', 'HEAD'], absRoot)) return { ...result, status: 'base-is-head' };
+  const baseDoc = gitOrNull(['show', `${baseSha}:${STAGED_DOC}`], absRoot, { trim: false });
+  const baseStaged = baseDoc === null ? null : parseStagedFields(baseDoc, `${base}:${STAGED_DOC}`, pairs);
+  if (!baseStaged || baseStaged.errors.length > 0) {
+    result.notes.push(`the comparison against ${base} (${short(baseSha)}) was skipped: ${base}:${STAGED_DOC} is ${baseStaged ? 'malformed there' : 'not readable'}. ${fetchHint}`);
+    return { ...result, status: 'base-unreadable' };
+  }
+  const basePins = new Map();
+  // `fellBack` marks a component whose base-pin text was unavailable, so the comparison used its checkout.
+  let fellBack = false;
+  const readAtBase = (source, text) => {
+    if (!source.sub || moved.has(source.sub)) return { text };
+    const dir = path.resolve(absRoot, source.dir);
+    if (!basePins.has(source.sub)) {
+      const pin = gitOrNull(['rev-parse', '--verify', '--quiet', `${baseSha}:${source.sub}`], absRoot);
+      const inClone = pin !== null && gitOrNull(['cat-file', '-e', `${pin}^{commit}`], dir) !== null;
+      basePins.set(source.sub, { pin, inClone, noted: new Set() });
+    }
+    const entry = basePins.get(source.sub);
+    const note = (key, message) => {
+      fellBack = true;
+      if (!entry.noted.has(key)) {
+        entry.noted.add(key);
+        result.notes.push(message);
+      }
+    };
+    if (!entry.pin) {
+      note('pin', `${base} records no ${source.sub} gitlink; its checkout was compared instead.`);
+      return { text };
+    }
+    if (!entry.inClone) {
+      note('pin', `${base}'s ${source.sub} pin ${short(entry.pin)} is not in the local clone; its checkout was compared instead (git -C ${source.dir} fetch origin to compare against it).`);
+      return { text };
+    }
+    const objectPath = path.relative(source.dir, source.file);
+    const shown = gitOrNull(['show', `${entry.pin}:${objectPath}`], dir, { trim: false });
+    if (shown === null) {
+      note(objectPath, `${objectPath} does not exist at ${base}'s ${source.sub} pin ${short(entry.pin)} (moved there?); its checkout was compared instead.`);
+      return { text };
+    }
+    return { text: shown, pin: entry.pin };
+  };
+  const passes = new Map();
+  for (const { pair, selectedPair, sources, texts } of compared) {
+    const [rust, ts, ...bases] = sources.map((source, i) => readAtBase(source, texts[i]));
+    const stagedHere = baseStaged.staged.get(pair.rust.struct) ?? new Map();
+    const baseTexts = bases.map((b) => b.text);
+    const baseDiags = comparePair(selectedPair, rust.text, ts.text, stagedHere, baseTexts);
+    // The base comparison must itself run cleanly: a parse failure there excuses nothing.
+    const baseBroken = baseDiags.filter((d) => d.severity !== 'warning' && !d.missing);
+    if (baseBroken.length > 0) {
+      fellBack = true;
+      result.notes.push(`the comparison of ${pairLabel(pair)} against ${base} (${short(baseSha)}) could not run: ${baseBroken[0].message}`);
+      continue;
+    }
+    const stillMissing = new Set(baseDiags.filter((d) => d.missing).map((d) => missingKey(d.missing)));
+    const baseTsKeys = new Set([
+      ...(extractTsKeys(ts.text, pair.ts.type)?.keys ?? []),
+      ...inheritedTsKeys(selectedPair, ts.text, baseTexts).keys,
+    ].map((k) => k.name));
+    for (const e of errors) {
+      if (!e.missing || e.missing.struct !== pair.rust.struct || stillMissing.has(missingKey(e.missing))) continue;
+      // Passing only because the daemon at <base>'s pin does not emit the field is not drift.
+      const why = stagedHere.has(e.missing.wire)
+        ? `staged in ${base}:${STAGED_DOC}`
+        : baseTsKeys.has(e.missing.wire) && ts.pin
+          ? `declared by ${pair.ts.type} at ${base}'s ${path.basename(sources[1].sub)} pin ${short(ts.pin)}`
+          : null;
+      if (!why) continue;
+      passes.set(e, `${pairLabel(pair)}: pin drift: emitted field ${e.missing.struct}.${e.missing.wire} (Rust ${e.missing.rustName}) is missing locally but passes against ${base} (${short(baseSha)}), the comparison monorepo-consumer-checks makes: ${why}. This monorepo worktree is older than ${base}; rebase it onto ${base} to compare locally.`);
+    }
+  }
+  for (const [e, message] of passes) warnings.push({ file: e.file, line: e.line, severity: 'warning', message });
+  const remaining = errors.filter((e) => !passes.has(e));
+  if (remaining.some((e) => e.missing)) {
+    result.notes.push(fellBack
+      ? `the missing field(s) above were not fully compared against ${base} (${short(baseSha)}) — see the note(s) above — so they may still come from newer main. If ${base} is stale, run ${fetch} and rerun.`
+      : `the missing field(s) above also fail against ${base} (${short(baseSha)}), the comparison monorepo-consumer-checks makes, so they come from the component checkout, not from newer main. If ${base} is stale, run ${fetch} and rerun.`);
+  }
+  return { ...result, status: 'compared', errors: remaining };
 }
 
 async function main() {
   const { values, positionals } = parseArgs({
-    options: { 'intentd-dir': { type: 'string' }, 'fe-dir': { type: 'string' } },
+    options: { 'intentd-dir': { type: 'string' }, 'fe-dir': { type: 'string' }, base: { type: 'string' } },
     allowPositionals: true,
   });
-  if (positionals.length > 1) throw new Error('Usage: check-protocol-field-parity.mjs [root] [--intentd-dir DIR] [--fe-dir DIR]');
+  if (positionals.length > 1) throw new Error('Usage: check-protocol-field-parity.mjs [root] [--intentd-dir DIR] [--fe-dir DIR] [--base REF]');
   const root = positionals[0] ? path.resolve(positionals[0]) : process.cwd();
-  const { errors, warnings, checked, skipped, refs } = await runChecks(root, PAIRS, {
-    intentdDir: values['intentd-dir'], feDir: values['fe-dir'],
+  const { errors, warnings, checked, skipped, refs, drift } = await runChecks(root, PAIRS, {
+    intentdDir: values['intentd-dir'], feDir: values['fe-dir'], base: values.base || undefined,
   });
   for (const ref of refs) {
     const banner = formatRefBanner(ref);
@@ -753,13 +997,14 @@ async function main() {
   }
   for (const s of skipped) console.log(s);
   for (const w of warnings) console.error(formatDiagnostic(w));
-  const warningSummary = warnings.length > 0 ? `${warnings.length} warning(s): stale ignore entries or staged daemon-first fields` : '';
+  const warningSummary = warnings.length > 0 ? `${warnings.length} warning(s): stale ignore entries, staged daemon-first fields or pin drift` : '';
   if (errors.length === 0) {
     const suffix = warningSummary ? ` ${warningSummary}; see the warnings above.` : '';
     console.log(`Protocol field parity holds for ${checked.length} pair(s): ${checked.join('; ')}.${suffix}`);
     return;
   }
   for (const e of errors) console.error(formatDiagnostic(e));
+  for (const note of drift.notes) console.error(`note: ${note}`);
   console.error(`check-protocol-field-parity: ${errors.length} error(s)${warningSummary ? `, ${warningSummary}` : ''}`);
   process.exitCode = 1;
 }

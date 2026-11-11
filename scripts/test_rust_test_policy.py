@@ -13,11 +13,36 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+import rust_test_policy_manifest  # noqa: E402
+
 COMPONENT = ROOT / "packages/intentd"
 POLICY = "INTENTD_ASSERT_BOUND_CALLER"
 TIMEOUT = "INTENTD_TEST_TIMEOUT_MULTIPLIER"
+
+# Caller settings the launchers read; the tests set the ones they exercise.
+CALLER_PREFIXES = ("CARGO_", "RUST", "NEXTEST_", "INTENTD_")
+CALLER_NAMES = frozenset({
+    "MAKEFLAGS", "MFLAGS", "MAKELEVEL", "COMPACT", "BASE", "DRY_RUN",
+    "GATE_CACHE_DIR", "RESUME", "GATE_FORCE", "NO_FAIL_FAST", "PYTHONPATH",
+    "TRANSFER_SELECTION_FIXTURE_ROOT", "NODE_OPTIONS"})
+# CI runner settings. These tests model a local run, and a launcher that acts
+# on them (intentd's ci-killed-rustc-retry.sh merges the child's stderr into
+# stdout when GITHUB_ACTIONS=true) passed locally and on the intentd PR but
+# failed only in the monorepo merge queue (queue run 41397707323, fixed by
+# intent#8303). Stripping the whole family makes every host see the same run.
+CI_PREFIXES = ("GITHUB_", "RUNNER_", "ACTIONS_")
+CI_NAMES = frozenset({"CI", "BUILDKITE", "GITLAB_CI", "TF_BUILD"})
+
+
+def launcher_env(environ):
+    """The inherited part of every launcher child's environment."""
+    return {k: v for k, v in environ.items()
+            if not k.startswith(CALLER_PREFIXES + CI_PREFIXES)
+            and k not in CALLER_NAMES and k not in CI_NAMES}
 
 
 @unittest.skipUnless((COMPONENT / "scripts/with-test-policy.sh").is_file(),
@@ -35,11 +60,7 @@ class RustTestPolicyTests(unittest.TestCase):
         self.fixture = Path(temporary.name) / "callback fixture"
         self.fixture.mkdir()
         (self.fixture / "valid").touch()
-        self.env = {k: v for k, v in os.environ.items() if not k.startswith(
-            ("CARGO_", "RUST", "NEXTEST_", "INTENTD_")) and k not in {
-                "MAKEFLAGS", "MFLAGS", "MAKELEVEL", "COMPACT", "BASE", "DRY_RUN",
-                "GATE_CACHE_DIR", "RESUME", "GATE_FORCE", "NO_FAIL_FAST", "PYTHONPATH",
-                "TRANSFER_SELECTION_FIXTURE_ROOT", "NODE_OPTIONS"}}
+        self.env = launcher_env(os.environ)
         self.env.update(PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
                         HOME=temporary.name, POLICY_LOG=str(self.log),
                         GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
@@ -65,14 +86,20 @@ class RustTestPolicyTests(unittest.TestCase):
         (self.bin / "node").write_text(
             '#!/bin/sh\ncase "$1" in *check-transfer-selection-contract.mjs) exec '
             + shlex.quote(shutil.which("node")) + ' "$@";; esac\n')
-        for name in ("resumable_nextest.py", "check_watch_capacity.py"):
+        # bootstrap-dev-host.sh: make check's cargo-shear preflight (--check-cargo-shear).
+        for name in ("resumable_nextest.py", "gate_storage.py", "check_watch_capacity.py", "bootstrap-dev-host.sh",
+                     "intentd_tree_preflight.py"):
             shutil.copy(ROOT / "scripts" / name, self.root / "scripts")
         shutil.copytree(ROOT / "scripts/_vendor", self.root / "scripts/_vendor",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         shutil.copy(ROOT / "Makefile", self.root)
         shutil.copy(COMPONENT / "Makefile", self.component)
-        for name in ("with-test-policy.sh", "changed-tests.sh", "coverage-all.sh", "coverage-e2e.sh"):
-            shutil.copy(COMPONENT / "scripts" / name, self.component / "scripts")
+        # Derived, not hand-kept: the launchers and every intentd script they
+        # reference (scripts/rust_test_policy_manifest.py), so a new helper
+        # such as intentd#2896's ci-killed-rustc-retry.sh is copied as it lands.
+        for relative in rust_test_policy_manifest.component_files(COMPONENT, ROOT):
+            if relative != "Makefile":
+                shutil.copy(COMPONENT / relative, self.component / relative)
         # Isolate policy/wrapper behavior from the Linux-only fixture payload.
         # Canonical inventory validation is exercised in CallbackValidatorTests.
         (self.component / "scripts/prepare-acp-callback-fixture.py").write_text('''
@@ -146,7 +173,7 @@ import json, os, sys
 args = sys.argv[1:]
 is_test = args[:1] == ['test'] or args[:2] == ['nextest', 'run'] or (args[:1] == ['llvm-cov'] and 'nextest' in args)
 with open(os.environ['POLICY_LOG'], 'a') as log:
-    log.write(json.dumps({'args': args, 'policy': os.environ.get('INTENTD_ASSERT_BOUND_CALLER'),
+    log.write(json.dumps({'args': args, 'cwd': os.getcwd(), 'policy': os.environ.get('INTENTD_ASSERT_BOUND_CALLER'),
                          'fixture': os.environ.get('INTENT_ACP_CALLBACK_ADAPTER_FIXTURE'),
                          'timeout': os.environ.get('INTENTD_TEST_TIMEOUT_MULTIPLIER'),
                          'incremental': os.environ.get('CARGO_INCREMENTAL'),
@@ -160,6 +187,11 @@ elif args[:2] == ['nextest', 'list']:
           'binary-id': 'alpha::one', 'testcases': {'passes': {}}}}}))
 elif args[:2] == ['nextest', 'run']:
     print(json.dumps({'type': 'test', 'event': 'ok', 'name': 'alpha::one$passes'}))
+elif args[:2] == ['shear', '--version']:
+    version = os.environ.get('SHEAR_STUB_VERSION', '1.14.0')
+    if not version:
+        sys.exit(101)
+    print('Version: ' + version)
 elif '--version' in args or args == ['-V']:
     print('stub 1.0')
 if is_test:
@@ -473,14 +505,16 @@ if is_test:
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assert_policy(calls, inherited="0")
 
-    def test_missing_cache_keeps_error_and_recipe_clears_node_options(self):
+    def test_missing_cache_build_failure_is_one_error_and_recipe_clears_node_options(self):
         self.change_callback_crate()
         env = {"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE": "", "NODE_OPTIONS": self.injected_node_options()}
         for target in ("test-changed", "test"):
             with self.subTest(target=target):
                 result, calls = self.make(target, override="0", env=env)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("INTENT_ACP_CALLBACK_ADAPTER_FIXTURE is unset or empty", result.stderr)
+                # The synthetic prepare script refuses --build-from-source.
+                self.assertIn("could not be built from source", result.stderr)
+                self.assertEqual(result.stderr.count("ERROR: callback fixture:"), 1, result.stderr)
                 self.assertIn("env -u NODE_OPTIONS", result.stderr)
                 self.assertIn("NODE_OPTIONS is set in this shell", result.stderr)
                 self.assertNotIn("prepared offline", result.stderr)
@@ -513,6 +547,29 @@ if is_test:
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assert_policy(calls, inherited='0', fixture='')
 
+    def test_check_runs_cargo_shear_in_intentd_like_ci(self):
+        """intentd CI's check job runs cargo shear --deny-warnings (unused
+        dependencies and unlinked files, intentd#3021); make check runs the
+        same command in the component, after a preflight that names
+        make bootstrap-dev-host when cargo-shear is missing or too old."""
+        for forwarded in (False, True):
+            with self.subTest(forwarded=forwarded, version='ready'):
+                result, calls = self.make('check', forwarded=forwarded)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                shear = [c for c in calls if c['args'] == ['shear', '--deny-warnings']]
+                self.assertEqual(len(shear), 1, calls)
+                self.assertEqual(Path(shear[0]['cwd']).resolve(), self.component.resolve())
+                commands = [c['args'][0] for c in calls if c['args'][:1] != ['metadata']]
+                self.assertLess(commands.index('shear'), commands.index('clippy'), commands)
+        for version in ('', '1.7.2'):
+            with self.subTest(version=version):
+                result, calls = self.make('check', env={'SHEAR_STUB_VERSION': version})
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('[missing]  cargo-shear >= 1.8.0', result.stderr)
+                self.assertIn('run make bootstrap-dev-host', result.stderr)
+                self.assertNotIn(['shear', '--deny-warnings'], [c['args'] for c in calls])
+                self.assertNotIn('clippy', [c['args'][0] for c in calls])
+
     def test_valid_mixed_gate_goals_preserve_policy_without_duplicate_checks(self):
         for forwarded in (False, True):
             for goals in (('gate', 'check'), ('check', 'gate')):
@@ -523,6 +580,158 @@ if is_test:
                     self.assert_policy(calls, inherited='0')
                     for command in ('fmt', 'clippy', 'test'):
                         self.assertEqual(sum(c['args'][0] == command for c in calls), 1, calls)
+
+
+@unittest.skipUnless((COMPONENT / "scripts/with-test-policy.sh").is_file(),
+                     "initialize intentd for real launcher integration")
+class RunnerEnvironmentTests(unittest.TestCase):
+    """The queue failure of intent#8303, reproduced on any host: the routes
+    behave as locally even when the caller runs on a CI runner."""
+    git = RustTestPolicyTests.git
+    make = RustTestPolicyTests.make
+    assert_policy = RustTestPolicyTests.assert_policy
+
+    def setUp(self):
+        summary = tempfile.NamedTemporaryFile(prefix="step summary ", delete=False)
+        summary.close()
+        self.addCleanup(os.unlink, summary.name)
+        runner = {"GITHUB_ACTIONS": "true", "CI": "true", "GITHUB_STEP_SUMMARY": summary.name,
+                  "RUNNER_TEMP": tempfile.gettempdir(), "GITHUB_WORKSPACE": str(ROOT)}
+        with unittest.mock.patch.dict(os.environ, runner):
+            RustTestPolicyTests.setUp(self)
+        self.summary = Path(summary.name)
+
+    def test_coverage_routes_keep_child_stderr_under_a_ci_runner(self):
+        for target in ("coverage-e2e", "coverage-all", "coverage-changed"):
+            with self.subTest(target=target):
+                result, calls = self.make(target, policy="0", input="stdin\n",
+                                          env={"TEST_STDERR": "child diagnostic", "TEST_EXIT": "37"})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Error 37", result.stderr)
+                self.assertIn("child diagnostic", result.stderr)
+                self.assertNotIn("child diagnostic", result.stdout)
+                self.assert_policy(calls, inherited="0")
+        self.assertEqual(self.summary.read_text(), "")
+
+
+class LauncherEnvTests(unittest.TestCase):
+    def test_caller_and_ci_runner_settings_are_not_inherited(self):
+        environ = {"PATH": "/bin", "HOME": "/home/x", "LANG": "C.UTF-8",
+                   "CARGO_HOME": "/c", "RUSTFLAGS": "-x", "NEXTEST_PROFILE": "ci",
+                   "INTENTD_ASSERT_BOUND_CALLER": "0", "MAKEFLAGS": "-j", "NODE_OPTIONS": "-r x",
+                   "GITHUB_ACTIONS": "true", "GITHUB_STEP_SUMMARY": "/s", "GITHUB_OUTPUT": "/o",
+                   "RUNNER_TEMP": "/t", "ACTIONS_RUNTIME_TOKEN": "t", "CI": "true",
+                   "BUILDKITE": "true", "GITLAB_CI": "true", "TF_BUILD": "True"}
+        self.assertEqual(launcher_env(environ), {"PATH": "/bin", "HOME": "/home/x", "LANG": "C.UTF-8"})
+
+
+class ManifestTests(unittest.TestCase):
+    """The fake checkout's intentd copy list follows the launchers' references."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name) / "mono"
+        self.component = self.root / "packages/intentd"
+        self.files({
+            "Makefile": "test-scripts:\n\tpython3 scripts/make-only.py\n",
+            "scripts/with-test-policy.sh": 'exec "$@"\n',
+            "scripts/changed-tests.sh": (
+                'repo_root=$(cd "$(dirname "$0")/.." && pwd)\n'
+                'retry=("$BASH" "$repo_root/scripts/new-helper.sh")\n'
+                '# Prose mentions such as scripts/commented.sh are not launches.\n'
+                'python3 "$repo_root/scripts/missing.py"\n'),
+            "scripts/coverage-all.sh": 'bash scripts/new-helper.sh bash scripts/with-test-policy.sh\n',
+            "scripts/new-helper.sh": '. "$(dirname "$0")/../scripts/nested.sh"\n',
+            "scripts/nested.sh": "python3 scripts/prepare-acp-callback-fixture.py\n",
+            "scripts/make-only.py": "",
+            "scripts/commented.sh": "",
+            "scripts/unrelated.sh": "",
+            "scripts/root-launched.sh": "",
+            "scripts/prepare-acp-callback-fixture.py": "",
+        })
+        (self.root / "Makefile").write_text(
+            'X := bash "$(INTENTD_DIR)/scripts/root-launched.sh"\n'
+            'Y := python3 $(INTENTD_DIR)/scripts/prepare-acp-callback-fixture.py\n'
+            '# $(INTENTD_DIR)/scripts/unrelated.sh is only mentioned here.\n')
+
+    def files(self, files):
+        for relative, content in files.items():
+            path = self.component / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+
+    def test_follows_references_transitively(self):
+        self.assertEqual(rust_test_policy_manifest.component_files(self.component, self.root), [
+            "Makefile", "scripts/changed-tests.sh", "scripts/coverage-all.sh",
+            "scripts/make-only.py", "scripts/nested.sh", "scripts/new-helper.sh",
+            "scripts/root-launched.sh", "scripts/with-test-policy.sh"])
+
+    def test_watch_list_names_missing_entrypoints(self):
+        watched = rust_test_policy_manifest.watched_files(self.component, self.root)
+        self.assertIn("scripts/coverage-e2e.sh", watched)
+        self.assertIn("scripts/new-helper.sh", watched)
+        self.assertNotIn("scripts/prepare-acp-callback-fixture.py", watched)
+        self.assertNotIn("scripts/unrelated.sh", watched)
+
+    def test_deleted_but_referenced_helper_stays_watched(self):
+        # Deleting a helper a launcher still calls must select the test, so the
+        # dangling reference is watched though there is nothing to copy.
+        (self.component / "scripts/new-helper.sh").unlink()
+        self.assertNotIn("scripts/new-helper.sh",
+                         rust_test_policy_manifest.component_files(self.component, self.root))
+        watched = rust_test_policy_manifest.watched_files(self.component, self.root)
+        self.assertIn("scripts/new-helper.sh", watched)
+        self.assertIn("scripts/missing.py", watched)
+        self.assertNotIn("scripts/commented.sh", watched)
+
+    def test_globs_and_expansions_are_not_references(self):
+        self.files({"scripts/coverage-e2e.sh": 'for t in scripts/test-*; do bash "scripts/run-$t.sh"; done\n'})
+        watched = rust_test_policy_manifest.watched_files(self.component, self.root)
+        self.assertEqual([path for path in watched if not path[-1].isalnum()], [])
+        self.assertNotIn("scripts/test-", watched)
+
+    def test_follows_script_directory_relative_references(self):
+        # The styles intentd's own scripts use (publish-channel-manifest.sh,
+        # render-sitter-homebrew-formula.sh): relative to the script's directory.
+        self.files({
+            "scripts/with-test-policy.sh": (
+                'script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)\n'
+                '"$script_dir/dir-helper.sh"\n'
+                'python3 "$(dirname "${BASH_SOURCE[0]}")/dirname-helper.py"\n'
+                '"${script_dir}/gone.sh"\n'
+                'exec "$@"\n'),
+            "scripts/dir-helper.sh": "",
+            "scripts/dirname-helper.py": "",
+        })
+        files = rust_test_policy_manifest.component_files(self.component, self.root)
+        self.assertIn("scripts/dir-helper.sh", files)
+        self.assertIn("scripts/dirname-helper.py", files)
+        self.assertNotIn("scripts/gone.sh", files)
+        self.assertIn("scripts/gone.sh", rust_test_policy_manifest.watched_files(self.component, self.root))
+
+    def test_cli_prints_one_path_per_line(self):
+        for flag, expected in (((), rust_test_policy_manifest.component_files),
+                               (("--watched",), rust_test_policy_manifest.watched_files)):
+            with self.subTest(flag=flag):
+                result = subprocess.run(
+                    [sys.executable, "-I", "-B", str(ROOT / "scripts/rust_test_policy_manifest.py"),
+                     "--component", str(self.component), "--repo-root", str(self.root), *flag],
+                    capture_output=True, text=True, timeout=20)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), expected(self.component, self.root))
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", str(ROOT / "scripts/rust_test_policy_manifest.py"),
+             "--component", str(self.root / "missing")], capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("is not a directory", result.stderr)
+
+    @unittest.skipUnless((COMPONENT / "scripts/ci-killed-rustc-retry.sh").is_file(),
+                         "the pinned intentd predates intentd#2896")
+    def test_pinned_component_copies_the_coverage_retry_helper(self):
+        # intentd#2896 added this helper; the hand-kept list missed it (intent#8277).
+        self.assertIn("scripts/ci-killed-rustc-retry.sh",
+                      rust_test_policy_manifest.component_files(COMPONENT, ROOT))
 
 
 @unittest.skipUnless((COMPONENT / "scripts/with-test-policy.sh").is_file() and shutil.which("node"),

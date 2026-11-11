@@ -100,10 +100,12 @@ conventional commit before pushing.
 
 Keep the relevant checks green before opening a PR:
 
-- **intentd**: `cargo fmt --check`, `cargo clippy -- -D warnings`, the
-  repo-slug fold lint, and `cargo build` — the monorepo-root `Makefile` wraps
-  these as `make check` (fmt + clippy + repo-slug fold lint) and `make build`;
-  run `make test` for the test suite.
+- **intentd**: `cargo fmt --check`, `cargo shear --deny-warnings`,
+  `cargo clippy -- -D warnings`, the source lints, and `cargo build` — the
+  monorepo-root `Makefile` wraps these as `make check` (fmt + cargo-shear +
+  clippy + source lints, like intentd CI's `check` job) and `make build`;
+  run `make test` for the test suite. `make bootstrap-dev-host` installs
+  cargo-shear and `make doctor` verifies it.
 - **cloudlands-fe**: `pnpm run check` and `pnpm vitest run`.
 - **ios**: build + test targets passing.
 
@@ -114,7 +116,47 @@ runs tests only; `make test-changed` selects tests changed against `BASE`
 (default `origin/main`) and falls back to the full suite for build-wide changes;
 `make test-select E='<nextest filterset>'` runs just the matching tests.
 
-These three (and `make test-intentd`, which `make test` runs, and the test
+Every Rust gate first prints the intentd tree it tests:
+`[<goal>] testing intentd: <path> <branch>@<sha> (<pin state>, <lag>)`. It stops,
+naming the fix, when the default `packages/intentd` is off the monorepo pin
+(a branch with your commits on top of the pin is fine) or more than `INTENTD_BEHIND_LIMIT` (default 250) commits behind its `origin/main`:
+gates once tested a shared checkout left on another branch. To test your own
+worktree, pass `INTENTD_DIR=/path/to/intentd` on the make command line. Passing
+`INTENTD_DIR=packages/intentd`, or running make from inside that checkout,
+accepts it as it is. `DRY_RUN=1` only warns.
+
+`make test-stress E='<nextest filterset>' COUNT=200 LOAD=1` repeats the
+matching tests `COUNT` times (default 100) with retries off, through the same
+runner and fixtures as `test-select`. Use it to show a test fails only under
+load, to prove a flake fix, or to check whether a CI failure is an unrelated
+flake. `LOAD=1` starts `LOAD_CPUS` `yes` spinners plus an fsync disk writer
+once the build is done, and stops them when the run ends. On Linux the load
+and the tests under stress share `LOAD_CORES` CPUs (default a quarter of the
+usable CPUs, at least two; spinners default to twice that), so the tests see
+2:1 contention while other workspaces on a shared dev host keep the remaining
+cores. An unpinned run once held a 32-core host at a load of 95-120 for three
+hours and turned another workspace's 12-minute component-test check into 225
+timeouts. `LOAD_CORES=all` restores the whole-host load; use it only on a host
+you have to yourself. `STALL=1` (Linux) instead mimics a briefly frozen CI
+runner: at random gaps averaging `STALL_EVERY_MS` (default 2000) it freezes
+every test process (and their children, but not nextest) with `SIGSTOP` for
+`STALL_MS` (default 1000), then resumes them with `SIGCONT`. Use it for a flake
+that needs one long pause at an exact point: the attachment-reclaim flake fixed
+in intentd#2917 passed 200/200 under `LOAD=1` but needed a single pause over
+0.75 s. Raise `STALL_MS` past the margin the test assumes; lower
+`STALL_EVERY_MS` (or raise `COUNT`) for short tests, since a `STALL=1` run in
+which no stall froze a test is reported `INVALID` (exit 3), like a load worker
+that died. The two combine. The run prints one comparable line, for example
+`[test-stress] stress: 200/200 iterations (120 failed), 1 test, LOAD=1 (16 cpu + fsync on 8 cores), STALL=0: 80 passed, 120 failed; failures: workspace_lifecycle.rs:68 ×116, workspace_lifecycle.rs:59 ×4`,
+and keeps the full output under `$(GATE_CACHE_DIR)/stress/` (with `STALL=1`,
+`stall.log` lists every stall and the summary names their count and longest
+pause). It never writes resume records, so `RESUME`, `GATE_FORCE` and
+`NO_FAIL_FAST` do not apply. When the host's 1-minute load is already at least
+1.5 times its CPU count, the run starts with a warning naming the busiest
+commands (and a failed summary line repeats it), because timeouts then may come
+from another workspace; the same check is `python3 scripts/host_load.py`.
+
+These four (and `make test-intentd`, which `make test` runs, and the test
 phase of `make gate`) default `INTENTD_TEST_TIMEOUT_MULTIPLIER` to `3`, the
 value coverage CI and `make coverage-changed` already use, so tests'
 hang-guard time limits stretch 3x. At 1x, a busy shared dev host makes correct
@@ -127,12 +169,12 @@ and records it in the summary and `run.json`. Resume credit is kept separate
 per effective multiplier, so a pass at 3x never resumes a 1x run (or the
 reverse); `3` and `3.0` share it.
 
-Opt in to smaller local build artifacts with:
+Local gates build smaller artifacts by default (`COMPACT=1`); opt out with:
 
 ```bash
-COMPACT=1 make gate
-COMPACT=1 make test-changed
-make -C packages/intentd test COMPACT=1
+COMPACT=0 make gate
+COMPACT=0 make test-changed
+make -C packages/intentd test COMPACT=0
 ```
 
 Compact and ordinary gates support **Python 3.10+**. The runner uses a bundled
@@ -142,8 +184,11 @@ needed. Compact applies to the compiler steps in `check`, `test`,
 It sets `CARGO_INCREMENTAL=0` and dev/test profile `debug=0`, including discovered
 package and build overrides. `strip=none` preserves the existing macOS
 proc-macro workaround. Test selection, changed-test fallback and failure handling
-are unchanged. Leaving `COMPACT` unset or setting `COMPACT=0` keeps ordinary
-gate behavior; release profiles are unaffected.
+are unchanged; release profiles are unaffected. It is the default because line
+tables are about 40% of every test executable (for example 336 of 822 MB in
+`intent_services`), and the per-worktree gate trees of a busy shared host filled
+its disk. Panic messages still carry `file:line:column`; only backtrace frames
+and debuggers lose source lines, so use `COMPACT=0` when you need those.
 
 These are Cargo profile/environment settings. Caller Rust flags are preserved
 with Cargo's normal precedence, including `RUSTFLAGS`,
@@ -151,15 +196,15 @@ with Cargo's normal precedence, including `RUSTFLAGS`,
 configuration. An effective explicit `-C debuginfo=2` can therefore retain debug
 information, and `-C incremental=/path` can re-enable incremental artifacts even
 though compact sets `CARGO_INCREMENTAL=0`. Conflicting flags reduce or remove the
-storage benefit. Without those overrides, compact trades source-line backtraces
-and debugger detail for smaller artifacts; disabling incremental compilation can
-make rebuilds slower. It neither guarantees a disk bound nor deletes existing
-targets or caches. Switching modes in one target directory may retain artifacts
-from both; use a task-owned `CARGO_TARGET_DIR` when measuring or isolating builds.
+storage benefit. Disabling incremental compilation can make rebuilds slower
+(hosts that use sccache already disable it). Switching modes in one target
+directory keeps artifacts from both until pruning or the
+[gate build storage](#gate-build-storage) policy removes them; use a task-owned
+`CARGO_TARGET_DIR` when measuring or isolating builds.
 
 `RESUME=1 make test` (or `make test-changed`) skips tests recorded as passed for
 the same worktree and effective build settings; `GATE_FORCE=1` runs them again.
-Use `COMPACT=1 RESUME=1 make test` to resume a compact run. Compact/default runs
+Use `COMPACT=0 RESUME=1 make test` to resume an ordinary (non-compact) run. Compact/default runs
 have separate resume identities, including profile/incremental settings and
 effective Cargo config contents, so switching modes cannot reuse the other
 mode's passes. Records live under `GATE_CACHE_DIR` (default
@@ -167,13 +212,101 @@ mode's passes. Records live under `GATE_CACHE_DIR` (default
 continues past failures while preserving the nonzero exit status. `make gate`
 always reruns its checks before the resumable test phase.
 
-Coverage targets (`coverage-changed`, `coverage-e2e`, `coverage-all`) reject
-`COMPACT=1` before instrumentation; run them with `COMPACT=0`. At the monorepo
+Coverage targets (`coverage-changed`, `coverage-e2e`, `coverage-all`) default to
+`COMPACT=0`, as does every goal of a make invocation that includes one, and
+reject an explicit `COMPACT=1` before instrumentation. At the monorepo
 root, even mixed goals such as `make test coverage-all COMPACT=1` reject before
 any recipe runs. The unchanged `packages/intentd` forwarder invokes separate
 root makes per goal: `make -C packages/intentd test coverage-changed COMPACT=1` may
 run the noncoverage goal before rejecting coverage. It still never starts compact
 coverage. Use separate invocations with the appropriate mode for each goal.
+
+`DRY_RUN=1` on any coverage target prints its plan and exits without starting
+cargo. `make check-dry-run-targets` (CI: `scripts/check-dry-run-targets.test.sh`)
+runs every target that documents or reads `DRY_RUN`, and every `coverage-*`,
+with a stub cargo and fails on any cargo call, so a new target cannot accept
+the flag and still start real work.
+
+#### Gate build storage
+
+Each checkout's gate builds live in `intent-gates/<checkout-id>` under Cargo's
+target directory (`packages/intentd/target/intent-gates/...` by default), and
+Cargo never deletes superseded outputs. To keep a shared host's disk bounded,
+the gate runner (`scripts/gate_storage.py`) applies two rules before every
+build of `make test`, `test-changed`, `test-select` and `test-stress`:
+
+- **Size cap.** If this checkout's tree is larger than `GATE_TREE_MAX_GB`
+  (default 60; a fresh compact tree is far smaller), the gate deletes it and
+  builds fresh. With sccache that costs mostly linking.
+- **Low-disk sweep.** If the filesystem has less than `GATE_SWEEP_LOW_GB`
+  (default 150) GiB free, the gate deletes idle trees, oldest first, until
+  `GATE_SWEEP_GOAL_GB` (default 300) GiB are free. It looks in its own
+  `intent-gates` directory and in every worktree under `WORKSPACES_DIR`
+  (default `~/intent/workspaces`). A tree counts as idle when no gate has
+  started or finished in it for `GATE_SWEEP_MIN_IDLE_MINUTES` (default 60). A
+  gate never deletes its own tree for space.
+
+`make sweep-gates` deletes every tree idle for `GATE_SWEEP_IDLE_HOURS` (default
+24) from a cron job or by hand; `FREE_GB=N` stops once N GiB are free and
+`DRY_RUN=1` only lists. `make sweep` / `sweep-all` (cargo-sweep) work from
+day-granular access times and cannot reclaim trees that fill a disk within hours.
+
+A tree is deleted only while its gate lock (an exclusive `flock` on the tree
+directory, which every gate holds shared from before its build until its tests
+finish) and every Cargo build lock inside it are free, its idle stamp is
+re-checked under that lock, and no process executes, has open or has its
+working directory in a file under it. Platforms without `flock` or `/proc`
+never delete. The tree is renamed aside before deletion, so a gate that was
+waiting for the lock starts a fresh tree. With a separately configured Cargo
+`build-dir`, gates lock both trees and the size cap does not apply.
+`GATE_SWEEP=0` turns the cap and the sweep off.
+
+#### Parallel compiler front end
+
+Opt in to rustc's multi-threaded front end for local debug builds with:
+
+```bash
+PARALLEL=1 make build
+PARALLEL=1 make check            # also clippy, lint-sources, gate
+PARALLEL=1 make test-changed     # also test, test-select
+PARALLEL=1 PARALLEL_THREADS=4 make build
+```
+
+It sets `RUSTC_WRAPPER` to `scripts/rustc-parallel.sh`, which adds
+`-Zthreads=$PARALLEL_THREADS` (default 8) and `RUSTC_BOOTSTRAP=1` only to rustc
+invocations for crates under `packages/intentd`. Registry and git dependencies,
+their build-script probes and Cargo's `-vV`/`--print` probes run unchanged, so
+dependency feature detection matches CI. A global `RUSTC_BOOTSTRAP=1
+RUSTFLAGS=-Zthreads=8` would instead turn on nightly-only code in `anyhow`,
+`thiserror` and `proc-macro2`; do not use it.
+
+Measured on intentd at 1.96.0 (32-core shared host, paired against the default):
+clean debug builds are about 35–40% faster; rebuilding after an
+`intent-services/src/lib.rs` body edit is about 25% faster incremental and about
+40% faster with `CARGO_INCREMENTAL=0`; edits to small crates and the link-heavy
+`cargo test --no-run` gain little (≈0% and ≈10%). It costs 15–30% more total CPU
+and 1–2 GB more peak memory per rustc process, so lower `PARALLEL_THREADS` (or
+leave it off) on machines with little RAM. The nightly matching 1.96 crashed
+incremental `intent-services` rebuilds even without threads, so use the pinned
+stable toolchain, not nightly.
+
+Only `PARALLEL=1` enables it; any other value, including an unrelated
+`PARALLEL` from GNU parallel, is ignored. Release, coverage and other goals
+reject `PARALLEL=1` before any recipe runs, and both the Makefile and the
+wrapper refuse to run when `CI` or `GITHUB_ACTIONS` is set: CI and release
+builds never use it. A `RUSTC_WRAPPER` you set in the environment (for example
+`sccache`) is chained after the wrapper, but a `rustc-wrapper` from Cargo
+configuration is bypassed while `PARALLEL=1` is on; set `RUSTC_WRAPPER=sccache`
+explicitly to keep it. Cargo does not fingerprint flags added by a wrapper, so
+each thread count builds into its own `parallel-tN` tree under intentd's target directory
+(under your `CARGO_TARGET_DIR` when set, in the environment or on the make
+command line; a `CARGO_BUILD_BUILD_DIR` likewise gets its own `parallel-tN`
+child, otherwise the build-dir follows the target dir), and
+switching on, off or to another count never reuses the other setting's artifacts.
+The first `PARALLEL=1` build is therefore a full build, binaries land in
+its `debug/` subdirectory, and each tree takes its own disk space; delete it to
+reclaim it. Resume records for `make test` are kept separate per thread count. A compiler crash under `PARALLEL=1` should be retried without it
+before it is reported.
 
 #### Linux x64 callback gates
 
@@ -269,10 +402,14 @@ and remains a failure even through `tee`. Inspect the retained log before retryi
 
 For later runs, reuse the saved `callback_cache` path with `--offline`, assign and
 export its returned fixture path, and rerun preflight. With the fixture variable
-unset, `make test`, `make test-changed`, `make test-select` and `make gate` do this themselves for a
-ready cache under `~/.cache/intent/acp-callback-fixture`, and gate preflight hides
-host `NODE_OPTIONS` (such as a Datadog preload) from its checks. An empty offline cache
-refuses; it never downloads. Corrupt caches, mismatched manifests/Node and injected
+unset, `make test`, `make test-changed`, `make test-select`, `make gate`, `make coverage-all`
+and `make coverage-changed` do all of this themselves: they use the ready cache under
+`~/.cache/intent/acp-callback-fixture`, build it once from verified source like CI when it
+is missing (network required; one `~/.cache/intent/acp-callback-fixture-build-*.log` per build), and
+put an installed descriptor-pinned Node (for example under nvm) first on PATH when the shell's
+default Node differs. Gate preflight also hides host `NODE_OPTIONS` (such as a Datadog preload)
+from its checks. A failed build stops the target with one message naming its log; it never
+repairs an existing cache. Corrupt caches, mismatched manifests/Node and injected
 `NODE_OPTIONS` refuse too when you run the prepare script directly, so prefix it with
 `env -u NODE_OPTIONS` on such hosts. Do not bypass validation or edit a ready cache to make it
 pass. The optional `--bundle /path/to/pinned-bundle.tar.gz` route requires an
@@ -296,7 +433,9 @@ Every invocation that resolves a tree/plan identity creates a new attempt:
 - Changed plan: `GATE_CACHE_DIR/<tree-key>/changed/<plan-key>/attempts/<attempt-id>/`
 
 Normal exits, handled failures and interruptions print `[<label>] record: <path>`.
-A fully resumed run also creates and prints its new record, alongside
+The terminal shows nextest's readable status lines and the summary; the raw JSON
+test events go only to the attempt's `events-N.jsonl`, so run the target directly
+and trust its exit code instead of piping it through `tail` or `grep`. A fully resumed run also creates and prints its new record, alongside
 `resumed: skipped N tests already passed for this tree`; it has no child results
 or new JUnit file. Failures before identity resolution have no attempt. SIGKILL
 or daemon loss can prevent final output, so inspect the attempt directories.
@@ -397,7 +536,8 @@ make test
 ## Security issues
 
 Please do not report security vulnerabilities through public issues — see
-[SECURITY.md](SECURITY.md).
+[SECURITY.md](SECURITY.md). Maintainers landing a fix for a private report follow
+[Landing a security fix](docs/RELEASING.md#landing-a-security-fix).
 
 ## License
 
@@ -434,7 +574,9 @@ expect a low hit rate unless your path matches a CI runner's.
 
 The `shell-tests-bash3` CI job runs on GitHub-hosted Linux with a checksum-verified
 Bash 3.2.57 build. It tests the shell language compatibility needed by macOS
-users without consuming a macOS runner. CI runs the shell suites only in the
+users without consuming a macOS runner. CI restores that build from the Actions cache
+through `.github/actions/setup-bash3` (filled on `main` by `bash3-cache.yml`)
+and compiles it only on a cache miss. CI runs the shell suites only in the
 merge queue, so a local run is the only check before a 3.2-only breakage ejects
 the PR. Run it before opening a PR that touches `scripts/*.sh`:
 
@@ -456,24 +598,50 @@ The interpreter is isolated; the build does not replace the system shell.
 
 ### Script checks for your change
 
-CI runs the shell suites only in the merge queue, so a broken suite or a new
+CI runs the shell suites only in the merge queue, and the Python unit tests
+(`make test-scripts`) only once a PR is pushed, so a broken test or a new
 shellcheck finding otherwise shows up after a push. Before pushing changes to
 `scripts/`, the `Makefile` or `.github/workflows/ci.yml`, run:
 
 ```bash
 make test-scripts-changed            # changed vs origin/main, incl. uncommitted work
 DRY_RUN=1 make test-scripts-changed  # print the plan only
+FULL=1 make test-scripts-changed     # run every shell suite
 BASE=<ref> make test-scripts-changed # compare with another base
 ```
 
-It always runs `make lint-shell`. It runs every suite in the ci.yml
-`shell-tests` job (read from that job, so the lists cannot drift) when the
-`Makefile`, `ci.yml`, `scripts/*.sh`, `scripts/*.py` or `scripts/fixtures/`
-changed. For each changed `scripts/*.mjs` with a sibling `.test.mjs`, it runs
+It always runs `make lint-shell`. From the `test-scripts` recipe in the
+`Makefile` it picks, for each changed `.sh` or `.py` script directly under
+`scripts/`, the unittest modules that are the script itself, its own
+`test_<name>.py` or a file that names it, and runs them with that recipe's
+command. A shared helper, a script another script names, also gets the
+modules and suites of every script that uses it, directly or through other
+scripts, instead of a full run. Only top-level scripts count as users, so a
+check that reaches the script only through a `Makefile` recipe is not picked;
+the merge queue still runs it. It runs all of `make test-scripts` for `FULL=1`
+and for any other changed file that matches the pathspec of the ci.yml
+`python-tests` "Select Python test changes" step (read from that step, so the
+lists cannot drift), and skips them when no module names the script.
+On pull requests, CI runs `make test-scripts` only when a file in that pathspec
+changed; `scripts/test-ci-event-policy.py` fails when a module names a tracked
+file (such as the vendored tomli `LICENSE`) the pathspec misses.
+From the ci.yml `shell-tests` job (read from
+that job, so the lists cannot drift) it picks, for each changed `.sh` or `.py`
+script directly under `scripts/`, the suites that are the script itself, its
+own test (`<name>.test.sh` or `test_<name>.py`) or a file that names it; a changed `scripts/*.test.sh` also runs
+`lint-fixed-sleeps.sh`. It prints why each suite was picked. It runs every
+suite when the `Makefile`, `ci.yml` or `scripts/fixtures/` changed, when neither a
+suite nor a `test-scripts` module names a changed script (or, for a shared
+helper, any script that uses it), or with `FULL=1`. The merge queue still runs every
+suite. For each changed `scripts/*.mjs` with a sibling `.test.mjs`, it runs
 that test with `node --test`. Every step runs; the failures are listed at the
 end. Like CI it needs node, shellcheck and the `packages/intentd`
-submodule. It skips the Bash 3.2 pass (see above) and the sccache and runner
-steps that download tools.
+submodule. Once the suites' Bash 3 lookup finds an interpreter (after
+`make bash3`, or the stock macOS `/bin/bash`), the selected suites rerun their
+own checks under it, and it also runs the lines of the ci.yml
+`shell-tests-bash3` job that start a selected suite under `"$BASH3_BIN"`
+itself (`dev-sandbox.test.sh`, `rustc-parallel.test.sh`); without one it
+prints a skip notice. It skips the sccache and runner steps that download tools.
 
 After editing anything under `.github/`, run `make lint-workflows`. It runs the
 pinned actionlint (with shellcheck over `run:` scripts) over

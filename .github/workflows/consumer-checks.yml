@@ -49,6 +49,30 @@
 # intent-hq, and makes a monorepo checkout failure fatal. Component callers
 # omit that input and retain the workflow revision and fail-soft defaults.
 #
+# Changed-tests shell suites (intentd callers only): the monorepo drives
+# intentd's scripts/changed-tests.sh and scripts/with-test-policy.sh through
+# scripts/rust-changed-tests.test.sh, whose stub PATH is a deliberate command
+# allowlist, and the root and intentd launchers (coverage-*.sh and every
+# helper they reference) through scripts/test_rust_test_policy.py. When an
+# intentd PR's own diff (base to the tested merge commit, from the caller's
+# github context) changes one of those scripts or a file the suites copy —
+# for the policy test, the list scripts/rust_test_policy_manifest.py derives
+# from the caller head — scripts/consumer-checks-shell-suites.sh selects these
+# suites and intentd's own scripts/test-changed-tests.sh (the Bash suites run
+# with REQUIRE_BASH3=1 against a pinned Bash 3.2), so the PR that breaks them
+# is red here. Before this, intentd#2720 merged green and the monorepo merge
+# queue ejected the pin bump intent#7900 five times ("exec: env: not found")
+# until intent#7905, and intentd#2896 ejected intent#8277 31 times (an
+# uncopied helper, then CI-only stderr merging) until intent#8301 and
+# intent#8303. Other intentd PRs pay only for the selection step;
+# cloudlands-fe skips it. Monorepo
+# PRs still defer these suites to the merge queue (intent#7191); the self-test
+# exercise runs them. Fix order when a change needs both sides (new expected
+# argv or output): first land a monorepo rust-changed-tests.test.sh that
+# accepts both the pinned and the new behavior (the monorepo queue runs it
+# against the pin), then start a new intentd run, and tighten the test after
+# the pin bump.
+#
 # Caller sketch (pull_request + merge_group):
 #   monorepo-consumer-checks:
 #     uses: intent-hq/intent/.github/workflows/consumer-checks.yml@main
@@ -99,7 +123,7 @@ jobs:
 
   consumer-checks:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['gh-linux-8x'] || fromJSON('["gh-linux-8x"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['gh-linux-8x'] || fromJSON('["warp-ubuntu-2404-x64-8x"]') }}
     timeout-minutes: 45
     permissions:
       contents: read
@@ -138,6 +162,10 @@ jobs:
           ref: ${{ inputs.self-test && github.sha || job.workflow_sha || 'main' }}
           submodules: false
           persist-credentials: false
+          # Fixture-copy checks read history (past fixture versions, lock
+          # commit ancestry) from trees only; blob:none skips old blobs.
+          fetch-depth: 0
+          filter: blob:none
 
       - name: Skip when the monorepo checkout failed
         if: steps.monorepo.outcome != 'success'
@@ -162,9 +190,12 @@ jobs:
           submodules: false
           persist-credentials: false
 
+      # A dropped github.com connection here would fail the component's required
+      # gate (intent-hq/intent#8783); the pin is a commit on its main, so a
+      # retry only delays a real failure.
       - name: Initialize packages/${{ steps.component.outputs.other }} at its pin
         if: steps.monorepo.outcome == 'success'
-        run: git submodule update --init --depth=1 "packages/${{ steps.component.outputs.other }}"
+        run: scripts/retry.sh -- git submodule update --init --depth=1 "packages/${{ steps.component.outputs.other }}"
 
       - uses: actions/setup-node@v7
         if: steps.monorepo.outcome == 'success'
@@ -190,6 +221,35 @@ jobs:
             sed -n '/^consumer-checks summary$/,$p' "$log"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      # Path-filtered: see "Changed-tests shell suites" in the header. Runs on
+      # pull_request and merge_group alike, so the breaking intentd PR is red.
+      - name: Select the intentd changed-tests shell suites
+        id: shell-suites
+        if: inputs.component == 'intentd' && steps.monorepo.outcome == 'success'
+        env:
+          SELF_TEST: ${{ inputs.self-test }}
+          # The caller's context: its PR or merge-queue base, and the commit
+          # GitHub tests (the PR's test-merge commit or the merge group head).
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          TEST_SHA: ${{ github.sha }}
+        run: bash scripts/consumer-checks-shell-suites.sh
+
+      # The monorepo checkout's shared step; the cache it restores is the
+      # caller repo's, filled on its main by a bash3-cache.yml caller.
+      - name: Set up pinned Bash 3.2
+        if: steps.shell-suites.outputs.selected == 'true' && steps.monorepo.outcome == 'success'
+        uses: ./.github/actions/setup-bash3
+
+      - name: Run the intentd changed-tests shell suites
+        if: steps.shell-suites.outputs.selected == 'true' && steps.monorepo.outcome == 'success'
+        run: |
+          "$BASH3_BIN" --version
+          status=0
+          REQUIRE_BASH3=1 bash scripts/rust-changed-tests.test.sh || status=1
+          REQUIRE_BASH3=1 bash packages/intentd/scripts/test-changed-tests.sh || status=1
+          python3 -S -B scripts/test_rust_test_policy.py || status=1
           exit "$status"
 
       - name: Verify connected harnesses and source revisions
@@ -220,6 +280,9 @@ jobs:
           fi
           corepack enable
 
+      # The monorepo keeps no copy of this script (an intentd caller runs its PR
+      # head's), so a download outage compiles uncached instead of ejecting
+      # the PR; scripts/test_setup_sccache.py pins that contract.
       - name: Configure the self-hosted compiler cache
         if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'
         shell: bash
@@ -227,7 +290,7 @@ jobs:
           INTENT_SCCACHE_ENDPOINT: ${{ vars.INTENT_SCCACHE_ENDPOINT }}
           INTENT_SCCACHE_TOKEN: ${{ secrets.INTENT_SCCACHE_TOKEN }}
           INTENT_SCCACHE_MODE: ${{ vars.INTENT_SCCACHE_MODE }}
-        run: python3 scripts/setup-sccache.py
+        run: python3 packages/intentd/scripts/setup-sccache.py
       - name: Install the selected renderer dependencies
         if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'
         working-directory: packages/cloudlands-fe
@@ -250,3 +313,12 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
+
+      # A failed rerun can be stale: "Re-run failed jobs" keeps the monorepo
+      # commit the first attempt resolved (see "Recovery for callers using
+      # @main" in the header). Say so in an ::error:: when HEAD is behind main.
+      - name: Explain a failed rerun against an old monorepo commit
+        if: failure() && steps.monorepo.outcome == 'success'
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: bash scripts/consumer-checks-stale-rerun.sh

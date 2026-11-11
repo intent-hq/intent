@@ -1,11 +1,11 @@
-> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.8a Script run monitors (prepared active-only replacement).
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.8a Script run monitors (active-only, protocol 14).
 
 ### 5.8a Script run monitors
 
-#### Active-only monitors (prepared protocol 14)
+#### Active-only monitors (protocol 14)
 
 **This section supersedes protocol-13 history/retention and fast-final retry
-semantics below.** Exact integer `scriptMonitors: 2` gates the whole replacement,
+semantics below.** Exact integer `scriptMonitors: 2`, which intentd advertises, gates the whole replacement,
 including storage migration, queue fences and recovery. `scriptMonitors: 1` is
 not sufficient. Do not expose the new capability until all boundaries work.
 
@@ -16,7 +16,7 @@ transition. `scriptMonitor.get`/`ws.script.monitorDetails` retrieves a known
 active ID only; finished/unknown/foreign IDs yield `-32602` after workspace and
 MCP-owner authorization. No history endpoint, terminal cache or retention TTL.
 Read calls remain read-only (an overdue active row may await maintenance).
-Use the [shared active-only paging contract](./scripts.md#active-only-compact-lists-prepared-breaking-contract).
+Use the [shared active-only paging contract](./scripts.md#active-only-compact-lists-protocol-14-breaking-contract).
 `agentId?` remains the wire owner filter; MCP fixes it to the caller. Optional
 `state` accepts only `active` in either view; reject all/terminal/null/invalid
 values before any row fetch. Active filtering must occur in storage selection,
@@ -25,15 +25,21 @@ not after materializing old terminal records.
 `ScriptMonitorSummary` contains only `monitorId`, `workspaceId`, `agentId`,
 `scriptId`, `runId`, `scriptName`, `mode`, `state: "active"`, `createdAt`,
 `expiresAt`, optional `lineCount`; if configured, `outputPatternPreview`
-(≤160 UTF-8 bytes) and `outputPatternTruncated` (boolean). Omit outputPattern,
+(≤160 UTF-8 bytes) and `outputPatternTruncated` (boolean); and, with
+[`remoteScripts: 1`](./scripts.md#scripts-of-remote-agents-remotescripts-1),
+`remoteAgentId` and `nodeId` on a monitor of a machine run (omitted otherwise). Omit outputPattern,
 settledAt, reason, result and trigger. Full active detail retains the complete
 pattern but has no terminal fields. Never fetch details to render collapsed
 badges. There is no matched-line history read: terminal notification/event
 snapshots carry the existing bounded matched line, and script.output reads the
 available process buffer by known script ID, not by monitor ID or past run ID.
 
-**Registration and retries.** TTL/options/ownership/run checks and at most one
-active monitor per workspace/script remain unchanged. Same-owner retries of an
+**Registration and retries.** TTL/options/ownership/run checks remain unchanged.
+There is at most one active monitor per workspace/script, or, with
+[`remoteScripts: 1`](./scripts.md#scripts-of-remote-agents-remotescripts-1), per
+workspace/script/run place (the home run, or one remote agent's machine run), so
+a monitor on the home run and one on each remote agent's machine run never
+contend, and neither do two remote agents' monitors of the same script. Same-owner retries of an
 active registration return that row unchanged; another owner is refused.
 Registration of an already-final latest run returns
 `{ ok: false, refused: true, reason: "run-finished", scriptId, runId }`, creates
@@ -234,8 +240,8 @@ too; their exact syntax, limits and framing are defined below.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| scriptMonitor.list | workspaceId (req), agentId?, view? (`full` \| `summary`), state? (`active` only in v14), limit?, cursor? | Full `{ monitors: ScriptMonitor[] }` by default; prepared summary extension below |
-| scriptMonitor.get | workspaceId (req), monitorId (req) | Prepared: full active `ScriptMonitor`; `scriptMonitors: 2` required |
+| scriptMonitor.list | workspaceId (req), agentId?, view? (`full` \| `summary`), state? (`active` only in v14), limit?, cursor? | Full `{ monitors: ScriptMonitor[] }` by default; summary extension below |
+| scriptMonitor.get | workspaceId (req), monitorId (req) | Full active `ScriptMonitor`; `scriptMonitors: 2` required |
 | scriptMonitor.cancel | workspaceId (req), monitorId (req) | `{ ok: true, monitor }`; stop observation silently, same transition as the owner helper |
 | scriptMonitor.cancelRun | workspaceId (req), monitorId (req) | `{ ok: true, monitor, runStopped: boolean }`; stop only the active monitor's bound run and notify its owner |
 
@@ -251,7 +257,11 @@ A fresh registration requires an existing, nondeleted, nonretired owner in an
 active workspace. A failed/inert owner cannot register. A temporarily busy,
 question-held or idle owner is eligible. Lifecycle/read/persistence errors fail
 closed; never return success for a memory-only registration. There is one active
-monitor per **(workspaceId, scriptId)**, irrespective of runId. Registration and
+monitor per **(workspaceId, scriptId, run place)**, irrespective of runId. The run
+place is the home run, or one remote agent's machine run
+([scripts of remote agents](./scripts.md#scripts-of-remote-agents-remotescripts-1));
+without `remoteScripts: 1` every run is a home run, so this is one per
+(workspaceId, scriptId) as before. Registration and
 retirement enforce this atomically, including concurrent calls and recovery.
 Same-owner registration returns the existing active row, with no extra event or
 wake; an explicitly different runId is rejected (`-32602`), never rebound.
@@ -298,7 +308,8 @@ Upsert/remove settle any unfinished predecessor as `cancelled` with an error
 naming replacement/removal before discarding its definition. Ordinary script
 archive/restore does not change a run or monitor; workspace archive is different.
 
-Registration without runId binds atomically to the **latest accepted run** at
+Registration without runId binds atomically to the **latest accepted run** of
+the caller's own run place (a remote agent's machine run, otherwise the home run) at
 registration, including a retained final result after a fast exit or stop. It
 must not infer completion from status `idle` alone. A never-run script, a legacy
 result without a token, or an unavailable explicit run fails `-32602` with no
@@ -440,7 +451,7 @@ An overlong control string needs only parser state, not a growing buffer.
 Completion/TTL/cleanup must remain schedulable under sustained output. A monitor
 without either output option does not accumulate line text or count.
 
-Example agent use (prepared helper, same mandatory TTL in every case):
+Example agent use (same mandatory TTL in every case):
 
 ```javascript
 const { scriptId, runId } = await ws.script.start("checks");
@@ -531,6 +542,15 @@ or re-arm. Only a regex wake includes the matched line, clearly marked as
 untrusted script output; other reasons contain no output. Do not set a user-origin attribution
 or wake/create a different agent. Busy/question-held owners receive a queued
 wake through normal automatic-delivery rules, not an interrupt.
+
+With [`remoteScripts: 1`](./scripts.md#scripts-of-remote-agents-remotescripts-1),
+a monitor of a machine run wakes its owner with this metadata (reason
+`finished`, `ttl-expired` or `output-match`) plus `remoteAgentId` and `nodeId`. That wake
+is not durable and has no wake identity: the persistence, deduplication,
+single-entry drain, export deferral and job/receipt admission rules below apply
+only to metadata without `remoteAgentId`; its worker admission checks only the
+owner and workspace lifecycle
+([wakes of machine-run monitors](./scripts.md#wakes-of-machine-run-monitors)).
 
 Persist terminal state and a stable wake identity derived from monitorId as one
 recoverable transition (transactional outbox or equivalent). Queue admission and

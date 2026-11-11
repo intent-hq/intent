@@ -10,11 +10,11 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 
 | Method | Params | Result |
 | --- | --- | --- |
-| search.inFiles | workspaceId (req), query (req), opts? { caseSensitive?, regex?, globs?, maxResults? }, requestId? | { requestId, matches: SearchMatch[], truncated } — ripgrep content search |
+| search.inFiles | workspaceId (req), query (req), opts? { caseSensitive?, regex?, globs?, maxResults? }, requestId? | { requestId, matches: SearchMatch[], truncated } — ripgrep content search. `maxResults` absent → 500, larger than 2,000 → 2,000 (behaviour change: absent meant no cap); size bounds below |
 | search.fileNames | workspaceId (req), pattern (req), limit?, requestId? | { requestId, files: string[], truncated } — path/glob search |
-| search.messages | query (req), workspaceId?, preferWorkspaceId?, agentId?, role?, limit?, requestId? | { requestId, matches: MessageMatch[] } — **FTS5/bm25-ranked** full-text search over persisted agent transcripts (BE owns session storage). `workspaceId` is **optional**: absent → **global** search across all workspaces; present → hard scope filter. `preferWorkspaceId` is a **soft ranking boost** — matches from that workspace outrank equally-relevant matches from other workspaces, but results stay global (nothing is excluded). Matches from **archived** workspaces carry a fixed soft rank penalty, giving the default tier order preferred workspace → other active → archived (relevance can still override). `agentId`/`role` narrow further (hard filters); `limit` caps the match count (absent → no cap). Semantics block below |
-| search.events | query (req), workspaceId?, limit?, requestId? | { requestId, matches: EventMatch[] } — over the BE event log |
-| search.notes | query (req), workspaceId?, preferWorkspaceId?, limit?, includeArchived?, requestId? | { requestId, matches: NoteMatch[], indexed: true } — **FTS5/bm25-ranked** title, body and tag search across accessible workspaces; always inline. `workspaceId` hard-filters; `preferWorkspaceId` softly boosts. `limit` absent → no cap; `includeArchived` absent → true (individual note archives). Indexed contract and compatibility below |
+| search.messages | query (req), workspaceId?, preferWorkspaceId?, agentId?, role?, limit?, requestId? | { requestId, matches: MessageMatch[] } — **FTS5/bm25-ranked** full-text search over persisted agent transcripts (BE owns session storage). `workspaceId` is **optional**: absent → **global** search across all workspaces; present → hard scope filter. `preferWorkspaceId` is a **soft ranking boost** — matches from that workspace outrank equally-relevant matches from other workspaces, but results stay global (nothing is excluded). Matches from **archived** workspaces carry a fixed soft rank penalty, giving the default tier order preferred workspace → other active → archived (relevance can still override). `agentId`/`role` narrow further (hard filters); `limit` caps the match count (absent → 50, larger than 200 → 200, negative → 0; behaviour change: absent or negative meant no cap). Semantics block below |
+| search.events | query (req), workspaceId?, limit?, requestId? | { requestId, matches: EventMatch[] } — over the BE event log. `limit` caps the match count (absent → 50, larger than 200 → 200, negative → 0; behaviour change: absent meant no cap) |
+| search.notes | query (req), workspaceId?, preferWorkspaceId?, limit?, includeArchived?, requestId?, nextToken? | { requestId, matches: NoteMatch[], indexed: true, nextToken: string \| null } — **FTS5/bm25-ranked** title, body and tag search across accessible workspaces; always inline, one page at a time. `workspaceId` hard-filters; `preferWorkspaceId` softly boosts. `limit` is the page size (absent → 50, larger than 200 → 200; behaviour change: absent meant no cap); `nextToken` continues the ranked list; `includeArchived` absent → true (individual note archives). Indexed contract and compatibility below |
 | search.codebase | workspaceId (req), query (req), requestId? | { requestId, matches: CodebaseMatch[] } — **ripgrep/symbol-backed** search. auggie exposes no structured codebase-retrieval CLI, so `AuggieContextEngine::retrieve()` returns `Unavailable` instantly and ripgrep is the backing; the `ContextEngine` trait is retained as forward-looking infra |
 | search.cancel | requestId (req), workspaceId? | { ok: true } — aborts an in-flight search by its `requestId` |
 
@@ -34,7 +34,7 @@ interface SearchMatch {
   file: string;        // workspace-relative path
   line: number;        // 1-based line number
   col: number;         // 1-based column of the match start
-  preview: string;     // the matching line (trimmed for display)
+  preview: string;     // the matching line (trimmed; windowed around the match to at most 400 chars plus a `…` at each cut end)
   before?: string[];   // optional context lines before
   after?: string[];    // optional context lines after
   score?: number;      // relevance (semantic/codebase results)
@@ -48,7 +48,9 @@ interface NoteMatch {
   preview: string;          // plain-text display snippet, never trusted HTML
   score?: number;           // indexed hits always emit -adjustedRank; higher = better
   workspaceId: string;      // identity/navigation key is (workspaceId, noteId)
-  title: string;
+  title: string;            // shortened only on a hit too large for a page:
+  titleTruncated?: true;    //   then titleTruncated and titleBytes (the full
+  titleBytes?: number;      //   UTF-8 length) are set; note.get reads it whole
   updatedAt: string;        // persisted note updated_at, RFC 3339
   isArchived: boolean;     // the note's own archive state
   workspaceArchived: boolean; // independently, its workspace's archive state
@@ -108,10 +110,9 @@ per `(workspaceId, noteId)`, since note IDs such as `spec` repeat across workspa
 `includeArchived` defaults to `true` to preserve legacy API inclusion of individually archived
 notes. Explicit `false` removes individually archived notes. This does **not** exclude archived
 workspaces: accessible, non-archived notes in those workspaces remain eligible, with a soft rank
-penalty and `workspaceArchived: true`. `limit` is a nonnegative integer: omitted means no cap,
-`0` means no matches, and a positive value caps the final ranked result. Optional `null` values
-act as omission for all parameters. There is no implicit default or maximum result cap; clients
-should request a limit for interactive search. The palette sends `limit: 10`,
+penalty and `workspaceArchived: true`. `limit` is a nonnegative integer page size: omitted
+means 50, values over 200 clamp to 200, and `0` means no matches (`nextToken: null`). Optional
+`null` values act as omission for all parameters. The palette sends `limit: 10`,
 `includeArchived: false`, and the active workspace as `preferWorkspaceId`, leaving `workspaceId`
 absent. It retains its five-row display cap in ordinary, unfiltered search.
 
@@ -132,8 +133,28 @@ text, never injected as HTML. It supplies display context, not editor offsets or
 exact-passage scrolling/highlighting. The result carries note title and archive context without
 fetching the note body; workspace display names resolve through accessible workspace metadata.
 
-**Delivery, errors and compatibility.** Indexed note searches always return the complete
-result inline, even with an explicit `workspaceId` or more than 25 matches. No `search:result`
+**Pages.** A reply holds at most `limit` hits in ranked order and stays within 480,000
+serialized result bytes, so the frame stays under 512,000. A hit cut by the byte budget is the
+first hit of the next page, never dropped; every page carries at least one hit while hits
+remain. `nextToken` is a string when more hits follow and `null` when the list is complete
+(a page that reaches `limit` exactly may still end the list). To continue, send the same
+`query`, `workspaceId`, `preferWorkspaceId` and `includeArchived` with the token (`limit` and
+`requestId` may change); a malformed token or one from a different search is `-32602`
+`"invalid-params"`. The token is opaque and resumes after the page's last hit by its position
+in the ranked order (a keyset, not a count), re-anchoring on the page's recent hits at their
+current ranks. Deleting, archiving or editing a note already served therefore normally never
+skips a hit that still matches. If every recent hit of the page was deleted or edited before the
+next request, the page resumes from the last hit's stored rank and may skip or repeat hits; rank
+changes from other notes can rarely reorder hits across the page boundary. A page may repeat a
+hit whose own rank rose, or include a note that newly matches. A hit edited to rank higher
+than the page end before it is served moves onto an earlier page and is not returned again.
+A single hit larger than a page (only an extremely long title can do this) keeps a shortened
+`title`, cut on a UTF-8 boundary, and adds
+`titleTruncated: true` and `titleBytes` (the full title's UTF-8 length); `note.get` reads the
+whole title. Older clients that ignore `nextToken` see the first page.
+
+**Delivery, errors and compatibility.** Indexed note searches always return their page inline,
+even with an explicit `workspaceId` or more than 25 matches. No `search:result`
 or `search:done` event is required. `requestId` is echoed when supplied and minted otherwise;
 the ordinary `search.cancel` request-ID contract remains, including no-op cancellation after
 completion. An existing `truncated: false` result member may remain for compatibility; reaching
@@ -164,13 +185,13 @@ Example palette request and indexed response (illustrative score):
 ```
 
 ```json
-{"jsonrpc":"2.0","id":92,"result":{"requestId":"notes-1","indexed":true,"matches":[{"noteId":"spec","workspaceId":"ws-other","title":"Release checklist","preview":"Verify the release checklist before promotion.","score":0.8,"updatedAt":"2026-10-01T00:00:00Z","isArchived":false,"workspaceArchived":true}]}}
+{"jsonrpc":"2.0","id":92,"result":{"requestId":"notes-1","indexed":true,"matches":[{"noteId":"spec","workspaceId":"ws-other","title":"Release checklist","preview":"Verify the release checklist before promotion.","score":0.8,"updatedAt":"2026-10-01T00:00:00Z","isArchived":false,"workspaceArchived":true}],"nextToken":null}}
 ```
 
 Empty indexed response (also valid for punctuation-only input or `limit: 0`):
 
 ```json
-{"jsonrpc":"2.0","id":93,"result":{"requestId":"notes-2","indexed":true,"matches":[]}}
+{"jsonrpc":"2.0","id":93,"result":{"requestId":"notes-2","indexed":true,"matches":[],"nextToken":null}}
 ```
 
 Legacy response fixture: no marker or workspace identity, so retain local palette discovery:
@@ -184,6 +205,18 @@ result (`matches`/`files` + `truncated`). Large or long-running searches are **s
 method returns `{ requestId }` promptly and the daemon pushes incremental `search:result`
 batches followed by a terminal `search:done` (§6.5), correlated by `requestId`. Either way the
 final, complete answer is the `search:done` event (or the inline result when not streamed).
+
+**Size bounds (read payload budget).** An inline reply stays under the daemon's 500 KiB read
+payload budget. `search.inFiles` stops collecting once its matches would serialize past
+480,000 bytes, or at `maxResults`, and answers `truncated: true` either way; a longer matching line
+is windowed to a `preview` of at most 400 characters plus a `…` at each cut end (`col` still
+counts from the start of the line).
+`search.notes` pages instead of cutting (see its Pages paragraph above).
+`search.messages`, `search.events` and `search.codebase` cut an inline `matches` array at the
+same 480,000 bytes and then add `truncated: true` (absent when nothing was cut). The default
+and maximum `limit` / `maxResults` above cap streamed results too. The app's palette sends
+`limit: 10`, so the new defaults do not change it. Daemons with these bounds advertise
+`boundedReads: 1` ([client.hello](./client-hello.md)).
 
 ```json
 // → content search across a workspace

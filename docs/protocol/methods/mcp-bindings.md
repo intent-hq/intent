@@ -15,6 +15,7 @@ paragraph elsewhere under `docs/protocol/` that documents a binding must agree w
 
 ```text
 ws.help(namespace?) → string
+ws.search(query, { in?, agentId?, role?, limit? }?) → { notes?, messages?, truncated? }
 ```
 
 ### ws.agent
@@ -22,8 +23,9 @@ ws.help(namespace?) → string
 ```text
 ws.agent.create(name, message, opts?) → { ok, id?, text?, ... }
 ws.agent.delegate({ taskNoteId?, noteId?, taskText?, agentInstructions?, specialist?, model?, provider?, reasoningEffort?, behaviorPrompt?, waitMode?, skipAutoCommit?, tasks? }) → { ok, text?, ... }
+ws.agent.delete(agentId) → { ok, agentId, deleted, failed }
 ws.agent.diagnostics({ agentId?, taskNoteId?, includeCompleted?, staleRespondingAfterMs? }?) → { diagnostics, text }
-ws.agent.getMessageBlock(agentId, messageId, blockId) → { block }
+ws.agent.getMessageBlock(agentId, messageId, blockId, { offset?, maxBytes? }?) → { block, truncated, field, encoding, totalBytes, nextOffset }
 ws.agent.getQueue(agentId) → { ok, agentId, queueLength, queue }
 ws.agent.list(optsOrIncludeCompleted?) → [agents]
 ws.agent.listSpecialists() → [specialists]
@@ -38,6 +40,7 @@ ws.agent.send(agentId, message, priority?) → { ok, agentId, delivery?, ... }
 ws.agent.sendToTask(taskNoteId, message, priority?) → { ok, taskNoteId, delivery?, ... }
 ws.agent.snapshot() → { time, hooks?, agentWatches?, queuedMessages?, eventSubscriptions?, activeSubAgents?, unsettledSubAgents?, runningSubAgents?, numQuestionsAsked?, prMonitors?, prs?, tasks?, pendingAttention? }
 ws.agent.status(agentId) → agent
+ws.agent.stop(agentId, { reason? }?) → { ok, agentId, stopped, failed }
 ws.agent.subscribe(eventTypes, { excludeSelf?, batchWindow? }) → { subscriptionId, ... }
 ws.agent.summary(agentId) → summary
 ws.agent.unsubscribe(subscriptionId) → { ok, subscriptionId }
@@ -125,12 +128,14 @@ ws.app.workspaces.delete(id) → ProposalCard
 ws.app.workspaces.get(id) → workspace
 ws.app.workspaces.list({ filter?, sort? }) → workspaces[]
 ws.app.workspaces.open(id, { openInNewWindow? }?) → { ok, queued }
+ws.app.workspaces.search(query | { query?, pr?, repository?, includeRetired?, limit? }) → { matches: [{ id, title, branch, status, archived, updatedAt, repository, repositoryPath, matchedOn, pullRequests?, notes?, link, markdownLink }], truncated }
 ws.app.workspaces.transfer(id, { destination? }?) → ProposalCard
 ```
 
 ### ws.browser
 
 ```text
+ws.browser.clients() → { clients, unpinned, workspace }
 ws.browser.docs(topic) → string
 ws.browser.exec(actions, tabId?) → result | results[]
 ws.browser.listTabs(scope?) → [tabs]
@@ -142,7 +147,7 @@ ws.browser.listTabs(scope?) → [tabs]
 ws.comment.add(noteId, { searchContext, commentTarget, comment, type?, author?, authorType? }) → { ... }
 ws.comment.delete(noteId, commentId) → { ... }
 ws.comment.getThread(noteId, { threadId?, commentId? }) → thread
-ws.comment.list(noteId, { since?, authorType?, status?, includeComments? }) → [threads]
+ws.comment.list(noteId, { since?, authorType?, status?, includeComments? }) → { threads, totalThreads, totalComments }
 ws.comment.respond(noteId, { threadId?, commentId?, comment, type?, author?, authorType?, suggestionOriginal?, suggestionProposed? }) → { ... }
 ```
 
@@ -150,8 +155,34 @@ ws.comment.respond(noteId, { threadId?, commentId?, comment, type?, author?, aut
 
 ```text
 ws.crossWorkspace.listNotes(targetWorkspaceId) → [notes]
-ws.crossWorkspace.listSiblings() → [workspaces]
-ws.crossWorkspace.readNote(targetWorkspaceId, noteId) → note
+ws.crossWorkspace.listSiblings({ includeRetired? }?) → [workspaces]
+ws.crossWorkspace.readNote(targetWorkspaceId, noteId, { startLine?, maxLines?, startOffset? }?) → note
+ws.crossWorkspace.search({ query?, pr?, includeRetired?, limit? }) → { matches, truncated }
+```
+
+### ws.desktop
+
+```text
+ws.desktop.click({ displayId?, layoutId, x, y, button?, clickCount?, windowId? }) → { ok: true }
+ws.desktop.drag({ displayId?, layoutId, from: { x, y }, to: { x, y }, windowId? }) → { ok: true }
+ws.desktop.endControl() → { ended, withdrawn }
+ws.desktop.focusWindow({ windowId }) → { ok: true }
+ws.desktop.keypress({ key, modifiers?, windowId? }) → { ok: true }
+ws.desktop.listDisplay() → { layoutId, displays }
+ws.desktop.move({ displayId?, layoutId, x, y, windowId? }) → { ok: true }
+ws.desktop.screenshot({ displayId?, layoutId? }?) → { capturedAt, layoutId, displays, frontmost?, windows }
+ws.desktop.scroll({ displayId?, layoutId, x, y, deltaX, deltaY, windowId? }) → { ok: true }
+ws.desktop.startControl() → StartResult
+ws.desktop.type({ text, windowId? }) → { ok: true }
+```
+
+### ws.discussion
+
+```text
+ws.discussion.conversations({ beforeId?, limit? }?) → { conversations, hasMore }
+ws.discussion.list(conversationId, { beforeSequence?, afterSequence?, limit? }?) → { messages, hasMore, conversation }
+ws.discussion.react(conversationId, messageId, reaction, active) → { messageId, reactions, reactionVersion }
+ws.discussion.send(conversationId, body, { messageId, recipientAgentIds?, replyToMessageId?, agentMentions? }) → { message, conversation }
 ```
 
 ### ws.event
@@ -171,6 +202,7 @@ ws.file.delete(path) → { ok, path, deleted }
 ws.file.getAttachment(attachmentId, destDir?) → { path, fileName, mimeType?, size, uploadedAt }
 ws.file.list(path?) → [{ name, type }]
 ws.file.mkdir(path) → { ok, path, created?|existed? }
+ws.file.pull({ fromAgentId, path, to? }) → { path, kind, size, sha256, files, skipped }
 ws.file.read(path) → string
 ws.file.rename(oldPath, newPath) → { ok, oldPath, newPath }
 ws.file.write(path, content) → { ok, path, size }
@@ -214,7 +246,7 @@ ws.mcp.listTools(serverId) → { tools: [...] }
 ```text
 ws.mr.monitor(prNumber, { repo? }) → { ok, monitor, requirements, pausedUntil?, adoptedFrom? }
 ws.mr.monitors() → [monitors]
-ws.mr.snapshot(prNumber, { repo? }?) → { repo, prNumber, title, url, state, isDraft, isMerged, isClosed, headSha, updatedAt, mergeable, mergeableState, mergeBlockedReason, checks: { total, passed, failed, pending, failedNames }, reviews: { decision, approvals, changesRequested }, comments: { conversationCount, reviewCommentCount, unresolvedThreadCount?, totalCount }, requirements: { state, isDraft, hasConflicts, isBehind, ancestry, branchUpdateRequired?, mergeable?, checks: { total, passed, failed, pending, items, failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed?, changesRequested }, threads: { unresolved?, resolutionRequired? }, mergeStateStatus?, mergeBlockedReason?, isInMergeQueue?, mergeQueue?, mergeQueueEjection?, rulesKnown }, pausedUntil? }
+ws.mr.snapshot(prNumber, { repo? }?) → { repo, prNumber, title, url, state, isDraft, isMerged, isClosed, headSha, updatedAt, mergeable, mergeableState, mergeBlockedReason, checks: { total, passed, failed, pending, skipped, failedNames, skippedNames }, reviews: { decision, approvals, changesRequested }, comments: { conversationCount, reviewCommentCount, unresolvedThreadCount?, totalCount }, requirements: { state, isDraft, hasConflicts, isBehind, ancestry, branchUpdateRequired?, mergeable?, checks: { total, passed, failed, pending, skipped, items, failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed?, changesRequested }, threads: { unresolved?, resolutionRequired? }, mergeStateStatus?, mergeBlockedReason?, isInMergeQueue?, mergeQueue?, mergeQueueEjection?, checksNotStarted?, rulesKnown }, pausedUntil? }
 ws.mr.unmonitor(prNumber, { repo? }) → { ok, monitor }
 ```
 
@@ -228,7 +260,7 @@ ws.note.edit(id, { old, new }) → { ... }
 ws.note.editLines(id, { start, end, content }) → { ... }
 ws.note.list(tag?) → [{ id, title, tags, ... }]
 ws.note.listTasks(id) → [{ text, status, taskNoteId, linkedTaskNoteId, lineNumber, ... }]
-ws.note.read(id) → { id, title, content, rawContent, tags, ... }
+ws.note.read(id, { startLine?, maxLines? }?) → { id, title, content, rawContent, tags, totalLines, ... }
 ws.note.readAsset(asset) → { assetId, mimeType, data, sizeKb }
 ws.note.saveAsset({ data, mimeType, originalName? }) → { assetId, path, url }
 ws.note.setContent(id, content, confirmReplacement?) → { ... }
@@ -240,7 +272,7 @@ ws.note.updateMetadata(id, { title?, tags? }) → { ... }
 ```text
 ws.pr.monitor(prNumber, { repo? }) → { ok, monitor, requirements, pausedUntil?, adoptedFrom? }
 ws.pr.monitors() → [monitors]
-ws.pr.snapshot(prNumber, { repo? }?) → { repo, prNumber, title, url, state, isDraft, isMerged, isClosed, headSha, updatedAt, mergeable, mergeableState, mergeBlockedReason, checks: { total, passed, failed, pending, failedNames }, reviews: { decision, approvals, changesRequested }, comments: { conversationCount, reviewCommentCount, unresolvedThreadCount?, totalCount }, requirements: { state, isDraft, hasConflicts, isBehind, ancestry, branchUpdateRequired?, mergeable?, checks: { total, passed, failed, pending, items, failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed?, changesRequested }, threads: { unresolved?, resolutionRequired? }, mergeStateStatus?, mergeBlockedReason?, isInMergeQueue?, mergeQueue?, mergeQueueEjection?, rulesKnown }, pausedUntil? }
+ws.pr.snapshot(prNumber, { repo? }?) → { repo, prNumber, title, url, state, isDraft, isMerged, isClosed, headSha, updatedAt, mergeable, mergeableState, mergeBlockedReason, checks: { total, passed, failed, pending, skipped, failedNames, skippedNames }, reviews: { decision, approvals, changesRequested }, comments: { conversationCount, reviewCommentCount, unresolvedThreadCount?, totalCount }, requirements: { state, isDraft, hasConflicts, isBehind, ancestry, branchUpdateRequired?, mergeable?, checks: { total, passed, failed, pending, skipped, items, failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed?, changesRequested }, threads: { unresolved?, resolutionRequired? }, mergeStateStatus?, mergeBlockedReason?, isInMergeQueue?, mergeQueue?, mergeQueueEjection?, checksNotStarted?, rulesKnown }, pausedUntil? }
 ws.pr.unmonitor(prNumber, { repo? }) → { ok, monitor }
 ```
 
@@ -276,6 +308,14 @@ ws.script.stop(scriptId) → { ok, scriptId }
 ws.script.unmonitor(monitorId) → { ok, monitorId }
 ```
 
+### ws.secret
+
+```text
+ws.secret.forget(name) → { ok, forgotten }
+ws.secret.list() → { secrets, pendingRequests }
+ws.secret.request({ name, reason }) → { ok, requestId, message }
+```
+
 ### ws.task
 
 ```text
@@ -308,6 +348,6 @@ ws.workspace.proposeSibling({ title, initialPrompt, specialist?, baseRef? }) →
 ws.workspace.setAgentName(name) → { ok, name }
 ws.workspace.setStatusImage({ data, mimeType, originalName? } | null) → { ok, statusImageAssetId, url? }
 ws.workspace.setStatusMessage(message) → { ok, statusMessage }
-ws.workspace.setTitle(title) → { ok, title, branch, skipped? }
+ws.workspace.setTitle(title, { userRequested? }?) → { ok, title, branch, skipped? }
 ws.workspace.unarchive() → { ok, status }
 ```

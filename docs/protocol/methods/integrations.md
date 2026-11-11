@@ -84,13 +84,38 @@ are normalized to camelCase: `html_url → htmlUrl`, `created_at → createdAt`,
 
 **Conventions.** Unless noted, `owner` + `repo` are **(req)** string params (and `number` is the
 **(req)** PR/issue number where applicable). Reads that paginate follow the uniform pagination
-contract: an optional `limit` (default **50**, max **200**) plus an opaque `nextToken` cursor echoed
-in the result (`nextToken: null` when there are no further pages). Errors reuse the §9 conventions:
+contract: an optional `limit` (default **50**, max **100** — GitHub's own `per_page` maximum; larger
+values are clamped, values below 1 become 1) plus an opaque `nextToken` cursor echoed
+in the result (`nextToken: null` when there are no further pages). See **Byte-budgeted pages** below
+for the reads that can stop short of `limit`. Errors reuse the §9 conventions:
 missing/invalid params and "not found" (404) lookups → `-32602` **unless a method row documents a
 graceful null/exists result** (e.g. `github.repos.get` → `{ repo: null }`, `github.repoConfig.get`
 → `{ config: null, exists: false }`); a token that is absent or fails `GET /user`, and any other
 GitHub/service failure → `-32603` with a descriptive `message`
 (e.g. `"GitHub is not configured."`). There are **no** custom numeric codes.
+
+**Byte-budgeted pages (behaviour change, every client).** Applies to every client unconditionally — no opt-in, and no
+capability check is needed (it does not depend on `server.capabilities.boundedReads`). Before: `limit` up
+to 200 (GitHub served at most 100; Linear issue reads at most 250) and no byte limit, so a page of
+long bodies reached 1.7 MB (GitHub) or 4.3 MB (Linear). After: the limits below. The reads whose items carry long free text — `github.pulls.list`,
+`github.pulls.search` (repo and `org` forms), `github.pulls.files`, `github.pulls.reviews`,
+`github.issues.list`, `github.issues.search`, `github.listReviewComments`,
+`github.getReviewThreads` (and `linear.listIssues` / `linear.searchIssues`, §5.28) — keep one
+reply under the 500 KiB read payload budget without cutting data that has no other read path:
+
+- Items are served in forge order until the next one would push the page's items past
+  **477,952 bytes** of compact JSON, so the whole result stays under **480,000 bytes**. A page can therefore hold **fewer items than `limit`** while
+  `nextToken` is non-null; clients MUST page on `nextToken`, never on `items.length < limit`.
+- When a page stops short, its `nextToken` resumes **inside the same forge page**, so every item is
+  served exactly once and in order. A resume token also fixes the page size it was cut from: a
+  `limit` sent alongside it is ignored until the forge page is exhausted.
+- The first item of a page is always served. If that one item alone exceeds the budget (for
+  example a review thread with many long comments or a huge patch), its longest strings are cut
+  to a common length on a UTF-8 boundary and the item gains **`contentTruncated: true`** (absent
+  otherwise). `github.pulls.get` / `github.issues.get` / `linear.getIssue` still return the full
+  body of a single PR or issue.
+- Older tokens (from a daemon without byte budgets) still decode. Clients that already follow
+  `nextToken` need no change.
 
 #### Repos & branches
 
@@ -128,7 +153,7 @@ forwarded with `provider: "github"`; the result projected to the documented `git
 
 #### Provider-generic auth — `sourceControl.*` *(v10.5)*
 
-The [prepared GitLab checkout surface (§5.53)](repository-checkout.md) uses the
+The [GitLab checkout surface (§5.53)](repository-checkout.md) uses the
 selected destination's repository connection before a workspace exists. Its
 full instance identity, original host/caller/socket authority and cache rules
 are distinct from the `github.*` browse contracts and collaboration identity
@@ -191,10 +216,10 @@ interface SourceControlUser {  // derived identity — never carries a token
 `SourceControlUser` is deliberately narrower than `GithubUser` (no `htmlUrl`); `github.getUser` keeps
 returning `GithubUser`.
 
-#### Full-instance GitLab authentication (prepared v13.5)
+#### Full-instance GitLab authentication (v13.5)
 
-This prepared extension accompanies [GitLab checkout](repository-checkout.md);
-it is not a claim that older or published daemons accept the new field. It keeps
+This extension accompanies [GitLab checkout](repository-checkout.md);
+older daemons do not accept the new field. It keeps
 the existing host-only request forms above and adds optional `instanceBaseUrl`
 to `sourceControl.authStatus`, `sourceControl.connect`, `sourceControl.cancelAuth`,
 `sourceControl.revoke` and `sourceControl.getUser` for `provider: "gitlab"`.
@@ -258,7 +283,7 @@ view, re-read `sourceControl.authStatus` for the originally selected full
 context changed while awaiting it. The event cannot choose a new instance or
 revive a checkout reference.
 
-The [prepared child Git credential policy](settings.md#prepared-gitlab-child-git-credential-policy)
+The [child Git credential policy](settings.md#gitlab-child-git-credential-policy)
 is a separate owner-controlled grant for the current account and full instance.
 A successful connection, status read or native checkout does not enable it.
 Credential refresh for the same identity preserves the explicit choice;
@@ -451,6 +476,11 @@ interface MergeQueueEntry { // shared with the §5.42 `MergeRequirements.mergeQu
   state?: string;           // the host's raw entry state word, lowercased — GitHub: `queued` | `awaiting_checks` | `mergeable` | `unmergeable` | `locked`
   enqueuedAt?: string;      // RFC 3339 — when the PR entered the queue
   estimatedTimeToMerge?: number; // the host's estimate, in whole seconds, of how long until this entry merges (GitHub GraphQL `MergeQueueEntry.estimatedTimeToMerge`), passed through as reported — GitHub recomputes it on queue events rather than counting it down, so it is a duration estimate, not a deadline; omitted while the host has no estimate
+  failedCheck?: {           // the first check that failed on the entry's merge-group commit (GitHub GraphQL `MergeQueueEntry.headCommit.statusCheckRollup`): of the checks with a failing conclusion, the one that finished first; omitted while none has failed (15.5, additive)
+    name: string;           // check-run name, or the status context
+    conclusion: string;     // lowercased — `failure` | `timed_out` | `cancelled` | `startup_failure` | `action_required` | `error`
+    url?: string;           // the check's details link (a GitHub Actions job URL)
+  };
 }
 
 interface GithubIssue {
@@ -575,7 +605,12 @@ so the rewire is zero-FE-change: nested Linear relations (`team` / `state` / `as
 (`None`) optional fields are **omitted** from the JSON.
 
 **Conventions.** All list-style reads take an optional `limit` (a cap on the number of items
-returned). The two issue reads — `linear.listIssues` and `linear.searchIssues` — are
+returned). For `linear.listIssues`, `linear.searchIssues` and `linear.listProjects` the `limit`
+defaults to **50** and is clamped to **[1, 100]** (Linear itself allows 250). The two issue reads
+are also **byte-budgeted** like the `github.*` list reads (§5.27 "Byte-budgeted pages"): a page
+can hold fewer issues than `limit` with a non-null `nextToken` that resumes inside the same
+Linear page, and an issue too large to fit alone is served with its long strings cut and
+`contentTruncated: true` (`linear.getIssue` returns it whole). The two issue reads — `linear.listIssues` and `linear.searchIssues` — are
 **cursor-paginated** per the §5.5 conventions: they accept an optional **opaque base64**
 `nextToken` (the token echoed by a previous page; a malformed token degrades to the first
 page, matching the `github.*` reads) and return a
@@ -626,7 +661,7 @@ forward-looking surface for a future create/edit UI.
 | linear.viewer | workspaceId? | LinearUser — the authenticated user |
 | linear.listTeams | limit?, workspaceId? | LinearTeam[] |
 | linear.listWorkflowStates | limit?, workspaceId? | LinearWorkflowState[] |
-| linear.listProjects | limit?, workspaceId? | LinearProject[] |
+| linear.listProjects | limit?, workspaceId? | LinearProject[] — `limit` default **50**, max **100** (clamped; values below 1 become 1). No cursor. |
 | linear.listLabels | limit?, workspaceId? | LinearLabel[] |
 
 #### DTO schemas

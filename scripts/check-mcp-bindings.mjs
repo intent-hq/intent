@@ -18,12 +18,39 @@ export const TOOLS_RS_PATH = `${INTENTD_DIR}/${TOOLS_RS_IN_INTENTD}`;
 export const PROTOCOL_DIR = 'docs/protocol';
 export const INDEX_PATH = 'docs/protocol/methods/mcp-bindings.md';
 export const HELP_CONSTANTS = ['WORKSPACE_API_DESCRIPTION', 'WORKSPACE_API_DESCRIPTION_CHIEF'];
+// Deliberate opt-out for callers that run without the intentd submodule on purpose. Without it a missing
+// checkout is an error: a silent skip once read as a pass and hid a doc that led the pin (intent#7939).
+export const ALLOW_MISSING_ENV = 'ALLOW_MISSING_INTENTD';
+export const ALLOW_MISSING_FLAG = '--allow-missing-intentd';
+export const MISSING_INTENTD_MESSAGE =
+  `${INTENTD_DIR} is not initialized, so the ws.* binding check cannot run. ` +
+  `Run \`git submodule update --init ${INTENTD_DIR}\` and retry, or set ${ALLOW_MISSING_ENV}=1 ` +
+  `(${ALLOW_MISSING_FLAG}) to skip this check on purpose.`;
+export const MOVED_TOOLS_RS_MESSAGE =
+  `${INTENTD_DIR} is checked out but ${TOOLS_RS_IN_INTENTD} is missing (moved or renamed in intentd?); ` +
+  `update TOOLS_RS_IN_INTENTD in scripts/check-mcp-bindings.mjs. ${ALLOW_MISSING_ENV}=1 does not skip this.`;
+export const SKIPPED_MESSAGE = `skipped: ${TOOLS_RS_PATH} (submodule not initialized; ${ALLOW_MISSING_ENV}=1) - ws.* bindings were NOT checked`;
 
 // `ws.*` names the docs may still mention as history after a rename. Each entry maps the
 // old name to the current call shape; the value is informational (shown in failure hints).
 export const RENAMED_BINDINGS = new Map([
   ['ws.agent.spawnPeer', 'ws.agent.create({ topLevel: true })'], // renamed in v8.1
 ]);
+
+// Prepared agent file pull binding (docs lead the intentd change).
+const PREPARED_FILE_PULL_BINDING =
+  '  ws.file.pull({ fromAgentId, path, to? }) → { path, kind, size, sha256, files, skipped }';
+
+// Prepared §5.56 secret-request bindings, mentioned by more than one protocol doc.
+const PREPARED_SECRET_BINDINGS = [
+  '  ws.secret.request({ name, reason }) → { ok, requestId, message }',
+  '  ws.secret.list() → { secrets, pendingRequests }',
+  '  ws.secret.forget(name) → { ok, forgotten }',
+].join('\n');
+
+// Prepared experimental machine model lookup (docs lead the intentd change).
+const PREPARED_MACHINE_MODELS_BINDING =
+  '  ws.agent.machineModels(nodeId?, { provider?, model? }?) → { machines }';
 
 // Docs-first contract: only this canonical proposal may mention these helpers
 // before they ship. Once help declares one, its real signature takes precedence.
@@ -40,6 +67,15 @@ export const PREPARED_BINDINGS = new Map([
     '  ws.script.unmonitor(monitorId) → { ok, monitor }',
     '  ws.script.monitorDetails(monitorId) → monitor',
   ].join('\n')],
+  ['docs/protocol/methods/files-terminal-browser.md', PREPARED_FILE_PULL_BINDING],
+  ['docs/protocol/workspace-routing.md', PREPARED_FILE_PULL_BINDING],
+  ['docs/protocol/node-link.md', PREPARED_FILE_PULL_BINDING],
+  ['docs/protocol/versioning.md', PREPARED_FILE_PULL_BINDING],
+  ['docs/protocol/methods/secrets.md', PREPARED_SECRET_BINDINGS],
+  ['docs/protocol/methods/settings.md', PREPARED_SECRET_BINDINGS],
+  ['docs/protocol/07-agent-streaming.md', PREPARED_SECRET_BINDINGS],
+  ['docs/protocol/methods/nodes.md', PREPARED_MACHINE_MODELS_BINDING],
+  ['docs/protocol/model-platform-routing.md', PREPARED_MACHINE_MODELS_BINDING],
   ['docs/protocol/methods/scripts.md', [
     '  ws.script.listPage({ archive?, limit?, cursor? }?) → { view, scripts, nextCursor? }',
     '  ws.script.get(scriptId) → script',
@@ -397,6 +433,19 @@ export function formatOffPinWarning(ref) {
   });
 }
 
+/** True when the intentd checkout has content (a `.git` entry or `Cargo.toml`), i.e. the submodule is initialized. */
+async function intentdInitialized(root) {
+  for (const marker of ['.git', 'Cargo.toml']) {
+    try {
+      await fs.lstat(path.join(root, INTENTD_DIR, marker));
+      return true;
+    } catch (e) {
+      if (e.code !== 'ENOENT' && e.code !== 'ENOTDIR') throw e;
+    }
+  }
+  return false;
+}
+
 /**
  * The tools.rs text plus the ref it came from. Default: the worktree file (null text when the submodule is not
  * initialized). `pinned`: the blob at the gitlink HEAD records, read through git objects only, so the worktree
@@ -410,12 +459,17 @@ async function readToolsRs(root, { pinned }) {
   return { rustText, ref: { source: 'pin', dir: INTENTD_DIR, pin } };
 }
 
-/** Run all three checks against `root`; returns `{ errors, skipped, wrote, bindings, ref }`. */
-export async function runChecks(root, { write = false, pinned = false } = {}) {
+/**
+ * Run all three checks against `root`; returns `{ errors, skipped, wrote, bindings, ref }`. A missing intentd
+ * checkout is an error unless `allowMissing` is set, in which case the result is `skipped`.
+ */
+export async function runChecks(root, { write = false, pinned = false, allowMissing = false } = {}) {
   const { rustText, ref } = await readToolsRs(root, { pinned });
   if (rustText === null) {
     if (pinned) return { errors: [{ file: TOOLS_RS_PATH, line: 1, message: `not found at recorded pin ${short(ref.pin)}` }], skipped: null, wrote: false, bindings: [], ref };
-    return { errors: [], skipped: `skipped: ${TOOLS_RS_PATH} (submodule not initialized)`, wrote: false, bindings: [], ref: null };
+    if (await intentdInitialized(root)) return { errors: [{ file: TOOLS_RS_PATH, line: 1, message: MOVED_TOOLS_RS_MESSAGE }], skipped: null, wrote: false, bindings: [], ref };
+    if (allowMissing) return { errors: [], skipped: SKIPPED_MESSAGE, wrote: false, bindings: [], ref: null };
+    return { errors: [{ file: TOOLS_RS_PATH, line: 1, message: MISSING_INTENTD_MESSAGE }], skipped: null, wrote: false, bindings: [], ref: null };
   }
   const help = extractHelpText(rustText);
   const errors = help.missing.map((name) => ({ file: TOOLS_RS_PATH, line: 1, message: `could not extract the ${name} constant` }));
@@ -443,14 +497,15 @@ async function main() {
   const args = process.argv.slice(2);
   const write = args.includes('--write');
   const pinned = args.includes('--pinned');
+  const allowMissing = args.includes(ALLOW_MISSING_FLAG) || process.env[ALLOW_MISSING_ENV] === '1';
   const rootArg = args.find((a) => !a.startsWith('--'));
   const root = rootArg ? path.resolve(rootArg) : process.cwd();
-  const { errors, skipped, wrote, bindings, ref } = await runChecks(root, { write, pinned });
+  const { errors, skipped, wrote, bindings, ref } = await runChecks(root, { write, pinned, allowMissing });
   const banner = formatBanner(ref);
   const warning = formatOffPinWarning(ref);
   if (banner) console.log(banner);
   if (warning) console.error(warning);
-  if (skipped) console.log(skipped);
+  if (skipped) console.error(skipped);
   if (wrote) console.log(`Wrote ${INDEX_PATH} (${bindings.length} bindings).`);
   if (errors.length === 0) {
     if (!skipped) console.log(`MCP ws.* bindings are consistent (${bindings.length} bindings).`);

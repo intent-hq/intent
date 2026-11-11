@@ -383,6 +383,28 @@ reject_line "bubblewrap:"
 rm -f "$bin_dir/bwrap" "$bin_dir/uname"
 ln -s "$(command -v uname)" "$bin_dir/uname"
 
+# cloudlands-fe pnpm run electron:headless needs xvfb-run on a Linux host with
+# no display: an optional row naming that command, never a required gap, and
+# absent off Linux.
+rm -f "$bin_dir/uname"
+write_launcher uname '[ "$1" = -m ] && { echo x86_64; exit 0; }; echo Linux'
+run_doctor
+expect_line "[optional] xvfb-run: not installed (only cloudlands-fe pnpm run electron:headless needs it, on a host with no display); run make bootstrap-dev-host, or Debian/Ubuntu: sudo apt-get install -y xvfb"
+gaps_without_xvfb=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
+write_launcher xvfb-run 'exit 0'
+run_doctor
+expect_line "[optional] xvfb-run: installed (cloudlands-fe pnpm run electron:headless uses it when the host has no display)"
+reject_line "xvfb-run: not installed"
+gaps_with_xvfb=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
+[[ "$gaps_with_xvfb" == "$gaps_without_xvfb" ]] \
+  || fail "xvfb-run changed the required gap count: $gaps_without_xvfb without vs $gaps_with_xvfb with"
+rm -f "$bin_dir/xvfb-run"
+write_launcher uname '[ "$1" = -m ] && { echo arm64; exit 0; }; echo Darwin'
+run_doctor
+reject_line "xvfb-run:"
+rm -f "$bin_dir/uname"
+ln -s "$(command -v uname)" "$bin_dir/uname"
+
 # cloudlands-fe lint:workflows pins actionlint exactly; absent, unrunnable, or
 # another version is one required gap each, and only the pin is ready.
 run_doctor
@@ -779,6 +801,97 @@ expect_line "[skip] Bash 3.2 build tools: stock /bin/bash is already Bash 3.2"
 rm -f "$bin_dir/apt-get" "$bin_dir/uname"
 ln -s "$(command -v uname)" "$bin_dir/uname"
 
+# install_xvfb installs xvfb-run through the host's package manager. It is
+# optional, so an unsupported package manager or a failed install warns and
+# returns success; a ready or macOS host is left alone.
+xvfb_log="$temp_dir/xvfb.log"
+run_install_xvfb() {
+  : >"$xvfb_log"
+  PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' TOOL_LOG="$xvfb_log" BIN_DIR="$bin_dir" CHMOD_BIN="$(command -v chmod)" \
+    bash -c 'funcs=$1; set --; source "$funcs"
+      as_root() {
+        echo "as_root $*" >>"$TOOL_LOG"
+        [ -n "${XVFB_INSTALL_ERRORS:-}" ] && return 1
+        [ -n "${XVFB_INSTALL_FAILS:-}" ] && return 0
+        printf "#!/bin/sh\nexit 0\n" >"$BIN_DIR/xvfb-run"; "$CHMOD_BIN" +x "$BIN_DIR/xvfb-run"
+      }
+      install_xvfb' bash "$bootstrap_funcs" >"$output" 2>&1
+  local status=$?
+  rm -f "$bin_dir/xvfb-run"
+  return "$status"
+}
+grep -q '^install_xvfb() {' "$bootstrap_funcs" || fail "could not extract install_xvfb"
+rm -f "$bin_dir/uname"
+write_launcher uname 'echo Linux'
+write_launcher apt-get 'exit 0'
+run_install_xvfb || fail "install_xvfb failed with apt-get"
+expect_line "[install] xvfb-run for cloudlands-fe pnpm run electron:headless"
+[[ "$(cat "$xvfb_log")" == "as_root apt-get install -y xvfb" ]] \
+  || fail "apt hosts should install xvfb: $(cat "$xvfb_log")"
+reject_line "[warn]"
+rm -f "$bin_dir/apt-get"
+write_launcher dnf 'exit 0'
+run_install_xvfb || fail "install_xvfb failed with dnf"
+[[ "$(cat "$xvfb_log")" == "as_root dnf install -y xorg-x11-server-Xvfb" ]] \
+  || fail "dnf hosts should install xorg-x11-server-Xvfb: $(cat "$xvfb_log")"
+rm -f "$bin_dir/dnf"
+write_launcher yum 'exit 0'
+run_install_xvfb || fail "install_xvfb failed with yum"
+[[ "$(cat "$xvfb_log")" == "as_root yum install -y xorg-x11-server-Xvfb" ]] \
+  || fail "yum hosts should install xorg-x11-server-Xvfb: $(cat "$xvfb_log")"
+XVFB_INSTALL_FAILS=1 run_install_xvfb || fail "install_xvfb failed bootstrap although xvfb-run is optional"
+expect_line "[warn] xvfb-run: still not on PATH after 'yum install -y xorg-x11-server-Xvfb'"
+XVFB_INSTALL_ERRORS=1 run_install_xvfb || fail "install_xvfb failed bootstrap when the package install failed"
+expect_line "[warn] xvfb-run: 'yum install -y xorg-x11-server-Xvfb' failed; pnpm run electron:headless needs it on a host with no display"
+rm -f "$bin_dir/yum"
+run_install_xvfb || fail "install_xvfb failed bootstrap without a package manager"
+expect_line "[warn] xvfb-run: unsupported Linux package manager; install the package that provides xvfb-run"
+[[ ! -s "$xvfb_log" ]] || fail "install_xvfb ran an install without a package manager: $(cat "$xvfb_log")"
+write_launcher apt-get 'exit 0'
+write_launcher xvfb-run 'exit 0'
+run_install_xvfb || fail "install_xvfb failed on a ready host"
+expect_line "[skip] xvfb-run already installed"
+[[ ! -s "$xvfb_log" ]] || fail "a ready host ran an xvfb install: $(cat "$xvfb_log")"
+rm -f "$bin_dir/uname"
+write_launcher uname 'echo Darwin'
+run_install_xvfb || fail "install_xvfb failed on macOS"
+expect_line "[skip] xvfb-run: not needed outside Linux"
+[[ ! -s "$xvfb_log" ]] || fail "macOS ran an xvfb install: $(cat "$xvfb_log")"
+
+# A missing xvfb-run makes an otherwise ready Linux host worth bootstrapping
+# when a package manager can install it, so existing hosts get offered it.
+run_xvfb_gap() {
+  PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' \
+    bash -c 'funcs=$1; set --; source "$funcs"
+      for name in required_submodules_ready load_versions python_ready openssl_dev_ready rust_toolchain_ready active_toolchain_ready nextest_ready cargo_shear_ready node_ready pnpm_ready frontend_dependencies_ready gh_ready jq_ready shellcheck_ready bash3_build_tools_ready actionlint_ready; do
+        eval "$name() { return 0; }"
+      done
+      installable_gap_exists' bash "$bootstrap_funcs" >"$output" 2>&1
+}
+for tool in rustup cargo corepack; do
+  if [[ -e "$bin_dir/$tool" ]]; then mv "$bin_dir/$tool" "$temp_dir/saved-$tool"; fi
+  write_launcher "$tool" 'exit 0'
+done
+rm -f "$bin_dir/uname"
+write_launcher uname 'echo Linux'
+write_launcher xvfb-run 'exit 0'
+! run_xvfb_gap || fail "a host with xvfb-run was an installable gap"
+rm -f "$bin_dir/xvfb-run"
+run_xvfb_gap || fail "a missing xvfb-run with apt-get was not an installable gap"
+rm -f "$bin_dir/apt-get"
+! run_xvfb_gap || fail "a missing xvfb-run without a package manager was an installable gap"
+rm -f "$bin_dir/uname"
+write_launcher uname 'echo Darwin'
+! run_xvfb_gap || fail "macOS without xvfb-run was an installable gap"
+for tool in rustup cargo corepack; do
+  rm -f "$bin_dir/$tool"
+  if [[ -e "$temp_dir/saved-$tool" ]]; then mv "$temp_dir/saved-$tool" "$bin_dir/$tool"; fi
+done
+rm -f "$bin_dir/uname"
+ln -s "$(command -v uname)" "$bin_dir/uname"
+
 # install_coverage_tooling is a no-op unless opted in; opted in, it skips a
 # complete host and runs cargo install / rustup component add for the gaps.
 grep -q '^install_coverage_tooling() {' "$bootstrap_funcs" || fail "could not extract bootstrap functions for the install_coverage_tooling fixture"
@@ -793,7 +906,7 @@ run_nextest_gap() {
   PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
     CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' \
     bash -c 'funcs=$1; set --; source "$funcs"
-      for name in required_submodules_ready load_versions python_ready openssl_dev_ready rust_toolchain_ready active_toolchain_ready node_ready pnpm_ready frontend_dependencies_ready gh_ready jq_ready shellcheck_ready bash3_build_tools_ready actionlint_ready; do
+      for name in required_submodules_ready load_versions python_ready openssl_dev_ready rust_toolchain_ready active_toolchain_ready cargo_shear_ready node_ready pnpm_ready frontend_dependencies_ready gh_ready jq_ready shellcheck_ready bash3_build_tools_ready actionlint_ready xvfb_ready; do
         eval "$name() { return 0; }"
       done
       installable_gap_exists' bash "$bootstrap_funcs" >"$output" 2>&1
@@ -845,6 +958,106 @@ expect_line "[skip] cargo-nextest"
 printf 'cargo-nextest 0.9.132\n' >"$nextest_version_file"
 ! NEXTEST_INSTALLED_VERSION=0.9.132 run_install_nextest || fail "installer accepted an archive that still provides old nextest"
 expect_line "ERROR: cargo-nextest >= 0.9.133"
+
+# make check runs cargo shear --deny-warnings like intentd CI, whose unlinked-file
+# detection needs cargo-shear >= 1.8.0. The doctor and the make check preflight
+# (--check-cargo-shear) reject missing, broken and older binaries; bootstrap
+# installs the latest prebuilt release, or compiles it without an archive.
+shear_version_file="$temp_dir/shear-version"
+export SHEAR_VERSION_FILE="$shear_version_file"
+write_launcher cargo '[ "$1" = nextest ] && { echo "cargo-nextest 0.9.143"; exit 0; }
+[ "$1" = shear ] && { [ -s "$SHEAR_VERSION_FILE" ] || exit 101; cat "$SHEAR_VERSION_FILE"; exit 0; }
+[ "$1" = install ] && { echo "cargo $*" >>"$TOOL_LOG"; printf "Version: %s\n" "${SHEAR_INSTALLED_VERSION:-1.14.0}" >"$SHEAR_VERSION_FILE"; exit 0; }
+echo "cargo 1.96.0 (stub)"'
+run_shear_gap() {
+  PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' \
+    bash -c 'funcs=$1; set --; source "$funcs"
+      for name in required_submodules_ready load_versions python_ready openssl_dev_ready rust_toolchain_ready active_toolchain_ready nextest_ready node_ready pnpm_ready frontend_dependencies_ready gh_ready jq_ready shellcheck_ready bash3_build_tools_ready actionlint_ready xvfb_ready; do
+        eval "$name() { return 0; }"
+      done
+      installable_gap_exists' bash "$bootstrap_funcs" >"$output" 2>&1
+}
+run_shear_preflight() {
+  PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' \
+    bash "$script" --check-cargo-shear >"$output" 2>"$temp_dir/shear-preflight.err"
+}
+for version in 'Version: 1.7.2' 'Version: 1.8.0-rc.1' 'Version: 1.8.0' 'Version: 1.14.0' 'cargo-shear 1.9.1' 'Version: unknown' ''; do
+  printf '%s\n' "$version" >"$shear_version_file"
+  [[ -n "$version" ]] || : >"$shear_version_file"
+  run_doctor
+  case "$version" in
+    'Version: 1.8.0'|'Version: 1.14.0'|'cargo-shear 1.9.1')
+      expect_line "[ok]       cargo-shear: ${version##* }"
+      reject_line "[missing]  cargo-shear"
+      ! run_shear_gap || fail "cargo-shear '$version' was incorrectly an installable gap"
+      run_shear_preflight || fail "make check preflight rejected cargo-shear '$version'"
+      [[ ! -s "$output" && ! -s "$temp_dir/shear-preflight.err" ]] || fail "make check preflight was not silent for cargo-shear '$version'"
+      ;;
+    *)
+      if [[ "$version" == *[0-9].[0-9]* ]]; then
+        expect_line "[missing]  cargo-shear >= 1.8.0: found ${version##* }; make check runs cargo shear --deny-warnings like intentd CI; run make bootstrap-dev-host"
+      else
+        expect_line "[missing]  cargo-shear >= 1.8.0: missing or unusable; make check runs cargo shear --deny-warnings like intentd CI; run make bootstrap-dev-host"
+      fi
+      run_shear_gap || fail "unsupported cargo-shear '$version' was not an installable gap"
+      ! run_shear_preflight || fail "make check preflight accepted cargo-shear '$version'"
+      grep -qF "[missing]  cargo-shear >= 1.8.0" "$temp_dir/shear-preflight.err" \
+        || fail "make check preflight did not report cargo-shear '$version' on stderr"
+      grep -qF "run make bootstrap-dev-host" "$temp_dir/shear-preflight.err" \
+        || fail "make check preflight did not name make bootstrap-dev-host for cargo-shear '$version'"
+      ;;
+  esac
+done
+
+write_launcher tar 'echo "tar $*" >>"$TOOL_LOG"; printf "Version: %s\n" "${SHEAR_INSTALLED_VERSION:-1.14.0}" >"$SHEAR_VERSION_FILE"'
+run_install_shear() {
+  : >"$tool_log"
+  PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' TOOL_LOG="$tool_log" \
+    GITHUB_ACTIONS='' RETRY_DELAY=0 \
+    bash -c 'funcs=$1; scripts=$2; set --; source "$funcs"; SCRIPT_DIR=$scripts; install_cargo_shear' \
+      bash "$bootstrap_funcs" "$repo_root/scripts" >"$output" 2>&1
+}
+set_uname() {
+  rm -f "$bin_dir/uname"
+  write_launcher uname "[ \"\$1\" = -m ] && { echo $2; exit 0; }; echo $1"
+}
+set_uname Linux x86_64
+for version in 'Version: 1.7.2' 'broken' ''; do
+  printf '%s\n' "$version" >"$shear_version_file"
+  [[ -n "$version" ]] || : >"$shear_version_file"
+  run_install_shear || fail "cargo-shear install failed from '$version'"
+  expect_line "[install] cargo-shear (latest release, as intentd CI installs) from its prebuilt x86_64-unknown-linux-musl archive"
+  grep -qF 'https://github.com/Boshen/cargo-shear/releases/latest/download/cargo-shear-x86_64-unknown-linux-musl.tar.gz' "$tool_log" \
+    || fail "cargo-shear install did not download the latest release archive: $(cat "$tool_log")"
+  grep -q "^tar -xzf .* -C $temp_dir/home/.cargo/bin cargo-shear\$" "$tool_log" \
+    || fail "cargo-shear install did not extract into CARGO_HOME/bin: $(cat "$tool_log")"
+  grep -qx 'Version: 1.14.0' "$shear_version_file" || fail "cargo-shear '$version' was not upgraded"
+done
+run_install_shear || fail "supported cargo-shear was rejected"
+expect_line "[skip] cargo-shear 1.14.0 already installed (minimum 1.8.0)"
+[[ ! -s "$tool_log" ]] || fail "supported cargo-shear was reinstalled: $(cat "$tool_log")"
+printf 'Version: 1.7.2\n' >"$shear_version_file"
+! SHEAR_INSTALLED_VERSION=1.7.2 run_install_shear || fail "installer accepted an archive that still provides old cargo-shear"
+expect_line "ERROR: cargo-shear >= 1.8.0 is still unavailable after installation"
+for platform in 'Linux aarch64:aarch64-unknown-linux-musl' 'Darwin arm64:universal-apple-darwin'; do
+  : >"$shear_version_file"
+  # shellcheck disable=SC2086  # split "os arch" into set_uname's two arguments
+  set_uname ${platform%%:*}
+  run_install_shear || fail "cargo-shear install failed on ${platform%%:*}"
+  grep -qF "cargo-shear-${platform#*:}.tar.gz" "$tool_log" || fail "${platform%%:*} did not download the ${platform#*:} archive: $(cat "$tool_log")"
+done
+: >"$shear_version_file"
+set_uname FreeBSD amd64
+run_install_shear || fail "cargo-shear source install failed without a prebuilt archive"
+expect_line "[install] cargo-shear (no prebuilt archive for FreeBSD amd64; cargo install compiles it from source)"
+grep -qx 'cargo install cargo-shear --locked' "$tool_log" || fail "no-archive host did not cargo install cargo-shear: $(cat "$tool_log")"
+rm -f "$bin_dir/uname"
+ln -s "$(command -v uname)" "$bin_dir/uname"
+unset SHEAR_VERSION_FILE
+write_launcher cargo '[ "$1" = nextest ] && { [ -s "$NEXTEST_VERSION_FILE" ] || exit 101; cat "$NEXTEST_VERSION_FILE"; exit 0; }; echo "cargo 1.96.0 (stub)"'
 
 # install_rust retries a toolchain download that fails transiently (rustup
 # could not reach static.rust-lang.org) and gives up with a clear error. The

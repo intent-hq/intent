@@ -1,5 +1,5 @@
 {
-  "status": "prepared-synthetic-not-runtime-evidence",
+  "status": "shipped-synthetic-not-runtime-evidence",
   "capability": {"submissionCorrelation": 1},
   "request": {"agentId": "agent-a", "workspaceId": "ws-a", "content": "again", "messageId": "a2"},
   "queuedReply": {"success": true, "queued": true, "messageId": "a1", "turnId": "a1", "submissionIds": ["a2", "a1"]},

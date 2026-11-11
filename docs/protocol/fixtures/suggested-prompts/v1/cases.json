@@ -1,0 +1,711 @@
+{
+  "fixtureFormatVersion": 1,
+  "description": "Shared suggested-prompts block cases. Each input is one agent reply; expect gives the prompts found and the reply text left once every well-formed block is removed. Format and consumers: docs/protocol/suggested-prompts.md in intent-hq/intent.",
+  "consumers": [
+    "cloudlands-fe",
+    "intentd",
+    "ios"
+  ],
+  "cases": [
+    {
+      "id": "plain-prompts",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should parse plain prompts (backward compatibility)",
+      "input": "Some message here.\n\n<!-- suggested-prompts\nRun tests\nReview code\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Run tests",
+          "Review code"
+        ],
+        "cleaned": "Some message here."
+      }
+    },
+    {
+      "id": "label-pipe",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should parse Label|prompt syntax",
+      "input": "<!-- suggested-prompts\nLabel|Full prompt text\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Full prompt text"
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "delay-prefix",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should strip delay:N| prefix and return plain string",
+      "input": "<!-- suggested-prompts\ndelay:60|Check deployment\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Check deployment"
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "label-delay-prefix",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should strip Label|delay:N| prefix and return plain string",
+      "input": "<!-- suggested-prompts\nLabel|delay:30|Check build\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Check build"
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "delay-prefix-case-insensitive",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should strip delay prefix case-insensitively",
+      "input": "<!-- suggested-prompts\nDELAY:120|Check CI\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Check CI"
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "mixed-prefixes",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should parse mixed instant and delay-prefixed prompts as plain strings",
+      "input": "<!-- suggested-prompts\nRun tests now\ndelay:60|Check deployment\nLabel|delay:30|Check build\nAnother plain prompt\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Run tests now",
+          "Check deployment",
+          "Check build",
+          "Another plain prompt"
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "drop-empty-delay-line",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should drop an invalid prompt line and keep the valid ones",
+      "input": "<!-- suggested-prompts\ndelay:60|\nValid prompt\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Valid prompt"
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "no-block",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should return empty array and unchanged content when no suggested-prompts block",
+      "input": "This is just regular content without any prompts block.",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": "This is just regular content without any prompts block."
+      }
+    },
+    {
+      "id": "fenced-opener-ignored",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should ignore an opener inside a fenced code region",
+      "input": "Here is how to author prompts:\n\n```markdown\n<!-- suggested-prompts\nExample prompt\n-->\n```\n\nThat is the format.",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": "Here is how to author prompts:\n\n```markdown\n<!-- suggested-prompts\nExample prompt\n-->\n```\n\nThat is the format."
+      }
+    },
+    {
+      "id": "unclosed-opener-mermaid-edge",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should not close an unclosed opener on a Mermaid edge arrow",
+      "input": "# Overview\n\n<!-- suggested-prompts\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\n| Col | Col |\n| --- | --- |",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": "# Overview\n\n<!-- suggested-prompts\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\n| Col | Col |\n| --- | --- |"
+      }
+    },
+    {
+      "id": "crlf-line-endings",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should handle CRLF line endings",
+      "input": "Here is the response.\r\n\r\n<!-- suggested-prompts\r\nRun tests\r\nReview code\r\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Run tests",
+          "Review code"
+        ],
+        "cleaned": "Here is the response."
+      }
+    },
+    {
+      "id": "crlf-body-shaped-block",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should strip a CRLF block whose lines look like body text without surfacing prompts",
+      "input": "<!-- suggested-prompts\r\nA --> B\r\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "unclosed-opener-before-fenced-example",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should keep fence state across an unclosed opener that precedes a fenced example",
+      "input": "Use this format:\n<!-- suggested-prompts\n```markdown\n<!-- suggested-prompts\nExample prompt\n-->\n```\nDone.",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": "Use this format:\n<!-- suggested-prompts\n```markdown\n<!-- suggested-prompts\nExample prompt\n-->\n```\nDone."
+      }
+    },
+    {
+      "id": "fenced-closer-does-not-close",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should not let a --> inside a fenced region close an open block",
+      "input": "Intro\n<!-- suggested-prompts\nSome text the agent wrote\n```diff\n-->\n```\nOutro",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": "Intro\n<!-- suggested-prompts\nSome text the agent wrote\n```diff\n-->\n```\nOutro"
+      }
+    },
+    {
+      "id": "fenced-example-closer-does-not-close",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should not close a block on a --> inside a fenced example",
+      "input": "<!-- suggested-prompts\n\n```markdown\n-->\n```\n\nBody text that must survive.",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": "<!-- suggested-prompts\n\n```markdown\n-->\n```\n\nBody text that must survive."
+      }
+    },
+    {
+      "id": "body-shaped-heading",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should strip a block whose lines look like body text without surfacing prompts",
+      "input": "Done.\n<!-- suggested-prompts\n## Heading\nRun tests\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [],
+        "cleaned": "Done."
+      }
+    },
+    {
+      "id": "body-shaped-mermaid-edge",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should strip a block containing a Mermaid edge line without surfacing prompts",
+      "input": "Done.\n<!-- suggested-prompts\nA --> B\nRun tests\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [],
+        "cleaned": "Done."
+      }
+    },
+    {
+      "id": "body-shaped-table-row",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should strip a block containing a table row without surfacing prompts",
+      "input": "Done.\n<!-- suggested-prompts\n| a | b |\nRun tests\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [],
+        "cleaned": "Done."
+      }
+    },
+    {
+      "id": "empty-block",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should strip an empty well-formed block without surfacing prompts",
+      "input": "Done.\n<!-- suggested-prompts\n\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [],
+        "cleaned": "Done."
+      }
+    },
+    {
+      "id": "last-block-wins-even-when-empty",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should not fall back to an earlier block when the last one yields no prompts",
+      "input": "<!-- suggested-prompts\nRun tests\nReview code\n-->\n\nBody.\n\n<!-- suggested-prompts\n## Heading\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [],
+        "cleaned": "Body."
+      }
+    },
+    {
+      "id": "last-block-wins",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should use the last well-formed block when several are present",
+      "input": "<!-- suggested-prompts\nOld prompt\nOld follow-up\n-->\n\nMore text.\n\n<!-- suggested-prompts\nNew prompt\nNew follow-up\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "New prompt",
+          "New follow-up"
+        ],
+        "cleaned": "More text."
+      }
+    },
+    {
+      "id": "cap-at-four",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should cap prompts at four and strip the block",
+      "input": "<!-- suggested-prompts\nPrompt 1\nPrompt 2\nPrompt 3\nPrompt 4\nPrompt 5\nPrompt 6\nPrompt 7\nPrompt 8\nPrompt 9\nPrompt 10\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Prompt 1",
+          "Prompt 2",
+          "Prompt 3",
+          "Prompt 4"
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "drop-over-long",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should drop an over-long prompt and keep the valid ones",
+      "input": "<!-- suggested-prompts\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nRun tests\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Run tests"
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "keep-at-length-limit",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should keep a prompt at exactly the length limit",
+      "input": "<!-- suggested-prompts\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "length-limit-on-visible-text",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should measure the length limit on visible text, not raw markdown link syntax",
+      "input": "<!-- suggested-prompts\nApprove [#5030](https://github.com/intent-hq/intent/pull/5034), [#5031](https://github.com/intent-hq/intent/pull/5034), [#5032](https://github.com/intent-hq/intent/pull/5034), [#5033](https://github.com/intent-hq/intent/pull/5034), [#5034](https://github.com/intent-hq/intent/pull/5034) and merge them.\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Approve [#5030](https://github.com/intent-hq/intent/pull/5034), [#5031](https://github.com/intent-hq/intent/pull/5034), [#5032](https://github.com/intent-hq/intent/pull/5034), [#5033](https://github.com/intent-hq/intent/pull/5034), [#5034](https://github.com/intent-hq/intent/pull/5034) and merge them."
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "over-long-visible-text-with-links",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should drop a prompt whose visible text is over-long even with markdown links",
+      "input": "<!-- suggested-prompts\n[#1](https://a.test/1) xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nRun tests\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Run tests"
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "links-kept-raw",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should keep markdown links raw while stripping Label| and delay:N| prefixes",
+      "input": "<!-- suggested-prompts\nApprove|Approve [#5034](https://github.com/intent-hq/intent/pull/5034) now\ndelay:30|Merge [#5034](https://github.com/intent-hq/intent/pull/5034)\n[#5034](https://github.com/intent-hq/intent/pull/5034) needs review\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Approve [#5034](https://github.com/intent-hq/intent/pull/5034) now",
+          "Merge [#5034](https://github.com/intent-hq/intent/pull/5034)",
+          "[#5034](https://github.com/intent-hq/intent/pull/5034) needs review"
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "pipes-inside-links",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should ignore pipes inside markdown link labels and destinations when stripping Label|",
+      "input": "<!-- suggested-prompts\nReview [CI | results](https://a.test)\nReview [results](https://a.test?q=a|b)\nLabel|Review [CI | results](https://a.test)\n[x|y](https://a.test)|delay:30|Review [results](https://a.test?q=a|b)\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Review [CI | results](https://a.test)",
+          "Review [results](https://a.test?q=a|b)",
+          "Review [CI | results](https://a.test)",
+          "Review [results](https://a.test?q=a|b)"
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "inline-opener-in-prose",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should not treat an inline opener followed by prose as a block",
+      "input": "Write a <!-- suggested-prompts block --> at the end.",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": "Write a <!-- suggested-prompts block --> at the end."
+      }
+    },
+    {
+      "id": "block-between-prose",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should strip the suggested-prompts block from cleanedContent",
+      "input": "Here is the main message.\n\n<!-- suggested-prompts\nRun tests\nReview code\n-->\n\nSome trailing content.",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Run tests",
+          "Review code"
+        ],
+        "cleaned": "Here is the main message.\n\nSome trailing content."
+      }
+    },
+    {
+      "id": "empty-input",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should handle empty input",
+      "input": "",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "fused-closer",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should accept a trailing --> closer with the remainder as the final prompt",
+      "input": "Parked the rewrite.\n\n<!-- suggested-prompts\nResume the rewrite now.\nShow the parked diff.\nLeave rewrite parked for now. -->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Resume the rewrite now.",
+          "Show the parked diff.",
+          "Leave rewrite parked for now."
+        ],
+        "cleaned": "Parked the rewrite."
+      }
+    },
+    {
+      "id": "fused-closer-label-delay",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should apply Label| and delay:N| handling to a trailing-closer remainder",
+      "input": "<!-- suggested-prompts\nRun tests\nLabel|delay:30|Check build -->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Run tests",
+          "Check build"
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "fused-closer-body-shaped",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should strip a body-shaped trailing-closer remainder without surfacing prompts",
+      "input": "Done.\n<!-- suggested-prompts\nRun tests\nA --> B -->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [],
+        "cleaned": "Done."
+      }
+    },
+    {
+      "id": "fused-closer-opener-shaped",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should not close a block on an opener-shaped trailing-closer remainder",
+      "input": "<!-- suggested-prompts\nSome real response text here.\n<!-- suggested-prompts -->",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": "<!-- suggested-prompts\nSome real response text here.\n<!-- suggested-prompts -->"
+      }
+    },
+    {
+      "id": "embedded-arrow-does-not-close",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should not close an open block on an embedded --> mid-line",
+      "input": "<!-- suggested-prompts\nA --> B\nRun tests",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": "<!-- suggested-prompts\nA --> B\nRun tests"
+      }
+    },
+    {
+      "id": "fenced-fused-closer-does-not-close",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > should not close an open block on a trailing --> inside a fenced region",
+      "input": "<!-- suggested-prompts\nRun tests\n```mermaid\nflowchart LR\n  A -->\n```",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": "<!-- suggested-prompts\nRun tests\n```mermaid\nflowchart LR\n  A -->\n```"
+      }
+    },
+    {
+      "id": "body-shaped-beyond-cap",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > gates chips to zero when a body-shaped line appears beyond the cap",
+      "input": "Done.\n\n<!-- suggested-prompts\nP1\nP2\nP3\nP4\n## Heading\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [],
+        "cleaned": "Done."
+      }
+    },
+    {
+      "id": "embedded-arrow-unclosed-final",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > defers a fused closer on the unterminated final line while streaming (monorepo#3155), finalized",
+      "input": "Done.\n\n<!-- suggested-prompts\nRun --> tests\n",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": "Done.\n\n<!-- suggested-prompts\nRun --> tests"
+      }
+    },
+    {
+      "id": "fused-closer-final-line",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > accepts a fused closer on the final line when not streaming",
+      "input": "Done.\n\n<!-- suggested-prompts\nRun tests -->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Run tests"
+        ],
+        "cleaned": "Done."
+      }
+    },
+    {
+      "id": "fused-closer-newline-terminated",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > accepts a fused closer while streaming once its line is newline-terminated, finalized",
+      "input": "Done.\n\n<!-- suggested-prompts\nRun tests -->\n",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Run tests"
+        ],
+        "cleaned": "Done."
+      }
+    },
+    {
+      "id": "fused-dash-closer-over-cap",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > strips an over-cap block closed by a fused dash-only remainder and caps its chips",
+      "input": "Done.\n\n<!-- suggested-prompts\nOne\nTwo\nThree\nFour\n- -->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "One",
+          "Two",
+          "Three",
+          "Four"
+        ],
+        "cleaned": "Done."
+      }
+    },
+    {
+      "id": "fused-final-line-embedded-arrow",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > strips a fused final line whose remainder is an embedded arrow without yielding chips",
+      "input": "Done.\n\n<!-- suggested-prompts\nA --> B -->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [],
+        "cleaned": "Done."
+      }
+    },
+    {
+      "id": "unclosed-block-restored",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > restores unclosed blocks when streaming finalizes",
+      "input": "Done.\n\n<!-- suggested-prompts\nOnly one prompt",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": "Done.\n\n<!-- suggested-prompts\nOnly one prompt"
+      }
+    },
+    {
+      "id": "unclosed-block-embedded-arrow-restored",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > restores unclosed blocks when streaming finalizes",
+      "input": "Done.\n\n<!-- suggested-prompts\nRun --> tests\nOpen PR",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": "Done.\n\n<!-- suggested-prompts\nRun --> tests\nOpen PR"
+      }
+    },
+    {
+      "id": "fenced-example-visible",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > keeps fenced examples visible during streaming and after finalization",
+      "input": "```markdown\n<!-- suggested-prompts\nRun tests.\nOpen PR.\n-->\n```",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": "```markdown\n<!-- suggested-prompts\nRun tests.\nOpen PR.\n-->\n```"
+      }
+    },
+    {
+      "id": "escaped-failover-reply",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > HTML-escaped blocks (replayed-history mimicry) > strips an escaped block and decodes entities in its prompts (incident reply, workspace divine-magpie)",
+      "input": "Report back when the PR is ready to merge.\n\n&lt;!-- suggested-prompts\nRun the full sizing report tomorrow and then start the job-size declarations.\nRaise Type Check &amp; Lint's timeout to 45 minutes.\nWhat are WarpBuild's per-minute prices for 8x and 16x?\n--&gt;",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Run the full sizing report tomorrow and then start the job-size declarations.",
+          "Raise Type Check & Lint's timeout to 45 minutes.",
+          "What are WarpBuild's per-minute prices for 8x and 16x?"
+        ],
+        "cleaned": "Report back when the PR is ready to merge."
+      }
+    },
+    {
+      "id": "escaped-quote-angle-entities",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > HTML-escaped blocks (replayed-history mimicry) > decodes quote and angle-bracket entities in escaped prompts",
+      "input": "&lt;!-- suggested-prompts\nRename &quot;a&lt;b&gt;&quot; to &#39;c&#39;.\n--&gt;",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Rename \"a<b>\" to 'c'."
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "literal-block-entities-kept",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > HTML-escaped blocks (replayed-history mimicry) > does not decode entities in an unescaped block",
+      "input": "<!-- suggested-prompts\nExplain what &amp; means in HTML.\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Explain what &amp; means in HTML."
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "escaped-fused-closer",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > HTML-escaped blocks (replayed-history mimicry) > accepts an escaped closer fused with the final prompt",
+      "input": "Done.\n\n&lt;!-- suggested-prompts\nRun the tests.\nOpen the PR. --&gt;",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Run the tests.",
+          "Open the PR."
+        ],
+        "cleaned": "Done."
+      }
+    },
+    {
+      "id": "escaped-body-shaped",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > HTML-escaped blocks (replayed-history mimicry) > strips an escaped block with body-shaped lines without surfacing prompts",
+      "input": "Done.\n\n&lt;!-- suggested-prompts\nA --&gt; B\n--&gt;",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [],
+        "cleaned": "Done."
+      }
+    },
+    {
+      "id": "escaped-fenced-untouched",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > HTML-escaped blocks (replayed-history mimicry) > leaves an escaped block inside a code fence untouched",
+      "input": "```\n&lt;!-- suggested-prompts\nRun tests.\n--&gt;\n```",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": "```\n&lt;!-- suggested-prompts\nRun tests.\n--&gt;\n```"
+      }
+    },
+    {
+      "id": "escaped-inline-opener",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > HTML-escaped blocks (replayed-history mimicry) > leaves an inline escaped opener in prose untouched",
+      "input": "Write &lt;!-- suggested-prompts at the end of a line to start a block.",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": "Write &lt;!-- suggested-prompts at the end of a line to start a block."
+      }
+    },
+    {
+      "id": "escaped-numeric-references",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > HTML-escaped blocks (replayed-history mimicry) > decodes numeric character references in escaped prompts",
+      "input": "&lt;!-- suggested-prompts\nRename &#34;foo&#34; in src&#x2F;lib.\n--&gt;",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Rename \"foo\" in src/lib."
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "escaped-invalid-numeric-references",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > HTML-escaped blocks (replayed-history mimicry) > keeps surrogate and out-of-range numeric references literal",
+      "input": "&lt;!-- suggested-prompts\nKeep &#xD800; and &#xDFFF; and &#55296; and &#x110000; and &#0;.\nShip &#x1F680; now.\n--&gt;",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Keep &#xD800; and &#xDFFF; and &#55296; and &#x110000; and &#0;.",
+          "Ship 🚀 now."
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "escaped-double-escaped-once",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > HTML-escaped blocks (replayed-history mimicry) > decodes a double-escaped entity only once",
+      "input": "&lt;!-- suggested-prompts\nExplain &amp;lt;b&amp;gt; tags.\n--&gt;",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Explain &lt;b&gt; tags."
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "literal-block-ignores-escaped-closer",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > HTML-escaped blocks (replayed-history mimicry) > does not close a literal block on an escaped closer",
+      "input": "Done.\n\n<!-- suggested-prompts\nExplain the escaped closer.\n--&gt;\nRun tests\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Explain the escaped closer.",
+          "--&gt;",
+          "Run tests"
+        ],
+        "cleaned": "Done."
+      }
+    },
+    {
+      "id": "literal-block-ignores-fused-escaped-closer",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > HTML-escaped blocks (replayed-history mimicry) > does not close a literal block on a prompt ending in an escaped closer",
+      "input": "<!-- suggested-prompts\nShow how HTML spells --&gt;\nRun tests\n-->",
+      "expect": {
+        "blockStripped": true,
+        "prompts": [
+          "Show how HTML spells --&gt;",
+          "Run tests"
+        ],
+        "cleaned": ""
+      }
+    },
+    {
+      "id": "escaped-block-ignores-literal-closer",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > HTML-escaped blocks (replayed-history mimicry) > does not close an escaped block on a literal closer",
+      "input": "Done.\n\n&lt;!-- suggested-prompts\nRun the tests.\n-->",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": "Done.\n\n&lt;!-- suggested-prompts\nRun the tests.\n-->"
+      }
+    },
+    {
+      "id": "trailing-ampersand",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > HTML-escaped blocks (replayed-history mimicry) > only briefly withholds a trailing & in streaming prose, finalized",
+      "input": "Talk to R&",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": "Talk to R&"
+      }
+    },
+    {
+      "id": "group-tag-kept",
+      "origin": "cloudlands-fe src/lib/utils/__tests__/message-parser.test.ts > parseSuggestedPrompts > keeps non-comment tags at the start of a streaming line, finalized",
+      "input": "<group:Recovery>Continue the operation</group:Recovery>",
+      "expect": {
+        "blockStripped": false,
+        "prompts": [],
+        "cleaned": "<group:Recovery>Continue the operation</group:Recovery>"
+      }
+    }
+  ]
+}

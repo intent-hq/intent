@@ -10,8 +10,8 @@ Errors use the standard JSON-RPC 2.0 `error` object `{ code, message, data? }`.
 | -32600 | Invalid Request | Not an object, jsonrpc !== "2.0", missing/empty method, or bad id type. |
 | -32601 | Method not found | Unknown method (only for requests; unknown notifications are dropped). |
 | -32602 | Invalid params | Details below the table. |
-| -32603 | Internal error | Underlying service threw. message is "Internal error" with the original message in data for unexpected throws; many shims pass the underlying message through as message directly. Details below the table. |
-| -32005 | Conflict | Optimistic-concurrency failure: a conditional write's `expectedVersion` did not match the entity's current `rev`. `error.data = { code: "conflict", current }` carries the current entity so the client can reconcile (note conditional writes; §4, §5.6). Still returned by `note.update` (metadata and content arms), `note.updateMetadata`, `note.delete` and `task.updateNoteStatus` on a stale `expectedVersion`. **Not** returned by `note.setContent` for a stale `expectedVersion` **below** the current `rev`: that write three-way-merges the writer's intent onto the current text instead, or replaces last-writer-wins when no base snapshot survives (§5.2 "Three-way merge on stale `expectedVersion`"). `note.setContent` surfaces this code in exactly two cases, both without a write: an `expectedVersion` **above** the current `rev` (a rev the note never served) is rejected immediately, and a bounded read-merge-persist loop (5 attempts) whose every attempt misses its rev gate returns the last `Conflict`. The surgical writes take no `expectedVersion` on the wire but persist through the same gated loop with the `rev` of their own read as the base (`note.add`, `note.edit`, `note.editLines`, `task.updateStatus`, `task.update` merge on a miss; `task.convertBlocks` and `comment.add` re-derive from the fresh content on a miss), so they too return this code only when all 5 attempts miss. `note.restoreVersion` takes no `expectedVersion` and never returns it. |
+| -32603 | Internal error | Underlying service threw. message is "Internal error" with the original message in data for unexpected throws; many shims pass the underlying message through as message directly. Some carry a readable message and an `error.data.code`, for example clone failures (§9.1) and `base-refresh-failed` (§9.2); see the sections below. Details below the table. |
+| -32005 | Conflict | Optimistic-concurrency failure: a conditional write's `expectedVersion` did not match the entity's current `rev`. `error.data = { code: "conflict", current }` carries the current entity so the client can reconcile (note conditional writes; §4, §5.6). Still returned by `note.update` (metadata and content arms), `note.updateMetadata`, `note.delete` and `task.updateNoteStatus` on a stale `expectedVersion`. **Not** returned by `note.setContent` for a stale `expectedVersion` **below** the current `rev`: that write three-way-merges the writer's intent onto the current text instead, or replaces last-writer-wins when no base snapshot survives (§5.2 "Three-way merge on stale `expectedVersion`"). `note.setContent` surfaces this code in exactly two cases, both without a write: an `expectedVersion` **above** the current `rev` (a rev the note never served) is rejected immediately, and a bounded read-merge-persist loop (5 attempts) whose every attempt misses its rev gate returns the last `Conflict`. The surgical writes take no `expectedVersion` on the wire but persist through the same gated loop with the `rev` of their own read as the base (`note.add`, `note.edit`, `note.editLines`, `task.updateStatus`, `task.update` merge on a miss; `task.convertBlocks` and `comment.add` re-derive from the fresh content on a miss), so they too return this code only when all 5 attempts miss. Those client writers also take turns per note within the daemon (§5.2 "Per-note write serialization"), so parallel calls on one note no longer exhaust the bound against each other; the code now surfaces only when writers outside that serialization (`note.update`, `note.restoreVersion`) keep moving the `rev`. `note.restoreVersion` takes no `expectedVersion` and never returns it. |
 | -32001 | Unauthorized | Local-only guard: a remote (TCP/WSS) caller invoked a local-only fast-path method (e.g. `pairing.getInfo`, `server.pairingInfo`, `server.rotateToken`, `system.shutdown`, or `system.gitCredential`, §5). Also any method other than the four `invite.*` fast paths — `invite.inspect`, `invite.accept`, `invite.challenge`, `invite.prove` — on the unauthenticated `/invite` endpoint (§2.4, §5.48; `message`: `the /invite endpoint serves invite.inspect, invite.accept, invite.challenge and invite.prove only`; `invite.redeem`, the pre-#1965 two-phase join, keeps its §5 catalog entry only until the intentd pin advances past its removal). |
 | -32003 | Forbidden | Multiplayer capability refusal (§5.48). **Without `data`:** the connection-level collaborator allowlist — a connection bound to a non-administrator principal called a method outside `COLLABORATOR_METHODS` (unknown names included, since the gate runs before `-32601`); notifications are dropped silently. **With `data: { code: "forbidden", detail }`:** the service-level gate — a collaborator **member** attempted an owner-only operation (`workspace.members.remove`, `workspace.invite.*`) or an owner-only field of `workspace.update` / `agent.update`; `detail` names the gate. Non-membership is never `-32003`: a workspace the caller is not a member of is `-32602 { code: "not-found" }`, indistinguishable from a nonexistent one. |
 | -32010 | Oversized response | The serialized response to a successful request exceeded the outbound message cap (`MAX_OUTBOUND_MESSAGE_BYTES`, 40 MiB on the serialized JSON-RPC message — §1.3; intentd#743). The response is replaced at router serialization — where the request id is known — with this error echoing the id, so the client fails fast instead of hitting its RPC timeout on a silently dropped message. `message` names the method and serialized size (verbatim daemon string: `"response for <method> exceeds maximum outbound frame size: <n> bytes > <limit> bytes"`); `error.data = { code: "oversized-response", method, responseBytes, limit }`. Clients should re-request with narrower scope (e.g. path-scoped `git.diffs`, §5.6). The connection-writer cap remains a last-resort backstop for non-response messages (subscription pushes/events), which are dropped, never errored (§1.3). |
@@ -25,6 +25,9 @@ Errors use the standard JSON-RPC 2.0 `error` object `{ code, message, data? }`.
   Errors that already attach a more specific `error.data.code` keep theirs: a `workspace.create` failure from an unresolvable base ref keeps this numeric code and its human message but adds `error.data = { code: "base-ref-unresolvable", baseRef }` so clients detect the condition from `error.data.code` instead of parsing the message; `baseRef` is the canonical (remote-prefix-stripped) ref — the same value interpolated into the human message (§5.1 worktree provisioning + `baseRef` canonicalisation).
   Every mutating call scoped to a retired workspace — database-only writes (notes, tasks, comments) included — uses this numeric code with `error.data = { code: "workspace-retired", workspaceId }` (protocol 15.2; §5.1 [Retired workspaces](./methods/workspace.md#retired-workspaces)); reads, `workspace.delete` / `workspace.cancelDelete`, the revive triggers (`workspace.unarchive`, `workspace.restore`, a user message to an agent) and per-viewer seen/attention bookkeeping are never refused with it.
   `workspace.retire` on a workspace whose folder holds the only copy of its repository or is not daemon-owned (`cow` / `direct` checkouts, `skipIsolation`, remote) uses this numeric code with `error.data = { code: "retire-unsupported", checkoutMode? }` and changes nothing.
+  On a plain-folder workspace that refusal adds `plainFolder: true` to `error.data`, with the message `workspace.retire is not available in plain-folder workspaces` (protocol 15.3).
+  An operation that needs git or a forge, called for a plain-folder workspace (the mutating `accept-changes.*`, `git.*`, `file-tracking.stage` / `unstage` and `pr.refresh` methods listed in §5.1, and the agent MCP bindings `ws.git.*`, `ws.pr.*`, `ws.mr.*` and `ws.workspace.proposeSibling`), uses this numeric code with `error.data = { code: "plain-folder-unsupported", operation }` and the message `<operation> is not available in plain-folder workspaces`, and changes nothing (protocol 15.3; §5.1 [Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces)).
+  A `workspace.create { plainFolder: true }` whose `repositoryPath` cannot hold a plain folder uses this numeric code with `error.data = { code: "plain-folder-path-rejected", reason, path, repositoryRoot? }` before any side effect; `reason` is `inside-git-repo` (with `repositoryRoot`), `inside-workspaces-root`, `contains-workspaces-root`, `not-a-directory` or `parent-missing`, and clients show `message` for an unknown value.
   User-fixable clone failures (`path-invalid`, `destination-exists-non-empty`) also use this numeric code — see the clone failure taxonomy below.
   A `git.showFile` path resolving to a non-blob tree entry (a `160000` gitlink / submodule pin, or a `040000` tree) also uses this numeric code with `error.data = { code: "not-a-file", path, mode }` — `mode` is the octal tree-entry mode string (monorepo#1739; §5.6).
   The invite / join flow (§5.48) keeps its own user-actionable discriminators on this numeric code — `invite-not-found`, `invite-expired`, `invite-revoked`, `invite-redeemed`, `invite-pin-mismatch`, `invite-pin-unknown`, `guest-limit` / `workspace-full`, `workspace-archived` (`workspace.members.add` / `workspace.invite.create` / the `invite.prove` / `invite.accept` join commit on an archived workspace — archiving detached every guest and closed every open invite; [intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)), and the `invite.prove` / `invite.accept` outcomes `proof-invalid` / `proof-expired` / `credential-invalid` / `owner-self-join` — with the kind's fixed prose as `message`; its infrastructure-side refusals (`github-identity-required`, `primary-identity-locked`, `invite-flow-busy`, `github-unreachable`, `identity-unverifiable`, `listener-down`, `tunnel-down`) are `-32603` with the same `error.data.code` convention.
@@ -71,6 +74,49 @@ where `detail` is a human-readable cause: the tail of `git clone`'s stderr (boun
 
 Only these `data.code` values are a stable contract; clients must exact-match them and treat unknown codes as `clone-failed`. Classification is best-effort prose matching over git's stderr — the `detail` is authoritative for display, the `code` for behavior. The classified categories are shared with the streaming `git.clone` surface: a failed `git:clone:done` frame carries the same category string as `data.errorCode` when classification succeeded (§5.6, §6.5).
 
+### 9.2 Base refresh failure (`workspace.create`) *(15.4)*
+
+A local-repo `workspace.create` whose base branch is refreshed before the checkout
+(§5.1 worktree provisioning — worktree and CoW modes) stops when that `git fetch` fails.
+The failure is its own error, not a clone failure (§9.1), and nothing is left behind:
+no branch, folder or row is created and no `workspace:created` is emitted. The envelope:
+
+- numeric code `-32603`;
+- `error.message` — one line, readable on its own: `Couldn't update <baseRef> from <remote>: <cause>`,
+  where `<cause>` is the first meaningful line of `detail` (blank, `hint:` and `warning:` lines
+  are skipped), for example
+  `Couldn't update main from origin: git@github.com: Permission denied (publickey).`;
+- `error.data` — `{ "code": "base-refresh-failed", "category", "detail", "baseRef", "remote" }`.
+
+`detail` is git's full (possibly multi-line) fetch error output and, like `message`, passes through
+the daemon's credential redaction (`user[:pass]@` fragments in URL-like text become
+`***@`), so tokens never reach the wire. `baseRef` is the canonical branch name (remote
+prefix stripped) and `remote` the remote name (default `origin`).
+
+`category` is classified from the fetch's own outcome and stderr, checked in this order
+(first match wins):
+
+| category | When |
+| --- | --- |
+| timeout | The daemon itself killed the fetch at its 100 s bound (git's own "Connection timed out" is `network`) (for example an SSH prompt nobody can answer, or a slow network). |
+| ssh-host-key | "Host key verification failed": the daemon's machine has never trusted this SSH host. |
+| auth-required | No usable credential: "Permission denied (publickey)", "could not read Username", "terminal prompts disabled", "Authentication failed". |
+| network | The remote could not be reached: "Could not resolve host", connection refused or timed out, "Network is unreachable". |
+| repo-not-found | "Repository not found", "does not appear to be a git repository", or a missing remote path. |
+| access-denied | The remote refused an existing repository: HTTP 403, "denied to". |
+| other | Anything else, including "couldn't find remote ref <baseRef>" (the branch was deleted on the remote); `detail` still carries git's message. |
+
+A bare "permission denied" is never read as a bad path; this classifier is
+fetch-specific and does not share §9.1's clone rules. Only these `category` values are a
+stable contract: clients exact-match them and treat an unknown value as `other`. The
+`detail` is authoritative for display, `category` for guidance, and `code` for behavior.
+
+**Recovery.** Clients may offer **Continue from last-fetched** only when
+`error.data.code === "base-refresh-failed"`: it re-sends the same create with
+`skipBaseRefresh: true` (§5.1), which starts the checkout at the existing
+`refs/remotes/<remote>/<baseRef>` without fetching. Gating on the code keeps the offer
+away from older daemons, which ignore the parameter. Retrying unchanged is always safe.
+
 ### Shared-host typed refusals *(10.9)*
 
 The additive [§5.49 contract](./methods/shared-host-membership.md) keeps the numeric
@@ -90,8 +136,9 @@ have their own vetted allowlist; a non-administrator is not necessarily a guest.
 Reuse `invalid-params` for invalid host-invite fields or owner removal, `not-found`
 for hidden workspaces/wrong invitation namespace, the existing closed/pin/proof
 invite errors for failed joins, and `identity-unverifiable` with `host` for restricted
-pin or proof reads. No-forge/no-profile owner issuance no longer raises
-`github-identity-required` when `hostMembership: 1` is supported. Existing
+pin or proof reads. Invitation issuance and redemption (`invite.challenge`,
+`invite.prove`, `invite.accept`) with no connected owner forge (GitHub or GitLab)
+raise `github-identity-required`, including when `hostMembership: 1` is supported. Existing
 listener/tunnel failures, auth/scope/rate-limit errors and HTTP 401/403 semantics
 remain as described in §5.49; wrong-secret responses reveal no pin or scope preview.
 
@@ -125,45 +172,103 @@ structured `data.code` values for node placement, checkpoints and uncertain RPC
 outcomes using existing numeric codes. No new numeric error is introduced.
 These errors are future contracts; current CoW errors remain until retirement.
 
-### Prepared truncated note read errors
+### Remote machine errors
 
-The opt-in [truncated note read contract](./methods/notes-tasks.md#truncated-note-reads-prepared-additive-contract)
+The [daemon-to-daemon remote machines contract](./methods/nodes.md#remote-machine-errors)
+adds structured `data.code` values on existing numeric codes. `-32602`:
+`model-unavailable` (also from `agent.setModel` on a remote agent),
+`profile-not-remote-compatible` (the launch rules refuse a profile or Default
+configuration: not marked for remote machines, or it sets an account folder, at
+placement or `agent.setModel`; data `{ providerRef, name, reason, keys }`),
+`machine-not-signed-in` (a Default that relies on the machine's own sign-in, on
+machines reported signed out; data `{ providerRef, machines, retryable }`),
+`machine-update-required`, `machine-in-use`, and the
+`placement-unavailable` reasons
+`machine-unreachable`, `machine-unknown` and `machine-revoked`; `no-capacity`
+gains `limit: "count" | "memory"` with its counts or bytes. `-32603`:
+`machine-unreachable` (with the routes tried) and `machine-revoked` from
+`remoteMachines.add` / `refresh`, and `machine-unreachable` with
+`unconfirmedStops` from `remoteMachines.remove` when stops go unacknowledged. `-32003` with `data.code: "node-mode"` refuses
+a method outside the node-mode list. The message-prefixed
+`remote-model-change-unsupported` (`-32602`, no `data.code`) is no longer
+returned by `agent.setModel`; it remains only as a remote start failure when
+the identity changed outside `agent.setModel` or quota failover. No new numeric error is introduced.
+
+[Node invites](./methods/nodes.md#claim-errors) add `data.code` values on existing
+numeric codes. `-32602` from `remoteMachines.claim`: `invalid-node-link`,
+`node-invite-invalid`, `node-invite-expired` (data `expiresAt`),
+`node-invite-used`, `node-invite-revoked` and `node-invite-self`; its
+`machine-unreachable` (`-32603`) and `machine-update-required` add
+`inviteSpent`. `-32603` from `executor.invite.create`: `listener-down` and
+`no-route`.
+
+The [cloud machines](./methods/nodes.md#remote-machine-errors) add three
+`data.code` values, also on existing numeric codes. `-32602`:
+`cloud-profile-required` (placement or `agent.setModel` would send no
+`profileEnv`; data `{ provider, providerRef }`), `cloud-quota` (an E2B plan
+limit; data `{ provider, limit: "concurrency" | "rate" | "plan", retryAfterSeconds?,
+retryable }`) and `cloud-machine-unavailable` with `reason`
+`not-configured`, `key-rejected` or `entry-required` (a placement named no
+E2B entry, several exist and none is `"e2b"`; data adds `entries`). All three carry the
+optional `cloudMachineId` of the named E2B entry. `-32603`: `cloud-machine-unavailable` with
+the other reasons (`api-error`, `template-missing`, `bootstrap-failed`,
+`sandbox-lost`). After a placement reply the same codes arrive as the agent's
+`placementError.code`. No error carries the E2B key.
+
+### Truncated note read errors
+
+The opt-in [truncated note read contract](./methods/notes-tasks.md#truncated-note-reads-additive-contract)
 keys its write refusal on the existing `-32602` code.
 
 | Numeric code | data.code | Meaning / client action |
 | --- | --- | --- |
 | -32602 | content-base-mismatch | A whole-content write's `baseContentBytes` does not match the resolved base, or the base is unknown. `data` adds `baseContentBytes` and `resolvedBaseBytes` (base size or `null`; never copy it into `baseContentBytes`). Nothing was written; re-read the full note before writing. |
 
-### Prepared note paging errors
+### Message block page errors
 
-Only the opt-in [read-only note paging contract](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
-uses these bounded outcomes. Legacy errors (including full `current` conflict
-entities) remain unchanged. A page-aware error's entire JSON-RPC envelope is at most
-4,096 escaped UTF-8 bytes; `data` includes `code`, optional `currentRevision`,
-never `current: Note`, old/deleted text or a full annotation map.
-Messages are fixed short descriptions; do not echo user payloads into errors.
+The [capped `agent.getMessageBlock` contract](./methods/agents.md#55-agent) (`messageBlockPages: 1`)
+uses the existing `-32602` code with `data.code: "invalid-params"`; nothing is changed on any of them.
+The two param-shape errors are checked before any read and carry the bare message. The others
+are raised after the block is read and carry the standard `invalid params: ` message prefix.
 
-| Numeric code | data.code | Meaning / client action |
+| Numeric code | Exact `error.message` | Meaning / client action |
 | --- | --- | --- |
-| -32602 | not-found | Fresh paged comment lookup addresses a missing resource: `data.entity` is `commentThread` after its final comment is deleted, or `comment` for a deleted commentId. A deleted root with surviving replies is a successful `rootState: "deleted"` thread page, not this error. These outcomes do not imply note deletion. Old continuation cursors instead follow the normal stale-epoch rule. Legacy unpaged comment errors remain unchanged. |
-| -32602 | invalid-params | Invalid range, overlap, surrogate boundary, unpaired surrogate, NUL, unknown shape, disallowed filter; no note mutation. |
-| -32602 | note-page-cursor-invalid | Tampered, wrong scope/kind/budget/range-set cursor; reject, never reinterpret it as a first page. |
-| -32602 | note-page-expired | Snapshot expired, evicted or unavailable after restart; preserve drafts and reacquire. Not entity deletion. |
-| -32005 | note-page-stale | Source revision or relevant annotation epoch changed; invalidate that view and reconcile. |
-| -32602 | note-page-budget | Request exceeds hard item/decoded/wire limits, or minimum valid response cannot fit requested budgets; no mutation. |
-| -32006 | note-index-preparing | The requested note's derived index is queued/building, or the preparation queue is full. `retryAfterMs: 1000`; retry only while this view is still wanted. No page or snapshot is admitted. |
-| -32006 | note-index-resource-limit | Conversion exceeded a resource budget. No automatic retry, partial publication or canonical mutation; preserve drafts. |
-| -32602 | not-found | Entity absent or invisible under existing visibility policy. Only this code invokes the deleted-entity flow. |
+| -32602 | `maxBytes must be a positive integer` | Send a positive integer or omit it; values are clamped into [4,096, 480,000]. |
+| -32602 | `offset must be a non-negative integer` | Send `0` or a `nextOffset` from the previous page. |
+| -32602 | `invalid params: offset <n> is past the end of the block body (<totalBytes> bytes)` | The offset is beyond the body; restart from `0`. |
+| -32602 | `invalid params: offset <n> is not on a UTF-8 character boundary` | Only use offsets returned as `nextOffset`. |
+| -32602 | `invalid params: offset is not supported for this block` | The block has no pageable body (an image or another type); call without `offset`. |
+| -32602 | `` invalid params: agent.editAndRegenerate: imageBlocks[<i>] … `` | A malformed block reference, or one that names a block that is not an image with stored bytes (see [§5.5](./methods/agents.md#55-agent)). |
 
-### Prepared desktop control errors
+### Desktop control errors
 
-[§5.51](./methods/desktop.md#errors-and-verification) reserves typed `desktop-*`
+[§5.51](./methods/desktop.md#errors-and-verification) defines typed `desktop-*`
 errors under existing numeric codes: `-32602` for inactive/stale operations and
 `desktop-display-selection-required` / `desktop-display-unavailable` (ambiguous
 selection or missing display, with no capture/input),
+`desktop-target-mismatch` (a `windowId`-targeted action whose window is gone, not
+in the frontmost app, not under the point, or covered; `data.reason` says which.
+With `execution: "not_started"` the check failed before any input and nothing is injected.
+With `execution: "partial"` focus changed between steps of a multistep action
+(such as `type`) or `focusWindow` did not take effect: earlier input may already
+have been delivered, so replaying the whole input is unsafe),
 `-32603` for offline, busy, unsupported and native/transport failures, and
 `-32003` for authority refusal. Action failures distinguish not-started, partial
 and unknown execution; an uncertain input outcome must never be replayed.
+
+### Secret request errors
+
+[§5.56](./methods/secrets.md#client-facing-router-methods) uses `-32602` with
+`data.code: "secret-request-unknown"` when `secret.provide` or `secret.dismiss`
+names a request that is unknown, already answered, or lost on restart, and with
+`data.code: "invalid-params"` for an empty or oversized value or an invalid name.
+For a [remote agent](./methods/secrets.md#remote-agents), `secret.provide` uses
+`-32602` with `data.code: "secret-delivery-failed"` when the value could not reach
+the agent's machine (not connected, below nodeProtocol 14, or no confirmation within
+10 s); the request stays pending, so the client can let the user try again.
+`-32003` means the caller lacks send authority for the target agent. No error
+message or `data` ever contains the submitted value. The agent-facing
+`secret-unavailable` tool error is described in §5.56.
 
 ### Prepared provider profile errors
 
@@ -176,14 +281,3 @@ select the profile; and `provider-profile-replacement-required` with
 `data: { providerRef, reason }` when a qualified reference names a missing profile
 or a disabled base provider. The last one never falls back to another account.
 An unreadable profile file returns `-32603` with `data.code: "provider-profiles-unreadable"`.
-
-### Prepared note deletion grace errors (13.10)
-
-The dedicated grace methods use bounded `error.data.code` values
-`NOTE_DELETE_INVALID`, `NOTE_DELETE_UNAVAILABLE`, `NOTE_DELETE_STALE`,
-`NOTE_DELETE_KEY_EXPIRED`, `NOTE_DELETE_KEY_MISMATCH`, `NOTE_DELETE_ALREADY_PENDING`,
-`NOTE_DELETE_QUOTA`, `NOTE_DELETE_GRAPH_LIMIT`, `NOTE_DELETE_SHUTTING_DOWN` and
-`NOTE_DELETE_FORBIDDEN`. Their exact numeric mapping and side-effect guarantees
-are in the [grace error table](./note-delete-grace.md#errors-and-verification).
-Rejected requests admit no new operation; they do not cancel an earlier operation.
-`UNKNOWN` and `OUTCOME_UNKNOWN` are distinct typed results, never proof of rollback.

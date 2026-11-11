@@ -2,28 +2,33 @@
 
 ## Status and discovery
 
-This is a **prepared additive contract**, not implemented or qualified by the
-current pins. Initial support requires both macOS and Windows. Linux is outside
-the initial scope. No currently advertised protocol version changes here.
+This is a **shipped additive contract**: the pinned intentd and cloudlands-fe
+implement it. Native execution is supported on macOS and Windows only; Linux is
+not supported, and the desktop client does not advertise the client capability
+on Linux. No currently advertised protocol version changes here.
 
-The daemon advertises `server.capabilities.desktopControl: 1` only when the
-complete session, consent, agent-binding and revocation contract is implemented.
-Electron advertises `client.hello.capabilities.desktopControl: 1` only on its
-execution connection, alongside `browserExec: true`. Missing/unknown capability
+The daemon advertises `server.capabilities.desktopControl: 1` only when it
+implements the session, consent, agent-binding and revocation contract; the
+pinned intentd does. Electron advertises `client.hello.capabilities.desktopControl: 1` only on its
+execution connection, alongside `browserExec: true`, and only on macOS or Windows
+when its bundled native desktop helper is present. Missing/unknown capability
 versions mean unsupported. Capability describes implementation, not permission
 or OS readiness. Old peers ignore the additive flag; a new daemon must never
 send desktop reverse calls to an old client. The UI gates its controls on both
-ends' support. Do not modify browser routing or infer desktop support from
-`browserExec`, host display availability, or a protocol version number.
+ends' support. Do not infer desktop support from `browserExec`, host display
+availability, or a protocol version number. Desktop control changes browser
+routing in one place only: while a workspace has an active session, its agent
+browser calls go to that session's client, after the pin and ahead of claimed tabs
+([REV-2 rule 3](./files-terminal-browser.md)).
 
-## Agent feature availability (prepared)
+## Agent feature availability
 
 `agentFeatures.desktopControl` is a boolean Agent Feature labelled **Desktop
 control**, default **true**, including when omitted from settings or an older
 persisted feature snapshot. It is separate from protocol
 `capabilities.desktopControl`, native OS readiness, remembered consent and active
 session authority. Default-on exposes the API; it never grants permission.
-See [settings](./settings.md) for the prepared setting definition.
+See [settings](./settings.md) for the setting definition.
 
 Capture the effective feature at each new agent-session creation, including
 creation/delegation of child agents, and use that same captured value for the
@@ -64,7 +69,7 @@ combinations weakens owner checks or user-only consent decisions.
 
 ## Identity, primary selection and authority
 
-Agent calls use the prepared MCP-only desktop namespace shown below; they are
+Agent calls use the MCP-only desktop namespace shown below; they are
 **not public router methods**. Derive the agent and workspace from authenticated
 agent execution context. For this desktop feature, **agent owner** means the
 persisted `workspace.owner_principal_id` of that resolved workspace, including
@@ -91,9 +96,11 @@ A saved `browserClientId` is assigned even when offline. Otherwise an active
 workspace desktop session fixes its executor; otherwise the existing oldest
 agent-owned browser-tab host is assigned (including hidden tabs and disconnected
 hosts). User-owned tabs do not assign a primary. The REV-2
-first-connected fallback is not an assignment. Browser calls keep their existing
-[REV-2 driving-client rules](./files-terminal-browser.md); this distinction
-controls desktop consent and the existing primary selector, not browser fallback.
+first-connected fallback is not an assignment, nor is its rule 5 preference for the
+client that most recently focused the workspace. The assigned-versus-default distinction
+controls desktop consent and the existing primary selector, not browser fallback. Browser
+calls follow the [REV-2 driving-client rules](./files-terminal-browser.md), whose rule 3
+sends them to an active session's client ahead of claimed tabs.
 
 For an assigned workspace, resolve that identity **before** testing desktop
 capability/principal; offline is `desktop-offline`, incapable is
@@ -149,11 +156,13 @@ ws.desktop.startControl()
 ws.desktop.endControl()
 ws.desktop.listDisplay()
 ws.desktop.screenshot(args?)
+ws.desktop.move(args)
 ws.desktop.click(args)
 ws.desktop.type(args)
 ws.desktop.keypress(args)
 ws.desktop.scroll(args)
 ws.desktop.drag(args)
+ws.desktop.focusWindow(args)
 ```
 
 | Binding | Arguments | Result |
@@ -162,11 +171,16 @@ ws.desktop.drag(args)
 | `endControl()` | none | `{ ended: boolean, withdrawn: boolean }` |
 | `listDisplay()` | none | `DisplayListResult` below (metadata only) |
 | `screenshot(args?)` | `displayId?: string, layoutId?: string` | `ScreenshotResult` below (one selected display) |
-| `click(args)` | `displayId?: string, layoutId, x, y, button?: "left" \| "right", clickCount?: 1 \| 2` | `{ ok: true }` |
-| `type(args)` | `text: string` | `{ ok: true }` |
-| `keypress(args)` | `key: string, modifiers?: ("Shift" \| "Control" \| "Alt" \| "Meta")[]` | `{ ok: true }` |
-| `scroll(args)` | `displayId?: string, layoutId, x, y, deltaX, deltaY` | `{ ok: true }` |
-| `drag(args)` | `displayId?: string, layoutId, from: { x, y }, to: { x, y }` | `{ ok: true }` |
+| `move(args)` | `displayId?: string, layoutId, x, y, windowId?: string` | `{ ok: true }` |
+| `click(args)` | `displayId?: string, layoutId, x, y, button?: "left" \| "right", clickCount?: 1 \| 2, windowId?: string` | `{ ok: true }` |
+| `type(args)` | `text: string, windowId?: string` | `{ ok: true }` |
+| `keypress(args)` | `key: string, modifiers?: ("Shift" \| "Control" \| "Alt" \| "Meta")[], windowId?: string` | `{ ok: true }` |
+| `scroll(args)` | `displayId?: string, layoutId, x, y, deltaX, deltaY, windowId?: string` | `{ ok: true }` |
+| `drag(args)` | `displayId?: string, layoutId, from: { x, y }, to: { x, y }, windowId?: string` | `{ ok: true }` |
+| `focusWindow(args)` | `windowId: string` | `{ ok: true }` |
+
+`windowId` and `focusWindow` are described in
+[Window metadata and targeted actions](#window-metadata-and-targeted-actions).
 
 `StartResult` is exactly one of:
 
@@ -212,6 +226,12 @@ failure do. Stop or timeout must never trigger automatic restart/retry.
 
 ## Consent and lifecycle
 
+An agent on a remote machine calls `ws.desktop.*` through the
+[executor link](../workspace-routing.md#remote-agents-on-the-executor-link). The
+call acts on the primary desktop of the user's client connected to the backend,
+never on the machine, with the same consent, keyed by the remote agent's id, and
+the same wakes as a local agent.
+
 Desktop consent is separate from [ACP tool permission](../08-permission-flow.md)
 and generic agent Q&A. `AllowAll`, provider bypass mode and answers supplied by a
 model cannot approve it. Persist remembered consent by the exact
@@ -220,7 +240,7 @@ a future start, never an action or an active session by itself. Reinstallation o
 another physical primary requires new consent. The agent ellipsis menu reads and
 updates permission for the current assigned primary, or the caller's own eligible
 candidate while unassigned, with the label
-`Allow desktop control without asking`.
+`Allow desktop control`.
 
 The following steps apply to an assigned primary; an unassigned start first uses
 the candidate flow below and rejoins activation at step 4.
@@ -498,8 +518,8 @@ All fields are required, trusted daemon-generated strings. Each operation adds:
 | `execute` | `computerId, sessionId, commandId, sequence, deadlineId` | `{ commandId, sequence, result }` |
 
 `action` is `{ kind: "listDisplay" }`, `{ kind: "screenshot", displayId?, layoutId? }`
-or the matching input name (`click`, `type`, `keypress`, `scroll`, `drag`) plus that
-binding's arguments. `listDisplay` execution returns `DisplayListResult`; screenshot
+or the matching input name (`move`, `click`, `type`, `keypress`, `scroll`, `drag`,
+`focusWindow`) plus that binding's arguments, including an optional `windowId`. `listDisplay` execution returns `DisplayListResult`; screenshot
 returns `ScreenshotResult`; input returns `{ ok: true }`. Listing uses the same
 command ticket and session gates, never an unauthenticated discovery operation.
 No arrays, arbitrary scripts, shell commands or raw native function names are accepted. The executor
@@ -606,6 +626,8 @@ type ScreenshotResult = {
   capturedAt: string; // RFC3339 UTC
   layoutId: string;
   displays: [DisplayCapture]; // exactly one selected display
+  frontmost?: FrontmostApp;   // see Window metadata below
+  windows: WindowMetadata[];  // front-to-back; may be empty
 };
 type DisplayCapture = DisplayMetadata & {
   assetId: string; url: string; mimeType: "image/png";
@@ -628,11 +650,11 @@ changes and later changes back. The same unchanged layout keeps its token across
 listing and capture. Never combine metadata from different topology generations.
 
 Screenshot accepts no argument or an object with optional `displayId` and
-`layoutId`. Click, scroll and drag retain all existing coordinates and the required
-`layoutId`, but their `displayId` becomes optional. Empty IDs, null fields and
+`layoutId`. Move, click, scroll and drag use all existing coordinates and the required
+`layoutId`, with optional `displayId`. Empty IDs, null fields and
 unknown arguments are invalid params. Validate supplied layout before selection:
 old tokens fail `desktop-stale-layout`. Then apply the same selection rule to all
-four operations:
+five operations:
 
 - No available display: `desktop-display-unavailable`.
 - Explicit ID: select exactly that available display; unknown/disconnected IDs
@@ -683,6 +705,21 @@ macOS points; never assume one global scale. Drag stays on one selected display.
 Use listDisplay to learn IDs/layout/geometry and a selected screenshot when visual
 content is needed. Type and keypress keep their existing focused-window semantics;
 they accept no display selector and do not move focus to a requested monitor.
+Without `windowId`, they deliver input to whatever window currently has keyboard
+focus; with `windowId` they first apply the target check below.
+
+`move` moves the cursor to the requested position without pressing or releasing
+any button, clicking, scrolling or dragging. It requires active consent, the same
+principal/connection/lease and command-ticket fences, a current `layoutId`, and
+the display selection and bounds checks above. It never starts control implicitly.
+Reject `button`, `clickCount`, `from`, `to` and all other unknown arguments.
+Malformed/nonfinite or out-of-bounds coordinates fail before native movement.
+The wire action is `{ kind: "move", x, y, layoutId, displayId?, windowId? }`; successful
+execution returns exactly `{ ok: true }`. This is an additive action on the existing
+`desktop.control` reverse method, not a new router method or capability version.
+Older executors reject the unknown action without input; never emulate it with a
+click or retry automatically. As with other input, errors after native execution
+retain truthful partial/unknown execution and do not claim rollback.
 
 Click defaults: left button, one click; right button and double click are
 required. Scroll deltas are signed finite **image pixels**, positive right/down,
@@ -714,6 +751,147 @@ desktop transitions terminate control. `{ ok: true }` means the native operation
 completed, not that an application accepted text or performed its intended task.
 If the executor cannot establish native completion, return an error with the
 execution uncertainty field below.
+
+### Window metadata and targeted actions
+
+Keyboard input goes to whichever application is frontmost, so a screenshot alone
+does not tell the agent where `type` or `keypress` will land. Screenshots therefore
+also describe the frontmost application and the visible windows, and input actions
+may name the window they are meant for. Both additions are optional for callers:
+calls without `windowId` behave exactly as described above.
+
+```ts
+type FrontmostApp = {
+  appName: string;
+  bundleId?: string;
+  pid: number;
+  windowId?: string;
+};
+type WindowMetadata = {
+  windowId: string;
+  appName: string;
+  bundleId?: string;
+  pid: number;
+  title?: string;
+  x: number; y: number;
+  width: number; height: number;
+  focused: boolean;
+};
+```
+
+`frontmost` is the application that receives keyboard input at capture time. It
+is omitted only when the OS reports no frontmost application. Its `windowId` is
+that application's focused window, omitted when the application has no focused
+window or that window is not an eligible window as defined below; it may name a
+window on another display that is therefore absent from `windows`.
+
+`windows` lists the eligible windows that intersect the captured display, in
+front-to-back (z-order) order, first entry topmost. Eligible windows are
+on-screen, top-level application windows: not minimized, hidden, on another
+macOS Space or Windows virtual desktop, zero-sized or fully transparent. Exclude
+desktop background, menu bar, Dock, taskbar and similar shell surfaces, and
+**never** include Intent's own control overlay (glow, Stop/navigation panel or
+consent toast) windows; ordinary Intent application windows are eligible. The
+array is present and may be empty.
+
+Field rules for both types:
+
+- `windowId` is a nonempty opaque string, stable while that window exists during
+  the active session and never reused for another window in that session. It is
+  meaningful only within the session that returned it; models must not parse it.
+- `appName` is the nonempty user-visible application name (macOS localized name;
+  Windows file description, falling back to the executable name).
+- `bundleId` is the macOS bundle identifier when the application has one; Windows
+  omits it.
+- `pid` is the positive integer OS process ID of the owning application.
+- `title` is the window title; omit it when empty or unavailable. Never invent one.
+- `x`, `y`, `width`, `height` are the window's full outer frame in the captured
+  display's **image pixels**, the same space as action coordinates. `width` and
+  `height` are positive integers; `x` and `y` are integers and may be negative or
+  extend past the image when the window crosses the display edge. Do not clip.
+- `focused` is `true` for at most one entry: the frontmost application's focused
+  window, whose ID then equals `frontmost.windowId`. All other entries are `false`.
+
+The executor samples window metadata immediately after the image capture, in the
+same execution step and under the same authority, layout and deadline checks. It
+is a point-in-time description, not a lock: windows can move, close or lose focus
+before the next action. A failure to enumerate windows fails the screenshot like
+a capture failure; never return an image with a silently truncated window list.
+Window titles, like screenshot bytes and typed text, never appear in lifecycle
+events, wakes or logs.
+
+#### Targeted input
+
+`click`, `move`, `scroll`, `drag`, `type` and `keypress` accept an optional
+`windowId` taken from a screenshot of the current session. An empty string, null
+or non-string value is invalid params. The wire action carries `windowId`
+unchanged; `prepareCommand` retains it with the rest of the action and `execute`
+cannot add, change or remove it. Display selection, layout and bounds validation
+run first, exactly as without a target.
+
+Immediately before the first native input of the action, the executor checks the
+target against current OS state, in this order, and refuses with the first
+failing `reason`:
+
+1. `window_unavailable`: the window still exists and is eligible as defined above.
+   An unknown, closed, minimized, hidden or other-session ID fails here.
+2. `not_frontmost`: the window belongs to the frontmost application (its owning
+   process is the frontmost application's process).
+3. `outside_window` (coordinate actions only): the action point lies inside the
+   window's current frame on the selected display, using
+   `x <= px < x + width` and `y <= py < y + height` in image pixels.
+4. `obscured` (coordinate actions only): this window is the topmost eligible window
+   at that point.
+
+For `move`, `click` and `scroll` the action point is `{ x, y }`; for `drag` it is
+`from` only, so a drag may end over another window or application. `type` and
+`keypress` apply checks 1 and 2 only. A refusal is `-32602` with `code:
+"desktop-target-mismatch"`, `execution: "not_started"` and `reason`, and injects
+nothing: no pointer movement, button, wheel or key event, and no text. The
+executor never moves focus, raises a window or retries on the agent's behalf.
+Its `detail` is this model guidance:
+
+```text
+The target window is not ready for input. Call ws.desktop.focusWindow({ windowId }) if needed, take a new screenshot to confirm the target, then retry.
+```
+
+For multistep input, recheck checks 1 and 2 before each later native injection
+step of `type` and before the key-down of `keypress`; a drag checks once before
+its button press. A mismatch detected after an earlier step returns
+`desktop-target-mismatch` with `execution: "partial"`, stops further input and
+releases any held keys or buttons. Releases are cleanup and are not checked.
+Do not replay the whole input after a `partial` result: earlier steps may already
+have reached the window. Take a new screenshot to see what was entered first.
+
+#### `focusWindow`
+
+`focusWindow({ windowId })` activates the window's owning application and raises
+that window so later input reaches it. It takes no display, layout or coordinate
+arguments, presses no buttons or keys, moves no pointer, and does not restore
+minimized windows or switch macOS Spaces or Windows virtual desktops. The wire
+action is `{ kind: "focusWindow", windowId }` on the existing `desktop.control`
+reverse method, under the same consent, owner, connection, lease and
+command-ticket fences as any other action; it never starts control implicitly.
+
+Before acting it applies check 1 (`window_unavailable`, `execution: "not_started"`).
+After the native activation and raise calls it verifies the **window**, not just
+the process: success returns exactly `{ ok: true }` only when the window's owning
+application is frontmost (check 2) **and** that application's focused window is
+this `windowId` (what a new screenshot would report as `frontmost.windowId` and
+`focused: true`). When the OS declines the activation (for example Windows
+foreground-lock rules), return `desktop-target-mismatch` with `reason:
+"not_frontmost"` and `execution: "partial"`. When the application is frontmost
+but another of its windows (including a sheet or dialog) keeps focus, return
+`reason: "not_focused"` with `execution: "partial"`. Never fall back to synthetic
+clicks or keystrokes to force focus. `not_focused` is specific to `focusWindow`;
+targeted input keeps the process-level check 2 above. The agent should take a new screenshot to confirm the
+result before typing.
+
+Both additions extend the existing `desktop.control` action set; there is no new
+router method or capability version. Older executors reject an unknown
+`windowId` field or `focusWindow` action as invalid params without input. The
+daemon must never strip `windowId` and resend an untargeted action, emulate
+`focusWindow` with other input, or retry automatically.
 
 ## Events and agent wakes
 
@@ -763,17 +941,21 @@ credentials/deduplication records may survive; neither is execution authority.
 ## Errors and verification
 
 Reuse numeric JSON-RPC errors; no new number. `DesktopError = { code, detail,
-execution?: "not_started" | "partial" | "unknown" }` is `error.data` on wire
-errors and the `error` field on asynchronous failure outcomes. MCP surfaces the
-same code/detail as a tool failure, never `{ ok: true }`. Malformed inputs use
-`-32602` with `code: "invalid-params"`; authority refusal uses `-32003` with
-`code: "forbidden"` (hidden resources retain existing not-found semantics).
+execution?: "not_started" | "partial" | "unknown", reason? }` is `error.data` on
+wire errors and the `error` field on asynchronous failure outcomes. MCP surfaces the
+same code/detail (and `reason` when present) as a tool failure, never
+`{ ok: true }`. Malformed inputs use `-32602` with `code: "invalid-params"`;
+authority refusal uses `-32003` with `code: "forbidden"` (hidden resources retain existing not-found semantics).
+`reason` is present only with `desktop-target-mismatch` and is one of
+`window_unavailable`, `not_frontmost`, `outside_window`, `obscured` or
+`not_focused` (`focusWindow` only).
 
 | Numeric | `data.code` | Meaning |
 | --- | --- | --- |
 | -32602 | `desktop-not-active`, `desktop-stale-request`, `desktop-stale-command` | Missing current authority or stale request/command; no execution |
 | -32602 | `desktop-stale-layout` | Display topology changed; not_started before native work, partial/unknown if detected after input |
 | -32602 | `desktop-display-selection-required`, `desktop-display-unavailable` | Multiple displays without a choice, or no matching available display; no capture/input or fallback |
+| -32602 | `desktop-target-mismatch` | Named window missing, not in the frontmost app, not under the point, covered, or (focusWindow) not focused after raising; not_started before input, partial if detected between steps; carries `reason` |
 | -32602 | `desktop-command-expired` | Local command deadline reached; execution is not_started before the first step, partial after a step |
 | -32603 | `desktop-offline`, `desktop-unsupported`, `desktop-busy` | Primary absent/incapable or physical desktop locked by another session |
 | -32603 | `desktop-os-permission-required`, `desktop-unsupported-operation`, `desktop-deadline-unavailable` | Local OS/operation/monotonic deadline readiness cannot be established |
@@ -783,19 +965,22 @@ Pre-execution action refusals set `execution: "not_started"`; partial input sets
 `partial`; loss of confirmation sets `unknown`. Permission persistence and local
 teardown failures use `desktop-execution-failed` with an explanatory detail.
 
-[Prepared lifecycle fixtures](../fixtures/desktop-control/lifecycle.json) and
+[Lifecycle fixtures](../fixtures/desktop-control/lifecycle.json) and
 [static contract tests](../fixtures/desktop-control/contract.test.mjs) validate
 examples, required result distinctions and catalog alignment. Run:
 `node --test docs/protocol/fixtures/desktop-control/contract.test.mjs`,
 `make docs-check` and `make consumer-checks`.
-These tests do not implement the session manager or qualify native support.
+These static tests do not exercise the session manager or qualify native support.
 Component tests must execute those scenarios against real daemon/WSS and
 Electron code, including zero/one/multiple-display metadata and selection, selected-only native
 capture, unknown IDs, hotplug/rotation/DPI changes between preparation and execution,
-no capture/assets/pulse/input on selection refusal, forged caller/decision paths,
+no capture/assets/pulse/input on selection refusal, window metadata ordering and
+overlay exclusion, every `desktop-target-mismatch` reason with zero injected input,
+focus lost mid-`type`, focusWindow success and OS refusal, forged caller/decision paths,
 stale grants, simultaneous
 starts/Stop, local Stop during network loss, no replay, right click, pulse and
 navigation. Packaged Electron evidence on **both macOS and Windows** must prove
 native capture exclusion, permissions, mixed-DPI/multiple monitors, Unicode and
-keyboard mappings, screen lock and Windows elevation/UAC/secure-desktop refusal.
+keyboard mappings, window enumeration with overlay exclusion, target refusal and
+focusWindow, screen lock and Windows elevation/UAC/secure-desktop refusal.
 Report an unavailable platform environment as a verification gap.

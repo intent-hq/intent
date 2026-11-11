@@ -15,8 +15,10 @@ cloudlands-fe).
 
 | Question | Run |
 |---|---|
-| Where is the release train? Latest tags and ages, alpha/beta/stable versions, the fe daemon pin, open Release and pin-bump PRs with CI Gate state and merge queue position, what the merge queue head is waiting on, unshipped commits, the last auto-cut decision line, the last auto-pin-intentd run and its failure reason, runner maintenance overrides | `make release-status` (`STATUS_JSON=1` for JSON; `NO_LOGS=1` skips the run-log fetch) |
+| Where is the release train? Latest tags and ages, alpha/beta/stable versions, the fe daemon pin, open Release and pin-bump PRs with CI Gate state and merge queue position, what the merge queue head is waiting on, unshipped commits, the last auto-cut decision line, the last auto-pin-intentd run and its failure reason, the `@intent-hq/web` npm dist-tags with drift from the fe channels, runner maintenance overrides | `make release-status` (`STATUS_JSON=1` for JSON; `NO_LOGS=1` skips the run-log fetch) |
+| Which `@intent-hq/web` version does each npm dist-tag (`alpha`, `beta`, `latest`) point at? | `npm view @intent-hq/web dist-tags --json` |
 | Which alpha carries my commit? | `make shipped-in COMPONENT=<intentd\|cloudlands-fe> SHA=<sha>` (hooks call `scripts/shipped-in.sh` for its exit codes) |
+| Does the monorepo main pin include my component commit yet (so a monorepo PR that calls it can merge)? | `make pin-includes COMPONENT=<intentd\|cloudlands-fe> SHA=<merge-sha>` (hooks call `scripts/pin-includes.sh`: 0 = pinned, 3 = not yet, 4 = transient gh failure) |
 
 ## Guarded direct release merges
 
@@ -68,13 +70,21 @@ After a failed refresh the cut now waits for the next push to main.
 One race remains: main can move in the seconds between this check and the
 merge, because `--match-head-commit` pins only the head.
 
-In intentd, the release PR's own CI is shortened the same way. When the PR's
-`release-fast-path` job reports a metadata-only diff, `check` and
-`coverage-changed` are skipped on that PR. CI Gate accepts the skip only when
-that job succeeded. Main's tip already passed both jobs in the merge queue, and
-every other PR and every merge-queue run still runs them. The classifier runs
-only on `release-plz-*` branches, and its own failure falls back to full CI. It
-also rejects a version bump whose `Cargo.lock` does not carry the new version.
+In intentd, release CI is shortened the same way. The `release-fast-path` job
+classifies the diff on `release-plz-*` PRs and on pushes to main. It accepts
+only `CHANGELOG.md`, `Cargo.lock` and version fields in `crates/*/Cargo.toml`,
+and rejects a version bump whose `Cargo.lock` does not carry the new version.
+When it reports a metadata-only diff, CI skips these jobs:
+
+- On the release PR: `check`, `coverage-changed`, `windows-cross-lint`,
+  `macos-cross-lint` and `release-scripts`.
+- On the release push to main: the macOS `build`, the native `windows` job and
+  `release-scripts`. The tag's release workflow still builds every target.
+
+CI Gate accepts a skip only when the classifier succeeded and reported a
+metadata-only diff; a classifier failure falls back to full CI. The diff adds
+only release metadata to a commit that CI already validated. No other PR, push
+or merge-queue run skips a job because of the classifier.
 Without this, each release-plz refresh needed about 8 minutes plus 14 minutes of
 CI. Main merged about every 15 minutes, so the v0.11.9 release PR (intentd#2493,
 2026-10-19) went through 13 CI runs over 4 hours and was never green on current
@@ -87,7 +97,7 @@ other CI job finishes.
 
 ### Direct sidecar pin merges
 
-The cloudlands-fe merge queue builds one entry at a time, and an ordinary entry
+The cloudlands-fe merge queue builds up to five entries at once, and an ordinary entry
 takes about 45 minutes. On 2026-10-19 pin PR cloudlands-fe#3535 waited more than
 3 hours behind other entries, and auto-cut deferred the alpha the whole time.
 A plain pin bump already takes the CI fast path, so the queue only added wait.
@@ -131,6 +141,63 @@ exemption. `RULESET_ADMIN_TOKEN` is a separate administration-read credential
 for drift inspection, not a release-merge credential. To record an intentional
 ruleset change, run `make check-rulesets UPDATE=1` with that credential and review
 the generated diff; this reads live rules and writes local snapshots only.
+
+### Ruleset snapshots and drift
+
+Main rules are committed in `.github/rulesets/*.main.json`; the bypass contract in
+`.github/rulesets/*.bypass.json` allows `intent-hq-ci` on the two component Default
+rulesets only (none for the monorepo or organization). The `ruleset-check` CI job and
+the daily `ruleset-drift.yml` compare them with the live configuration; after an
+intended change, run `make check-rulesets UPDATE=1` and commit the result in the same
+PR. The bypass half needs `RULESET_ADMIN_TOKEN` (a fine-grained PAT with administration
+read on intent, intentd and cloudlands-fe — GitHub returns `bypass_actors` only to such
+a caller) and is fail-soft: without it the bypass actors are skipped with a warning, so
+set it locally too when running `UPDATE=1` for a bypass change. The bypass-actor
+comparison is confined to `ruleset-drift.yml`, which runs main's code; `ruleset-check`
+runs the script from the PR head or merged tree, so it never receives the token and
+skips the bypass actors.
+
+## Landing a security fix
+
+A privately reported vulnerability is discussed in private, but its fix lands on `main`
+like any other change. Plan for that from the start: a pull request opened in a GitHub
+Security Advisory's temporary private fork **cannot be merged**. The `main` rules of
+intent, intentd and cloudlands-fe (`.github/rulesets/*.main.json`) require the merge
+queue and required status checks, and the only bypass actor is the `intent-hq-ci`
+release account on the two component rulesets (`.github/rulesets/*.bypass.json`). An
+advisory merge is therefore always refused by the repository rules, which keep CI on
+`main` on purpose. Discovering that at merge time means rebasing the work and reopening
+it as ordinary PRs.
+
+| Stage | Where | Notes |
+|---|---|---|
+| Report, triage, impact, severity, credit | The draft advisory on [intent-hq/intent](https://github.com/intent-hq/intent/security/advisories) ([SECURITY.md](../SECURITY.md)), or on the affected component repo | Keep reproduction details and exploit discussion here only. |
+| Draft and private review of the fix | The advisory's temporary private fork | Private forks run **no CI** and accept **reviews only, no PR comments**: leave feedback as a review, and run the gates locally (`make gate`, `make fe-verify-changed`). |
+| Land the fix | An ordinary PR on the component repo, through the merge queue | See the neutral-wording rules below. Merging still needs explicit human permission. |
+| Ship | The normal alpha train | Track it with `make shipped-in` like any fix ([AGENTS.md](../AGENTS.md#release-process)). |
+| Disclose | Publish the advisory | Only after the fixed build is released; name the fixed version and link the fix PRs. |
+
+Rules for the public PR, until the advisory is published:
+
+- Branch from the component's `origin/main` under a neutral branch name (if the fix
+  was drafted in the private fork, push its commits to a new neutral branch rather than
+  reusing the fork's branch name), and file the PR on the component repo.
+- Use a neutral conventional-commit title, PR body and commit messages that describe
+  the behavior change (for example `fix: validate request parameters`), not the
+  attack. Do not mention the vulnerability, its impact, an exploit, the advisory or
+  its GHSA ID.
+- Do not add a regression test or fixture that is a working exploit; test the
+  corrected behavior instead.
+- There is no public issue to close, so the `Fixes intent-hq/intent#N` rule does not
+  apply. Do not file one.
+- Cross-component fixes follow the usual
+  [ordering](../AGENTS.md#cross-component-features-intentd--cloudlands-fe): open the
+  intentd and cloudlands-fe PRs in parallel and land intentd first when the protocol
+  changes.
+
+After the fix ships in an alpha, publish the advisory with the carrying cloudlands-fe
+version as the first patched release. The fix PRs and their commits can then be linked
+from the advisory.
 
 ## Intel Mac release policy — pending rollout
 
@@ -207,7 +274,13 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
   failed dispatch logs a warning and never fails the publish — the fe crons then act
   as the backstop.
 - Windows lint runs in the merge queue; the rest of Windows validation is post-merge
-  only. intentd PRs never use a Windows runner. Each merge-queue run has a required
+  only. intentd PRs never use a Windows runner: they run `windows-cross-lint`, the
+  same `cargo check` and Clippy for the Windows GNU target on Linux
+  (`make check-windows` locally), so most Windows-only compile and lint errors fail
+  the PR. macOS works the same way: intentd PRs run `macos-cross-lint`, `cargo check`
+  and Clippy for `aarch64-apple-darwin` on Linux through a stub C compiler
+  (`make check-macos` locally), and the queue's native macOS `build` leg stays the
+  final macOS lint. Each merge-queue run has a required
   `windows-lint` job (native Windows `cargo check` and target-gated Clippy), so a
   Windows-only compile or lint error is ejected from the queue instead of landing.
   Every push to `main` runs the Windows runtime and lifecycle proofs, release build,
@@ -246,6 +319,33 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
   Sitter installers (Homebrew, `.deb`, `sitter-latest`) are also mirrored to
   intentd-releases by `release-sitter.yml`, and the published install URLs (Homebrew
   formula, README curl commands) point at the mirror.
+- **E2B node templates.** After each successful Release run, intentd's
+  `e2b-template.yml` (`workflow_run` on Release) builds one E2B template per sandbox
+  size from `packaging/e2b`, in parallel: `intent-node-2x4` (2 vCPU / 4 GiB),
+  `intent-node-4x8` (4 vCPU / 8 GiB, the default), `intent-node-8x16` (8 vCPU /
+  16 GiB) and `intent-node-16x32` (16 vCPU / 32 GiB). It tags each `<version>` and `latest`, makes it public
+  (`<E2B project slug>/intent-node-<size>:<version>`), and smoke-tests the new tag
+  (create a sandbox, check `intentd --version`, the tools and the size, kill it).
+  E2B's Hobby plan caps sandboxes at 8 vCPU / 8 GiB, and Pro goes higher only after
+  E2B support raises the project's limits
+  ([billing](https://docs.e2b.dev/billing.md)), so `8x16` and `16x32` need Pro with
+  raised limits, for two E2B projects. Intent's publishing project (the one that owns
+  `E2B_API_KEY`) needs them to build those templates: a build E2B refuses over the
+  project's vCPU or memory limits is skipped with a warning (the rest of the run
+  continues), so that size has no tag for the version, and the backend lists only
+  sizes whose `<version>` tag exists. The `E2B_TEMPLATE_SIZES` repository variable
+  (for example `2x4,4x8`) narrows what is built. A user whose own E2B project lacks the
+  limits is refused by E2B when starting a big size; the backend reports that as
+  `cloud-quota` (limit `plan`), never a silent downgrade. The templates download the mirrored
+  `x86_64-unknown-linux-musl` archive, so they build after the mirror step. They have
+  no start command: each sandbox starts its own `intentd` after create, so no daemon
+  identity is snapshotted. The workflow authenticates with the `E2B_API_KEY` secret
+  (an API key for Intent's publishing E2B project) and is fail-soft: without the secret it logs a warning and
+  succeeds. To rebuild or backfill one version, dispatch it by hand
+  (`gh workflow run e2b-template.yml --repo intent-hq/intentd -f version=X.Y.Z`; add
+  `-f latest=true` to move `latest`). PRs that change `packaging/e2b` build and
+  smoke-test private `pr-<n>` tags from the newest release. Sizes and pinned provider
+  CLI versions live in `packaging/e2b/intent-node.mjs`.
 
 ### When a published daemon reaches running installs
 
@@ -327,13 +427,42 @@ updates.
 | `src` install source | `brew`, `deb`, `script`, `windows`, `unknown` | `dmg`, `nsis`, `appimage`, `deb`, `unknown` |
 | `k` trigger | `startup`, `daily`, `idle`, `manual` | `startup`, `daily`, `periodic`, `focus`, `manual`, `channel` |
 | `d` daily flag | `1` while no check has *succeeded* this UTC day (from a date in `state.json`) | same (from the `lastUpdateCheckDay` local pref) |
+| `w` weekly flag | `1` while no check has succeeded this UTC ISO week (weeks start Monday; `last_week` in `state.json`) | same (`lastUpdateWeek` local pref) |
+| `m` monthly flag | `1` while no check has succeeded this UTC calendar month (`last_month`) | same (`lastUpdateMonth` local pref) |
+| `i` install flag | `1` until the first successful check of a fresh install; never for an estimated install | same |
+| `a` install age | whole UTC days since the first-seen day: `0d`, `1-7d`, `8-30d`, `31-90d`, `91-365d`, `365d+`, or `unknown` (`first_seen_day` / `first_seen_estimated`) | same (`firstSeenDay` / `firstSeenEstimated` local prefs) |
 | Opt-out | `DO_NOT_TRACK=1`, `INTENTD_DISABLE_TELEMETRY=1`, or `telemetry = false` in `<data-dir>/sitter/config.toml` (re-read on every check, kept when `intentd sitter channel` rewrites the file); `INTENTD_SITTER_MANIFEST_BASE_URL` also skips the endpoint | **Settings → General → Updates → Share anonymous update statistics** (on by default, `shareUpdateStatistics` local pref), `DO_NOT_TRACK=1`, or a custom `AUTO_UPDATE_URL` |
 
 No IDs, hostnames, usernames or paths are sent; the sitter's User-Agent is
 `intentd-sitter/<ver> (<triple>)`. The service allowlists every value (anything
-else is counted as `other`), passes Vercel only `user-agent` and `x-forwarded-for`
+else is counted as `other`, and a flag is set only by exactly `1`), passes Vercel only `user-agent` and `x-forwarded-for`
 so Vercel can derive the country, and never logs or stores the IP. With any opt-out
 the request goes straight to GitHub.
+
+**Weekly, monthly and new installs.** Like `d`, the stored week and month advance
+only after a successful check, so a failed check is retried with the same flags (and
+can be counted again). Only dates are stored locally, and none of them is sent: the
+request carries just the `0`/`1` flags and the age bucket. The first-seen day is
+decided once per install:
+
+- **Fresh install:** today's date is recorded and `i=1` is sent until a check
+  succeeds. The sitter treats an install as fresh when `state.json` has no
+  installed version or recorded check and `<data-dir>/sitter/versions/` is empty,
+  and records the date before its first endpoint request, so a failed first check
+  that falls back to GitHub still leaves it fresh. The desktop app treats an install
+  as fresh when there are no earlier update-check prefs and the `userData` folder
+  was created during the current run.
+- **Existing install (upgraded into this change):** the date is estimated from the
+  creation time of the data folder (sitter: `<data-dir>/sitter`; desktop: Electron
+  `userData`), falling back to the oldest file mtime in it (the sitter also looks a few
+  levels into subfolders; the desktop app checks only top-level entries). It is marked
+  estimated and never sends `i=1`. With no usable timestamp the age is `unknown`,
+  and that result is stored so it is not estimated again.
+
+The sitter resolves the first-seen day and advances these dates only on endpoint
+checks, so an opted-out sitter stores nothing new. The desktop app resolves the
+first-seen day at startup and advances the dates after any successful check,
+including one made with the toggle off.
 
 **Fallback.** Any failure of the endpoint (down, 404, slow, or an unexpected
 redirect) falls back to GitHub. The endpoint records its events *before* it
@@ -373,6 +502,9 @@ opted-out install and a version older than this change are not counted:
 |---|---|
 | `intentd_update_check` / `desktop_update_check` | `platform`, `context` = `<ch>/<src>/<k>` (e.g. `stable/brew/idle`) |
 | `intentd_daily_active` / `desktop_daily_active` | `platform`, `version`; fired for every request with `d=1`. The day is recorded only after a successful fetch, so an install whose checks keep failing sends `d=1` (and is counted again) on each retry that day. Treat the count as an approximation of daily active installs: retries can overcount it, and missing or opted-out telemetry undercounts it |
+| `intentd_weekly_active` / `desktop_weekly_active` | `platform`, `channel`; fired for every feed request with `w=1`. Approximates weekly active installs, with the same retry and opt-out caveats as the daily count |
+| `intentd_monthly_active` / `desktop_monthly_active` | `platform`, `age` (the `a` bucket); fired for every feed request with `m=1`. Approximates monthly active installs, broken down by install age |
+| `intentd_install` / `desktop_install` | `platform`, `channel`; fired for every feed request with `i=1`. Counts new installs; installs that predate this change are never counted, and a fresh install whose first checks fail is counted on each retry |
 | `desktop_update_download` | `platform`, `version`, parsed from the artifact name; `.blockmap` files and range continuations are redirected but not counted |
 
 Country comes from Vercel's lookup of the forwarded IP. Only sitter and desktop versions
@@ -489,8 +621,9 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   the new sidecar, and its merge push then chains into a cut. In-flight guardrail: when
   `intent-hq/intentd` has a semver tag newer than the published alpha manifest and
   the tag is younger than 90 minutes (an intentd release build is running and a pin
-  bump is imminent), the cut defers instead of shipping a stale-sidecar alpha; the
-  age bound stops a failed intentd build from deferring fe cuts forever, and the
+  bump is imminent), the cut defers instead of shipping a stale-sidecar alpha; a
+  finished, unsuccessful `v-release.yml` run for the tag ends the deferral at once,
+  the age bound covers an unreadable run, and the
   check fails open on any lookup error (missing `INTENTD_READ_PAT`, unreachable
   manifest, unreadable tags) so an unreadable intentd never blocks fe releases.
   BE-dependency freshness guardrail (intent-hq/monorepo#2985): the intentd-first
@@ -499,10 +632,19 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   work. Before merging, the cut resolves the pin from `intentd.version` on fe
   main and compares `v<pin>...main` on `intent-hq/intentd`: when intentd main has
   no commits after the pinned tag (the expected common case, one cheap API
-  comparison) the cut proceeds unrestricted; when intentd main is ahead and the
-  cut would ship fe commits merged after that tag was cut, it defers — those
-  commits may depend on intentd work in no published sidecar, and the next
-  intentd alpha's pin-bump push or a later cron tick re-evaluates readiness.
+  comparison) the cut proceeds unrestricted. When intentd main is ahead and the
+  cut would ship fe commits merged after that tag was cut, time overlap alone is
+  not treated as a dependency (both repos merge all day, so it held fe alphas for
+  hours on 2026-11-09). cloudlands-fe's `intentd-skew-evidence.mjs` helper defers only on
+  evidence: a fresh fe commit or its PR body names an intentd PR that is merged,
+  missing from the pinned tag, and changes runtime files (Markdown, docs, tests
+  and CI do not count); or a fresh fe commit adds a quoted, non-test use of an
+  intentd method or event (`method_catalog.txt` / `event_types.json` goldens)
+  that the pin lacks. The
+  defer notice names the fe and intentd PRs, and the next intentd alpha's
+  pin-bump push or a later cron tick re-evaluates readiness. Unreadable evidence
+  keeps the deferral. An fe change that reads a new field of an existing method
+  is caught only when its PR names the companion intentd PR.
   A confirmed release-plz no-op also exempts this freshness deferral
   (intent-hq/intent#6045): the latest
   `release-plz.yml` main-push run must succeed for the **exact current intentd
@@ -520,8 +662,8 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   PRs, holds, CI, review, or throttle guards. `workflow_dispatch` retains its
   explicit freshness override. Automation commits (the sidecar pin-bump itself,
   `chore(release):` merges) remain exempt, and the original pin, tag, comparison,
-  and frontend-commit lookups still fail open — only reads of the new no-op
-  proof fail closed for the exemption. Public intentd workflow and job reads
+  and frontend-commit lookups still fail open — only reads of the no-op proof
+  and the dependency evidence fail closed for their exemptions. Public intentd reads
   use the existing token permissions; no new secret is needed.
 - Stable: dispatch `release-stable.yml` with the `version` input. The same beta-first
   guard applies: the workflow checks the current beta channel version (the `beta`
@@ -535,6 +677,27 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   emergencies, logged as a warning. After the stable feed is verified, propose the
   website release notes PR on `intent-hq/intentapp.dev` for human review (see
   [fe/RELEASING.md § Promoting to Stable](./fe/RELEASING.md#promoting-to-stable)).
+- npm package: `publish-intent-web.yml` publishes `@intent-hq/web` (the standalone
+  browser server) at the cloudlands-fe version after each successful tag-push
+  Release Alpha, under the `alpha` dist-tag (a publish never sets `beta` or
+  `latest`). After a successful Promote Beta / Release Stable, its `sync-channel`
+  job moves `beta` / `latest` to the version the beta / stable feed on
+  `intent-hq/cloudlands-releases` serves, so each dist-tag follows its channel
+  (`latest` = stable). No dist-tag moves backwards, so `latest` stays on the
+  first published alpha until stable serves a newer version. `make release-status`
+  shows each tag behind, ahead of or missing from its channel (a package not on
+  npm yet is its own state, not an error). Verify with
+  `npm view @intent-hq/web dist-tags --json`. If `beta` or `latest` lags, sync it
+  by hand with
+  `gh workflow run publish-intent-web.yml --repo intent-hq/cloudlands-fe -f channel=<beta|stable>`.
+  If `alpha` lags (a publish failed or was skipped), publish the tag again with
+  `gh workflow run publish-intent-web.yml --repo intent-hq/cloudlands-fe -f tag=v<version>`.
+  If npm rejects the move (the trusted publisher's dist-tag permission, announced
+  as ["Allow npm dist-tag"](https://github.blog/changelog/2026-09-30-opt-in-dist-tag-permissions-for-npm-trusted-publishing),
+  is off), an `@intent-hq` npm owner runs
+  `npm dist-tag add @intent-hq/web@<version> <beta|latest>`. Setup and the full
+  dist-tag model:
+  [cloudlands-fe docs/intent-web-package.md](https://github.com/intent-hq/cloudlands-fe/blob/main/docs/intent-web-package.md).
 
 ## Release notifier
 
@@ -586,13 +749,35 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   component repos. Notifier steps are fail-soft (`continue-on-error`; skipped with a
   warning when the secret is absent) — they never block a release.
 
+## Submodule pin auto-bump
+
+`auto-bump-submodules.yml` detects submodule tips ahead of the recorded pins and lands
+the bump via a single rolling PR on `auto/submodule-bump` with auto-merge armed; repeat
+runs update that PR instead of opening new ones. Each submodule repo triggers it via
+`repository_dispatch` (`submodule-update`) on push to its `main`, using the
+`MONOREPO_DISPATCH_TOKEN` secret stored in each submodule repo (a fine-grained PAT with
+contents:write on `intent-hq/intent`). Monorepo `main` pushes that change submodule
+gitlinks trigger a continuation to pick up deferred tips after a queued bump merges. A
+cron run every 30 minutes is the backstop, and `workflow_dispatch` handles urgent bumps.
+
+The workflow authenticates with `SUBMODULE_BUMP_TOKEN` — a fine-grained PAT with
+contents:read on `intent-hq/intentd`, `intent-hq/cloudlands-fe`, and `intent-hq/ios`,
+plus contents:write and pull-requests:write on `intent-hq/intent`. Like
+`MONOREPO_DISPATCH_TOKEN`, `INTENTD_RELEASES_TOKEN` and `MONOREPO_ISSUES_TOKEN`, it is
+fail-soft: when the secret is absent the step logs a warning and exits successfully (the
+cron backstop still advances the pins when dispatch is skipped). The private
+`packages/ios` submodule is best-effort — if its tip cannot be read, it is skipped with
+a warning and never fails the run.
+
 ## Coordinated Release Ordering
 
 The pipeline is event-chained, with cron retries as backstops: intentd release PR
 merge → tag + cargo-dist build → alpha manifest publish →
 `intentd-alpha-published` dispatch → cloudlands-fe pin bump
 (`auto-pin-intentd.yml`) → pin push to `main` → chained cloudlands-fe cut
-(`auto-cut-alpha.yml` push trigger) → promote each component's stable → monorepo
+(`auto-cut-alpha.yml` push trigger) → `@intent-hq/web` npm publish under `alpha`
+(`publish-intent-web.yml`) → promote each component's beta and stable (the fe
+promotions also move the npm `beta` / `latest` dist-tags) → monorepo
 pins advance automatically via the auto-bump workflow (no manual bump PR). Every
 link is fail-soft: when one is missing (e.g. `FE_DISPATCH_TOKEN` unset on intentd),
 the crons (hourly at :15 for pin bumps, every ten minutes for frontend cut
@@ -824,10 +1009,15 @@ promotions of deleted prereleases are not preserved by this retention policy.
   prints the first cloudlands-releases tag whose pin carries the commit; given several
   `<component> <sha>` pairs (`make shipped-in PAIRS="intentd:<sha> cloudlands-fe:<sha>"`)
   it prints the first tag carrying all of them. It exits 3 while a commit is uncarried,
-  4 on a transient GitHub failure, and 5 when the active cloudlands-fe Release Alpha run
-  has a job queued longer than 30 min (`SHIPPED_IN_STALL_MINUTES` overrides the
-  threshold; `0` disables the probe) — a human must cancel and re-run the workflow run
-  named on stderr.
+  4 on a transient GitHub failure, and 5 when a human must re-run the workflow run
+  named on stderr: intentd's Release-plz run for main HEAD failed, or the
+  active cloudlands-fe Release Alpha run has a job queued longer than 30 min
+  (`SHIPPED_IN_STALL_MINUTES` overrides the threshold; `0` disables the probe). It
+  exits 6 when every uncarried pair is an intentd commit on main that release-plz's
+  "Release-plz no release needed" job confirms changed no package since the tag
+  stderr names: it rides the next intentd release (a pending cloudlands-fe pair keeps
+  exit 3, with a note). Release-plz decides by
+  package files, not commit type — test-only ranges have shipped (v0.11.59).
 - Commits merged after the release PR was cut ride the next release PR (e.g. intentd#517
   landed via follow-up release PR intentd#520).
 
@@ -855,12 +1045,13 @@ GitHub label they would otherwise ask for:
 
 The burst runner for a paid label is its WarpBuild equivalent (`gh-linux-8x` →
 `warp-ubuntu-2404-x64-8x`, `gh-linux-16x` → `-16x`, `gh-linux-arm64-8x` →
-`warp-ubuntu-2404-arm64-8x`, `gh-windows-16x` → `warp-windows-2022-x64-16x`,
-`macos-26-xlarge` → `warp-macos-26-arm64-6x`, `macos-15-xlarge` →
-`warp-macos-15-arm64-6x`), or the GitHub label itself for fork pull requests, while
-`CI_WARPBUILD_DISABLED` is `true`, or while that WarpBuild OS and architecture has a job queued
-over 10 minutes. `macos-latest-large` (Intel) has no WarpBuild equivalent and bursts to
-GitHub. cloudlands-fe's signed desktop Mac builds keep `macos-15-xlarge` as their
+`warp-ubuntu-2404-arm64-8x`, `gh-windows-8x` → `warp-windows-2022-x64-8x`,
+`gh-windows-16x` → `warp-windows-2022-x64-16x`, `macos-26-xlarge` →
+`warp-macos-26-arm64-6x`, `macos-15-xlarge` → `warp-macos-15-arm64-6x`).
+GitHub's larger runners are off, so there is no GitHub fallback: fork pull requests
+get the free standard runner of the same OS, a WarpBuild platform with a job queued
+over 10 minutes only logs a warning, and a job that runs after a failed route job
+falls back to the WarpBuild label. cloudlands-fe's signed desktop Mac builds keep `macos-15-xlarge` as their
 key (not `macos-26-xlarge`), because electron-builder's keychain step fails on
 macOS 26 images.
 
@@ -882,10 +1073,11 @@ than a slot offers read `cloud`, and the policy tests list each with its reason.
 The shared probe checks online runners and paginated queued/running jobs across all
 three repositories. Each Linux pool bursts once its queued plus running jobs reach
 the smaller of its slot count (the organization or repository variables
-`CI_LINUX_HEAVY_SLOTS` and `CI_LINUX_XL_SLOTS`, defaults 2 and 0; raise them when
-slots are added) and its online slot count. A `gh-linux-16x` job takes a free xl slot
-first, then a free heavy slot, then bursts; a `gh-linux-8x` job never takes an xl
-slot. Other platforms require explicitly idle runners with room for queued demand.
+`CI_LINUX_HEAVY_SLOTS`, `CI_LINUX_XL_SLOTS` and `CI_LINUX_BIGMEM_SLOTS`, defaults
+2, 0 and 0; raise them when slots are added) and its online slot count. A
+`gh-linux-16x` job takes a free xl slot first, then a free `intent-cache-bigmem`
+heavy slot (30 GB or more), then bursts; a `gh-linux-8x` job takes any heavy slot
+and never an xl slot. Other platforms require explicitly idle runners with room for queued demand.
 Queued jobs older than 15 minutes, missing compatible runners, unreadable capacity
 (including sibling queues), or [maintenance overrides](#maintenance-overrides)
 select the burst runner; each platform logs its reason. An unreadable queue keeps
@@ -900,12 +1092,12 @@ queue token and Actions read permission through each level. A probe-runner outag
 can still fail routing itself; affected workflows require a rerun.
 
 Infrastructure exceptions are mechanically allowlisted: routing probes run on
-GitHub-hosted Linux, and the manual packaged macOS
-smoke journey requires a disposable hosted machine. The frontend and intentd queue-retirement
+GitHub-hosted Linux, and the packaged smoke journeys require a fresh VM per job
+(GitHub-hosted or WarpBuild, never an intent-cache slot). The frontend and intentd queue-retirement
 cleanup jobs and intentd read-only credential probe remain on independent GitHub-hosted
 Linux, preserving their upstream queue-recovery contract. Host maintenance stays bound
 to the machine it maintains. A platform without a compatible self-hosted runner
-uses its burst runner (GitHub's native Intel Mac image for Intel Macs).
+uses its burst runner.
 Browser shards retain their worker counts and browser identities, with per-runner
 browser caches and dependency installation for persistent machines.
 
@@ -929,7 +1121,6 @@ cloudlands-fe; cloudlands-fe's own `intent-pr.yml` routing reads the same Linux 
 | `CI_LINUX_RUNNER_DISABLED` | the heavy and xl intent-cache pools and `self-hosted, Linux, ARM64` | `linux routing: burst=true (disabled for maintenance)`; xl logs as `xl routing`, ARM64 as `arm routing` |
 | `CI_WINDOWS_RUNNER_DISABLED` | `self-hosted, Windows, X64` | `windows routing: burst=true (disabled for maintenance)` |
 | `CI_MACOS_RUNNER_DISABLED` | `self-hosted, macOS, ARM64` and `self-hosted, macOS, X64` | `macos routing: burst=true (disabled for maintenance)`; X64 logs as `intel routing` |
-| `CI_WARPBUILD_DISABLED` | WarpBuild, for every platform | `warpbuild ubuntu-x64: off (CI_WARPBUILD_DISABLED)` (likewise `ubuntu-arm64`, `windows-x64`, `macos-arm64`); bursts and `cloud` use the GitHub labels |
 
 When the probe itself fails (fork PRs, or runner or job listing errors), every
 platform instead logs `burst=true (probe failed (...))`, with or without an
@@ -981,14 +1172,18 @@ of a run's jobs on that platform must fit the merge-queue timeout.
 
 Rust compiler caching uses the self-hosted sccache WebDAV cache
 ([runbook](SCCACHE_SERVER.md)) when the organization Actions variable
-`INTENT_SCCACHE_ENDPOINT` (an `https://` URL) is set. `scripts/setup-sccache.py`
-installs checksum-verified sccache directly (no Rust cache actions remain), then
+`INTENT_SCCACHE_ENDPOINT` (an `https://` URL) is set.
+`packages/intentd/scripts/setup-sccache.py` (the monorepo keeps no copy; its workflows
+run it from the intentd checkout) installs checksum-verified sccache directly (no Rust cache actions remain), then
 uses the `INTENT_SCCACHE_TOKEN` secret and the optional `INTENT_SCCACHE_MODE`
 variable (`READ_WRITE` by default, or `READ_ONLY`), overwriting any
 `SCCACHE_WEBDAV_*` values the runner already carries. Every run that receives
 secrets (main, releases, the cache producer and same-repo pull requests) writes.
 Without the variable, or when the token is empty as in fork pull requests,
-compilation is uncached. Compiler hit statistics, rather than a restored Actions
+compilation is uncached. When the sccache download still fails after its
+retries (a GitHub 5xx or network outage), or the job's server cannot start, the
+script exports `INTENT_SCCACHE_DISABLED=1` and the job compiles uncached instead
+of failing. Compiler hit statistics, rather than a restored Actions
 archive, are the evidence of reuse. The job log names the chosen backend and
 mode, never the token. Reusable workflows such as `consumer-checks.yml` accept
 `INTENT_SCCACHE_TOKEN` as an optional secret. Local build configuration is in

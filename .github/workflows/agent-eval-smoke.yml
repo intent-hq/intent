@@ -1,0 +1,67 @@
+name: Agent eval smoke
+
+# Keeps the agent eval runner (scripts/agent-eval) and its task checkers from
+# rotting: MOCK_AGENT=1 drives a scripted ACP agent that solves each task
+# through the real workspace_api tool of a released intentd, so every checker
+# must pass, and runs negative controls (a task left undone, a mid-run skill
+# sync) that the checkers must catch. No provider credentials. A/B on two harness versions when the
+# downloaded intentd has the eval-only harness override, else one arm.
+on:
+  pull_request:
+    paths:
+      - scripts/agent-eval/**
+      - .github/workflows/agent-eval-smoke.yml
+  workflow_dispatch:
+    inputs:
+      intentd_tag:
+        description: intent-hq/intentd release tag to test (empty = latest)
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Unit tests
+        run: node --test scripts/agent-eval/*.test.mjs
+      - name: Download intentd
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.intentd_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/intentd"
+          gh release download ${TAG:+"$TAG"} --repo intent-hq/intentd \
+            --pattern 'intentd-x86_64-unknown-linux-musl.tar.xz' --dir "$RUNNER_TEMP/intentd"
+          tar -xJf "$RUNNER_TEMP/intentd/intentd-x86_64-unknown-linux-musl.tar.xz" -C "$RUNNER_TEMP/intentd"
+          bin=$(find "$RUNNER_TEMP/intentd" -type f -name intentd -perm -u+x | head -n 1)
+          [ -n "$bin" ] || { echo "::error::no intentd binary in the release archive"; exit 1; }
+          "$bin" --version
+          echo "INTENTD_BIN=$bin" >> "$GITHUB_ENV"
+          if LC_ALL=C grep -qaF INTENTD_EVAL_HARNESS_VERSION "$bin"; then
+            echo "HARNESS=3.9 current" >> "$GITHUB_ENV"
+          else
+            echo "::notice::this intentd has no eval harness override; running one arm"
+            echo "HARNESS=current" >> "$GITHUB_ENV"
+          fi
+      - name: Mock smoke
+        run: make agent-eval MOCK_AGENT=1 HARNESS="$HARNESS" OUT="$RUNNER_TEMP/agent-eval"
+      - name: Report
+        if: always()
+        run: cat "$RUNNER_TEMP/agent-eval/report.md" >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: agent-eval-smoke-report
+          path: ${{ runner.temp }}/agent-eval
+          if-no-files-found: ignore

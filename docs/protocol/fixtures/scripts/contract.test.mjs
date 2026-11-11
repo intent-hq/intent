@@ -10,10 +10,10 @@ const fixture = JSON.parse(await readFile(new URL('./lifecycle.json', import.met
 const scriptsDoc = await readFile(new URL('../../methods/scripts.md', import.meta.url), 'utf8');
 const catalog = await readFile(new URL('../../05-method-catalog.md', import.meta.url), 'utf8');
 
-// These are static checks on prepared examples, not a script runtime simulator.
+// These are static checks on examples, not a script runtime simulator.
 // Component suites must execute the cases and controlled races against real code.
-test('prepared examples name documented methods and do not claim runtime proof', () => {
-  assert.equal(fixture.status, 'prepared-not-executed');
+test('examples name documented methods and do not claim runtime proof', () => {
+  assert.equal(fixture.status, 'shipped-static-examples');
   assert.deepEqual(fixture.capability, { scriptLifecycle: 1 });
   const entries = [...fixture.cases, ...fixture.scenarios];
   assert.equal(new Set(entries.map(c => c.id)).size, entries.length);

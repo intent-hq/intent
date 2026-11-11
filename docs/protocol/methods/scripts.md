@@ -2,16 +2,20 @@
 
 ### 5.8 `script.*`
 
-The prepared [script monitor extension (§5.8a)](./script-monitors.md) adds
-run identity, one-shot agent monitoring and guarded user cancellation under
-`scriptMonitors: 2` in the prepared protocol-14 contract. The protocol-13
+The [script monitor extension (§5.8a)](./script-monitors.md) adds run
+identity, one-shot agent monitoring and guarded user cancellation under
+`scriptMonitors: 2`, shipped with the protocol-14 contract. The protocol-13
 baseline below is historical where explicitly superseded.
 
 The [prepared service readiness extension](#service-readiness-prepared-additive-extension)
 adds optional `healthUrl` / `readyPattern` definition inputs and `ready` /
 `readiness` runtime fields. These are capability-gated, not yet shipped.
 
-The prepared [workspace guest role extension](./multiplayer.md#workspace-guest-roles-prepared)
+[Scripts of remote agents](#scripts-of-remote-agents-remotescripts-1)
+(`remoteScripts: 1`) let an agent on a remote machine run saved scripts on its
+machine, as separate machine runs addressed by `remoteAgentId`.
+
+The [workspace guest role extension](./multiplayer.md#workspace-guest-roles)
 lets a workspace Manager operate existing saved scripts through scoped service
 checks. It grants no script-definition writes, arbitrary command/environment
 overrides, raw terminal access or host execution. The Shell panel must keep those
@@ -29,18 +33,18 @@ not remove the owner's definition or output.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| script.list | workspaceId (req), archive? (`active` only; other values rejected in prepared v14), view? (`full` \| `summary`), limit?, cursor? (prepared summary extension below) | { scripts: [...] } — definition plus `runtime` by default; summary pages are discriminated `{ view: "summary", scripts: ScriptSummary[], nextCursor? } |
-| script.get | workspaceId (req), scriptId (req) | Prepared: full unarchived definition plus `runtime`; `scriptActiveLists: 1` required |
+| script.list | workspaceId (req), archive? (`active` only; other values rejected since v14), view? (`full` \| `summary`), limit?, cursor? (summary extension below; full-view pages with `boundedReads: 1`) | { scripts: [...], nextCursor? } — one page of definitions plus `runtime` (default 100 rows, max 200, ≤ 480,000 bytes; see *Full-view pages*); summary pages are discriminated `{ view: "summary", scripts: ScriptSummary[], nextCursor? } |
+| script.get | workspaceId (req), scriptId (req), commandOffset? (positive integer, `boundedReads: 1`) | Full unarchived definition plus `runtime`; `scriptActiveLists: 1` required. A `command` too big for one reply is served in parts (see *Paged commands* below) |
 | script.create | workspaceId (req), name (req), command (req), mode (req: `service` \| `command`), cwd?, env?, category?, autoStart?, scriptId?, purpose? (`saved` \| `oneOff`), healthUrl?, readyPattern?, clearReadiness? (prepared; see below) | { id, workspaceId, name, command, mode, source, createdAt, cwd?, env?, category?, autoStart?, updatedAt?, purpose?, archivedAt?, lastRun?, healthUrl?, readyPattern? } — the persisted `WorkspaceScript` record |
 | script.archive | workspaceId (req), scriptIds (req: nonempty string array) | { archived: [scriptId, ...], skipped: [{ scriptId, reason }] } — 10.11 candidate; inactive commands only |
 | script.restore | workspaceId (req), scriptIds (req: nonempty string array) | { restored: [scriptId, ...], skipped: [{ scriptId, reason }] } — 10.11 candidate; restores visibility without starting |
 | script.remove | workspaceId (req), scriptId (req) | { ok, scriptId } |
 | script.start | workspaceId (req), scriptId (req) | { ok, scriptId } — the runtime status is flipped to `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) **before the reply**, atomically with the supervisor's registration and with the previous run's terminal fields (`pid`, `startedAt`, `exitCode`, `stoppedAt`, `error`, `detectedUrl`) cleared, so a `script.status` read after the reply never observes the pre-launch `idle`; the owned launch task publishes the `starting` transition as `script:state` strictly ahead of the spawn's `running` (or `exited` + `error` on a launch failure). A script already `running` or `starting` is a no-op |
-| script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } — stops an active run; resetting a finished script from `exited` to `idle` emits a `script:state` snapshot (§6.5; prepared event-authority extension below). On a **non-running** script that carries the was-running marker this is the **dismiss** affordance: it clears the marker (`previouslyRunning` on a service row, the hydrated `lost` reading on a command row; in memory plus a best-effort row write), emits the cleared runtime snapshot, and returns ok instead of erroring. Stopping an already idle, unmarked script is a no-op with no state event |
+| script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } — stops an active run; resetting a finished script from `exited` to `idle` emits a `script:state` snapshot (§6.5; see the self-contained change extension below). On a **non-running** script that carries the was-running marker this is the **dismiss** affordance: it clears the marker (`previouslyRunning` on a service row, the hydrated `lost` reading on a command row; in memory plus a best-effort row write), emits the cleared runtime snapshot, and returns ok instead of erroring. Stopping an already idle, unmarked script is a no-op with no state event |
 | script.restart | workspaceId (req), scriptId (req) | { ok, scriptId } |
-| script.output | workspaceId (req), scriptId (req), maxLines? | output text of the latest run, read from its on-disk log (see *Script output persistence*) |
+| script.output | workspaceId (req), scriptId (req), maxLines? | output text of the latest run, read from its on-disk log (see *Script output persistence*): the newest `maxLines` lines (default 100, 1–10,000) under a `[... lines]` header, cut to fit 480,000 bytes (see *Bounded output reads*) |
 | script.status | workspaceId (req), scriptId (req) | { status, restartCount, pid?, exitCode?, startedAt?, stoppedAt?, error?, detectedUrl?, previouslyRunning?, ready?, readiness? } — the `ScriptRuntimeState` snapshot; `status` and `restartCount` are always present, every other field is **omitted when unset** (never `null` — a cleared `exitCode` is absent, so hooks test `exitCode !== undefined`); `status` is one of `idle \| starting \| running \| restarting \| exited`. `exited` **always** carries `exitCode` (new in intentd, unreleased): when the real status was not observable it is the sentinel `-1` together with an `error` naming the cause — see the total exit contract note below. `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) is the `script.start` launch window: set synchronously before `script.start` replies, with the previous run's terminal fields cleared, and held until the spawn's `running` (or `exited` on a launch failure), so a poll issued right after `start` never reads the pre-launch `idle` or a stale `exitCode`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running`. `previouslyRunning?: true` (new in intentd, within v5.1) marks a **service** script that was running when the daemon last stopped; a command script in the same situation hydrates as `exited` / `exitCode: -1` / `error` instead — see the was-running marker note below |
-| script.run | workspaceId (req), scriptId (req), maxLines?, timeoutSeconds? (alias timeout?) | { exitCode?, output, timedOut?, warning? } — `exitCode` follows the same total exit contract as the runtime state (new in intentd, unreleased): `-1` when the exit was unobservable — see the total exit contract note below |
+| script.run | workspaceId (req), scriptId (req), maxLines?, timeoutSeconds? (alias timeout?) | { exitCode?, output, outputTruncated?, timedOut?, warning? } — `output` keeps the newest bytes that fit 480,000 bytes once JSON-escaped, and `outputTruncated: true` (absent otherwise) marks a cut (see *Bounded output reads*); `exitCode` follows the same total exit contract as the runtime state (new in intentd, unreleased): `-1` when the exit was unobservable — see the total exit contract note below |
 
 #### Script output persistence (new in intentd, unreleased)
 
@@ -69,9 +73,50 @@ across daemon restarts. No wire shape changes.
 - **Live attach.** A script PTY keeps only a 64 KiB in-memory scrollback for late live
   attaches; exited script PTY sessions are released. Use `script.output` for the full output.
 
-#### Active-only compact lists (prepared breaking contract)
+#### Bounded output reads
 
-**Prepared protocol 14.0; not implemented by the pinned components.** This
+`script.output`, `script.run`'s `output` and `terminal.readOutput` (§5.9) cap the text
+they return so each reply stays under the 500 KiB read payload budget. After the line
+limit, the text is cut to the newest part whose **JSON-escaped** size is at most
+480,000 bytes (a control character such as ESC counts as the six bytes of
+`\u001b`). A cut inside a line drops the rest of that line, so the text starts on a
+whole line. `script.output` and `terminal.readOutput` keep their bare-string results
+and say so in the header: `[showing last <n> of <total> lines; older output omitted to fit
+the reply size limit]` (`terminal.readOutput` puts the bracket after its `Terminal …
+(cwd: …)` prefix). `script.run` sets `outputTruncated: true`. To read older output, use
+the paginated form (`paginate: true` / `pageToken`). Its `{ items, nextToken }` pages are
+bounded the same way: lines are taken newest first until their JSON-escaped text would
+pass 480,000 bytes, and `nextToken` then resumes at the first line left out. A newest line
+too big on its own is split on a UTF-8 boundary: the page serves the line's last part that
+fits and adds `lineContinues: true`, and `nextToken` resumes inside that line, so the next
+page's newest item is the line's earlier part. Prepend that item to the previous page's
+oldest item to rebuild the line; no output is dropped.
+
+#### Paged commands
+
+With `boundedReads: 1`, a `script.get` reply stays within 480,000 bytes. When the whole
+definition fits, the reply is unchanged. Otherwise `command` holds the next part of the
+command and the reply adds `commandTruncated: true`, `commandBytes` (the full command's
+UTF-8 size), `commandOffset` (the byte where this part starts) and `nextCommandOffset`
+(where the next part starts, always on a UTF-8 boundary; `null` after the last part).
+Request the next part with `commandOffset: <nextCommandOffset>` and append each part's
+`command`: the parts rebuild the command byte for byte. Other fields ride every part.
+A `commandOffset` that is not a positive integer, not a UTF-8 boundary, or not inside the
+command fails `-32602`. Every part carries the row's other fields, and every
+`script.create` replacement stamps a new `updatedAt`. A client restarts from the first part
+when `commandBytes` **or** `updatedAt` changes between parts (the definition was replaced;
+a same-size replacement changes only `updatedAt`), and treats a result whose UTF-8 size does
+not equal `commandBytes` as incomplete. Each part carries at least 64 KiB of
+JSON-escaped command, even when the row's other fields already fill the budget (only
+possible for a definition saved before the field size limits; such a reply can exceed the
+budget by those fields' own size), so a command takes a bounded number of parts. Clients
+stop after 4,096 parts, or on a `nextCommandOffset` that does not move forward, and treat
+the read as incomplete. The full-view `script.list` row of such a definition
+carries `commandOmitted` / `commandBytes` instead; clients read it whole with `script.get`.
+
+#### Active-only compact lists (protocol 14 breaking contract)
+
+**Shipped in protocol 14.0; intentd advertises `scriptActiveLists: 1`.** This
 replaces the withdrawn, unshipped 13.11 compact/history proposal. Advertise exact
 integer `scriptActiveLists: 1` for script pages/details and `scriptMonitors: 2`
 for active-only monitors with reliable notification delivery. Do not advertise
@@ -89,8 +134,10 @@ not conforming. Do not delete archived definitions. Internal targeted recovery
 of a known run is distinct from list enumeration. Empty lists must not seed
 replacement scripts merely because archived definitions exist.
 
-**Compatibility and shape.** Omitted `view` and `view: "full"` keep the unpaged
-`{ scripts: [...] }` / `{ monitors: [...] }` shapes and ascending UTF-8 lexical
+**Compatibility and shape.** Omitted `view` and `view: "full"` keep the
+`{ scripts: [...] }` / `{ monitors: [...] }` shapes (on a host advertising
+`boundedReads: 1` a `script.list` full view is always paged, with or without
+`limit`/`cursor`; see *Full-view pages*) and ascending UTF-8 lexical
 `(createdAt, id/monitorId)` order, but now only for unarchived scripts / active
 monitors. This intentional semantic removal requires a major version, even
 though JSON shapes remain compatible. Summary requests use `view: "summary"`;
@@ -105,7 +152,7 @@ assumptions are not supported. Explicit known-ID output/status remain available.
 **Pages.** `limit?: integer` is 1–200, default 100. `cursor?: string` is nonempty
 and opaque. Invalid view, null, types, fractional/out-of-range limits and
 malformed/mismatched cursors fail `-32602`; do not clamp. `limit`/`cursor` with
-full/omitted view also fail. No `purpose` server filter is introduced. Monitors
+full/omitted view also fail, except on `script.list` with `boundedReads: 1` (below). No `purpose` server filter is introduced. Monitors
 accept the existing `agentId?` filter; optional `state: "active"` is redundant,
 and every other supplied state (including `all` and `terminal`) fails in either
 view. Filters apply before paging; unknown owners return empty. Read at most
@@ -136,12 +183,32 @@ boundary, reads one page and preserves selected IDs. Only explicit user-requeste
 full-data operations such as export may traverse cursors automatically, and
 those operations are still unarchived-only. There is no archive/history view.
 
+**Full-view pages (`boundedReads: 1`) — behaviour change.** Exact integer
+`server.capabilities.boundedReads: 1` in `client.hello` means this host pages its
+lists by default. The `script.list` full view (omitted `view` or `view: "full"`) is
+then **always paged**: `limit?` (1–200, **default 100**) and `cursor?` (nonempty,
+opaque) are validated as for summary pages, and a request with neither returns the
+first page. Before this change the full view was an unpaged list; a client that does
+not follow `nextCursor` now sees only the first page. A page holds at most `limit`
+rows and at most 480,000 bytes of row JSON, but always at least one row, so a reply stays under the 500 KiB read
+budget. A definition too big on its own drops its largest fields, largest first, until
+it fits: each becomes `<field>Omitted: true` plus `<field>Bytes` (a string's UTF-8 length,
+otherwise its JSON size), and `script.get` returns it whole. Other rows keep the full shape and ascending
+UTF-8 lexical `(createdAt, id)` order; the result is `{ scripts, nextCursor? }`, with
+`nextCursor` only while more rows follow (no `view` discriminator). Full-view cursors are
+bound to the method, workspace and the full view; a summary cursor is rejected here and
+vice versa. Callers that need every definition (repository script detection, saving
+scripts to the repository config, explicit bulk operations) follow `nextCursor` until it
+is absent. Hosts without the capability serve the unpaged list and reject `limit` /
+`cursor` on the full view with `-32602`, so clients send them only when
+`boundedReads: 1` is advertised. `scriptMonitor.list` full views are unchanged.
+
 **ScriptSummary.** A distinct read type, never an editable/upsert definition:
 
 | Fields | Summary meaning |
 | --- | --- |
 | `id`, `workspaceId`, `name`, `mode`, `source`, `createdAt` | Required identity/display metadata |
-| `category?`, `autoStart?`, `updatedAt?`, `purpose?` | Preserve presence and value |
+| `category?`, `autoStart?`, `updatedAt?`, `purpose?`, `remoteAuthor?`, `machineRuns?` | Preserve presence and value (`remoteAuthor` and `machineRuns` only with [`remoteScripts: 1`](#scripts-of-remote-agents-remotescripts-1); each machine run's `runtime` / `lastRun` bounded like the top-level ones) |
 | `commandPreview`, `commandTruncated` | Required display-only prefix ≤160 UTF-8 bytes and truncation boolean |
 | `runtime` | Preserve `status`, `restartCount`, optional `runId`, `pid`, `exitCode`, `startedAt`, `stoppedAt`, `detectedUrl`, `previouslyRunning`, `ready`, `readiness`; bound `error?` below |
 | `lastRun?` | Preserve `runId?`, `outcome`, `exitCode?`, `startedAt?`, `stoppedAt`; bound `error?` below |
@@ -207,7 +274,7 @@ must obtain complete selected unarchived definitions explicitly; previews can
 never become commands or overwrite omitted env/cwd. An explicit bulk operation
 may fetch complete unarchived definitions, but normal hydration must not.
 
-Prepared portable examples/models live in `fixtures/scripts/compact*` and
+Portable examples/models live in `fixtures/scripts/compact*` and
 `active-monitors*`. Component tests must exercise actual storage predicates,
 transaction rollback/restart and renderer read counts; model tests alone do not
 prove production behavior. `payload-audit.mjs` preserves aggregate-only legacy
@@ -223,6 +290,25 @@ an existing definition, or stopping its process. The error suggests `.` or
 omitting `cwd` for the workspace root. This validation checks path syntax, not
 directory existence, and does not normalize paths. Launch-time validation is
 retained for previously stored definitions.
+
+**Field size limits.** `script.create` (including an upsert of an existing
+`scriptId`) refuses an oversized field with `InvalidParams` (`-32602`) whose message
+names the field and its limit, before anything is written, replaced or stopped. Sizes
+are UTF-8 bytes, not characters:
+
+| Field | Limit |
+|---|---|
+| `name`, `cwd`, `category` | 4 KiB (4,096 bytes) each |
+| `env` | 64 KiB (65,536 bytes): every key plus every value |
+| `command` | none; an oversized command is read in parts (see *Paged commands*) |
+
+The same limits apply when a workspace's first `script.list` seeds definitions from the
+repository's `.intent/config.json`: an over-limit entry is skipped (and logged) while the
+others still seed. The prepared `healthUrl` and `readyPattern` fields are not stored by
+this daemon, so no limit applies to them yet. **Known limit:** definitions saved before these limits
+existed are not rewritten or dropped. `script.get` and `script.list` keep serving them
+as stored, a workspace transfer import copies them unchanged, and the limits apply the
+next time such a definition is saved through `script.create`.
 
 > **Implemented lifecycle candidate (10.11).** The additive purpose/archive fields, filters and
 > archive/restore methods above are gated by `scriptLifecycle: 1`, as specified
@@ -473,14 +559,14 @@ WSS tests must cover create/status/list/state-event envelopes, authorization,
 validation errors and capability negotiation. Persistence tests use isolated DBs.
 Run the daemon gates and consumer checks before advertising support.
 
-#### Command creation defaults (prepared breaking change)
+#### Command creation defaults (breaking change)
 
-This change leads implementation; it does not claim released or installed support.
-It changes the 10.11 creation default described by the original lifecycle candidate.
-Recommend protocol **11.0** against the reviewed 10.11 baseline: an omitted-purpose
-command changes retention, and a previously valid new autostart command now fails
-validation. No method, field, enum value or event is added or removed. Confirm the
-version against daemon main before implementation lands; see [versioning](../versioning.md).
+intentd implements this default: a new command with omitted purpose is `oneOff`.
+It changes the 10.11 creation default described by the original lifecycle candidate:
+an omitted-purpose command changes retention, and a previously valid new autostart
+command now fails validation, so it was a major change under the compatibility
+policy. No method, field, enum value or event is added or removed; see
+[versioning](../versioning.md).
 
 | Creation input | Resulting purpose |
 | --- | --- |
@@ -518,7 +604,7 @@ omits purpose on a new command receives the new one-off behavior after a daemon
 upgrade. Its unfiltered list still returns archived definitions and its known-ID
 status/output reads still work; this does not preserve the old creation default.
 
-Prepared examples (execute only against a daemon supporting lifecycle):
+Examples (execute only against a daemon supporting lifecycle):
 
 ```javascript
 // Explicit retention works across old and new lifecycle-capable defaults.
@@ -556,10 +642,10 @@ protocol `10.11` and `client.hello.server.capabilities.scriptLifecycle: 1`.
 This covers persistence, all settled command outcomes, durable admission recovery,
 concurrency protection and the agent bindings. The lifecycle-aware frontend is
 [`25c9335afd3032b6782b2f52155f95710e89ed76`](https://github.com/intent-hq/cloudlands-fe/commit/25c9335afd3032b6782b2f52155f95710e89ed76)
-([PR #3041](https://github.com/intent-hq/cloudlands-fe/pull/3041)). These are
-component candidates, not a claim of merged, pinned, released or installed support;
-combined client/runtime acceptance and deployment remain separate gates. See
-[versioning](../versioning.md) for the reviewed pin baseline and merge order.
+([PR #3041](https://github.com/intent-hq/cloudlands-fe/pull/3041)). Both have
+since merged, and the pinned intentd advertises `scriptLifecycle: 1`; installed
+support still depends on the connected daemon's capability. See
+[versioning](../versioning.md) for the original pin baseline and merge order.
 Only advertise the capability for the complete extension. Existing methods and status enum remain;
 `script.archive` and `script.restore` are the only new RPC names. History is a view
 of retained definitions and their latest result, **not a per-run log archive**.
@@ -571,7 +657,7 @@ of retained definitions and their latest result, **not a per-run log archive**.
 persisted command result described below; it is absent if no result is known.
 These fields belong to the definition, not `ScriptRuntimeState`.
 
-- Under the prepared [creation default change](#command-creation-defaults-prepared-breaking-change),
+- Under the [creation default change](#command-creation-defaults-breaking-change),
   new commands default to `oneOff` and services to `saved` when purpose is omitted.
   The original 10.11 candidate defaulted both to `saved`. Every pre-existing,
   imported or repository-config definition without explicit purpose stays `saved`.
@@ -588,7 +674,7 @@ These fields belong to the definition, not `ScriptRuntimeState`.
   can silently ignore unknown fields: a successful create is **not** proof that
   one-off retirement is supported. Never fall back to `script.remove`.
 - Old clients on a supporting daemon can start/status/output known IDs as before.
-  With the prepared default change, omitted-purpose new commands become one-off;
+  With the creation default change, omitted-purpose new commands become one-off;
   earlier lifecycle daemons create saved definitions. Old clients ignore additive
   fields and
   continue receiving **all definitions when the wire filter is omitted**, even
@@ -665,8 +751,8 @@ process and launch/run reservation have ended and no restart is pending. Never
 retire a never-run `idle` definition or a transient idle/exit during restart.
 Saved commands and services never auto-archive. Publish the final runtime state
 where the existing path emits `script:state` before the archive change event;
-all prior output chunks keep their existing ordering. Under the prepared
-event-authority extension below, a stop that resets a finished script from
+all prior output chunks keep their existing ordering. Under the
+self-contained change extension below, a stop that resets a finished script from
 `exited` to `idle` publishes that runtime transition. Any archive change event
 still follows settlement. Do not hide a run before final output/state can be read.
 
@@ -754,7 +840,7 @@ including `restarting`. Do not schedule a second launch to restore an already
 live entry. Restore-only leaves terminal status/output untouched. A
 `script.create` upsert with the same ID intentionally replaces the definition
 and restores it, preserving existing source/creation identity behavior. Omitted
-purpose preserves the existing purpose (the prepared default change applies only
+purpose preserves the existing purpose (the creation default change applies only
 to new IDs: commands default to `oneOff`, services to `saved`);
 explicit purpose replaces it, subject to mode validation. Changing an existing
 one-off to service therefore requires explicit `purpose: "saved"`. Existing
@@ -762,8 +848,8 @@ upsert teardown behavior is unchanged: unlike archive, replacement can stop the
 old process. Completion from the replaced run cannot retire its replacement.
 
 **Events and completion hooks.** `script:changed` retains `scriptId` and
-`action: "created" | "updated" | "removed"`. The prepared additive
-[self-contained change contract](#self-contained-script-changes-prepared-additive-extension)
+`action: "created" | "updated" | "removed"`. The additive
+[self-contained change contract](#self-contained-script-changes-additive-extension)
 below adds the complete row for create/update, including archive/restore and
 latest results. Legacy ID-only create/update events still invalidate the selected
 list. Archive is never removal; `script:state` alone never proves durable
@@ -812,33 +898,32 @@ caller-supplied cross-workspace escape is added. Existing no-argument `list()`
 and create/start/status/output signatures remain valid. Send explicit `purpose: "saved"`
 for reusable/autostart commands; explicit `oneOff` gives throwaway checks the same
 retention on both lifecycle-capable default generations. New commands may omit
-purpose once the prepared default change is implemented. Never use
+purpose on daemons with the creation default change. Never use
 remove as automatic cleanup. The generated MCP binding index reflects the
 monorepo pin, not necessarily the installed daemon. Automatic pin advancement
 regenerates it; this candidate documentation does not manually advance it. Use
 the connected daemon's capability and installed helper help to establish support.
 
-Prepared examples and race expectations are in
+Examples and race expectations are in
 [`fixtures/scripts/lifecycle.json`](../fixtures/scripts/lifecycle.json).
 They are synthetic contract inputs, not evidence of implemented runtime behavior.
 Run their static consistency checks with
 `node --test docs/protocol/fixtures/scripts/contract.test.mjs`; component tests
 exercise the implemented lifecycle with isolated databases and controlled
-launch/completion race barriers. The JSON remains a prepared scenario catalog;
+launch/completion race barriers. The JSON remains a static scenario catalog;
 its static checker does not execute those component tests.
 
-#### Self-contained script changes (prepared additive extension)
+#### Self-contained script changes (additive extension)
 
 For protocol 14, full event payloads remain unchanged, but references below to
 all/history list recovery are superseded by known-ID output/status. Archived
 rows received in events never enter list membership; selected output survives.
 
-This contract is **prepared, not a shipped implementation claim**. It extends
-`script:changed` without adding a method, event type, capability, database field,
-or wire revision counter. Detect support from each event's payload; neither
-`scriptLifecycle: 1` nor a numeric protocol version proves snapshot support.
-Lifecycle controls still require their existing capability. Allocate the additive
-minor against daemon main at implementation time; docs land before consumers.
+intentd implements this contract. It extends `script:changed` without adding a
+method, event type, capability, database field, or wire revision counter. Detect
+support from each event's payload; neither `scriptLifecycle: 1` nor a numeric
+protocol version proves snapshot support, because older daemons send ID-only
+events. Lifecycle controls still require their existing capability.
 
 **Payload.** Keep the §6.3 envelope and workspace authorization unchanged:
 
@@ -846,8 +931,8 @@ minor against daemon main at implementation time; docs land before consumers.
 | --- | --- | --- |
 | `created` | `{ scriptId, action: "created", script }` | Insert the committed definition and current runtime |
 | `updated` | `{ scriptId, action: "updated", script }` | Replace the complete row after definition edit, archive, restore or result commit |
-| `removed` | `{ scriptId, action: "removed", purpose? }` | Delete the definition by ID; omit `script`. The prepared guest-role extension adds `purpose: "saved" \| "oneOff"` for scoped delivery after deletion. |
-| `guest-access-revoked` | `{ scriptId, action: "guest-access-revoked" }` | Prepared guest-role extension: retire a previously saved row from a Manager's view after conversion to `oneOff`; no definition or output is disclosed. |
+| `removed` | `{ scriptId, action: "removed", purpose? }` | Delete the definition by ID; omit `script`. The guest-role extension adds `purpose: "saved" \| "oneOff"` for scoped delivery after deletion. |
+| `guest-access-revoked` | `{ scriptId, action: "guest-access-revoked" }` | Guest-role extension: retire a previously saved row from a Manager's view after conversion to `oneOff`; no definition or output is disclosed. |
 
 On a committed saved-to-one-off transition, publish `guest-access-revoked` before
 the ordinary `updated` snapshot under the same per-ID publication lock. A current
@@ -977,3 +1062,197 @@ They exercise snapshot application, omission clearing, output retention, legacy
 fallback and in-flight/reconnect races; they are **not** proof of daemon locking,
 persistence or frontend transport behavior. Component unit and WSS/transport
 regressions must execute those guarantees against real implementation code.
+
+#### Scripts of remote agents (`remoteScripts: 1`)
+
+**Additive; intentd advertises `remoteScripts: 1` only together with
+`remoteMachines: 1`.** An agent running on a
+[remote machine](./nodes.md#daemon-to-daemon-remote-machines) can use saved
+scripts. Its `ws.script.*` calls are
+[forwarded](../workspace-routing.md#remote-agents-on-the-executor-link) to the
+backend, which keeps the definitions, runtime state, output logs and
+[monitors (§5.8a)](./script-monitors.md) as for any script. When the remote
+agent starts a script, the process runs on its machine, in its own checkout,
+over the executor link's [script frames](../node-link.md#saved-scripts-nodeprotocol-8).
+
+**Where a run happens depends on who starts it**, not on who saved the script:
+
+- The app and local agents run a script in the workspace's **home checkout**
+  (today the backend's workspace checkout), as before. This is the script's
+  **home run**: the existing `runtime` and `lastRun`.
+- A remote agent that starts any saved script, including one saved by the user
+  or a local agent, runs it on its own machine as a separate **machine run** of
+  that script. Each remote agent has at most one machine run per script.
+
+So one script can have a home run plus one machine run per remote agent,
+each with its own status, output log, `lastRun` and monitors. `autoStart`
+applies only to the home run.
+
+**Machine runs on rows.** Rows carry
+
+```ts
+machineRuns?: {
+  remoteAgentId: string;        // the remote agent that started it
+  nodeId: string;               // its machine: the remoteMachines row id (the agent's placement nodeId)
+  runtime: ScriptRuntimeState;  // as `runtime`
+  lastRun?: { outcome: string; exitCode?: number; startedAt?: string; stoppedAt: string; error?: string }; // as `lastRun`, commands only
+}[];
+```
+
+on full `script.list` rows, `script.get`, `script:changed` snapshots, and
+`ScriptSummary` rows (where each entry's `runtime` and `lastRun` are bounded
+like the top-level ones). It is omitted, never `null` or `[]`, when the script
+has no machine run, and `runtime` / `lastRun` never describe a machine run. An
+entry appears at its agent's first start and stays until the agent is deleted,
+its machine is removed, or `script.stop` dismisses the run after it has
+stopped. Clients name the machine by looking `nodeId` up in
+`remoteMachines.list`.
+
+**Addressing a run.** `script.status`, `script.output`, `script.start`,
+`script.stop`, `script.restart` and `script.run` take an optional
+`remoteAgentId` (string):
+
+| Caller | `remoteAgentId` omitted | `remoteAgentId` supplied |
+| --- | --- | --- |
+| A remote agent | Its own machine run | Its own id: the same. Any other id: `-32602` `remote-script-not-owned` |
+| The app or a local agent | The home run, unchanged | `status`, `output`, `stop` and `restart` act on that agent's existing machine run (`restart` reruns it on that machine); `start` and `run` fail `-32602` `remote-script-start-remote-only`; no such machine run: `-32602`, as for an unknown script |
+
+A remote agent never reads or drives the home run. `scriptMonitor.create`
+takes no new parameter: a `runId` already names one run, and a remote agent's
+monitor without a `runId` watches its own machine run. A monitor row on a
+machine run carries `remoteAgentId` and `nodeId`. There is one active monitor per
+script **and run place**, so a monitor on the home run and one on each machine
+run do not contend
+([§5.8a uniqueness](./script-monitors.md#protocol-13-baseline-surfaces-and-authority)).
+A `script.stop` or manual `script.restart` of a machine run ends its monitor:
+unless the monitor's TTL has passed, its owner gets exactly one wake saying the
+machine run was cancelled because it was stopped or restarted (a
+[machine-run wake](#wakes-of-machine-run-monitors) with `reason: "finished"`
+and `result.outcome: "cancelled"`). The monitor never carries over to the
+restarted run.
+
+<a id="wakes-of-machine-run-monitors"></a>
+**Wakes of machine-run monitors.** A machine-run monitor's wake carries the
+[`script_monitor_wake` metadata (§5.8a)](./script-monitors.md#events-wake-queue-and-agent-waiting-state)
+of a home-run wake, with the same keys, plus `remoteAgentId` and `nodeId` as
+on the monitor row. `runId` is the run's current runId when the monitor named
+none. Its `reason` is `finished` (the run ended, including the cancel on stop,
+restart, upsert or removal), `ttl-expired` (the run goes on) or `output-match`. So clients render it as a script-run card and name the
+machine by looking `nodeId` up in `remoteMachines.list`. Its text still names
+the script and the machine, for clients that predate this metadata. Delivery
+differs from a home-run wake:
+
+- The backend keeps a machine-run monitor in memory only, so the wake has no
+  stored notification and no `script-monitor:<monitorId>` wake identity. It
+  is delivered once, through the ordinary automatic-wake path, as an ordinary
+  queued message: it does not force the single-entry drain and can be sent
+  in a queue batch. A daemon restart loses an undelivered machine-run wake,
+  as it loses the machine run.
+- Worker admission checks only the owner and workspace lifecycle (owner not
+  deleted or retired, workspace not archived or deleted); it looks up no
+  notification job or admission receipt, and export never waits for it.
+- Owner deletion or retirement and workspace archive or deletion still remove
+  it from the queue, like any undelivered script-monitor wake.
+- Clients tell the two apart by `remoteAgentId`: only `script_monitor_wake`
+  metadata **without** `remoteAgentId` is a durable home-run monitor wake.
+- Only the backend marks a machine-run wake: the user-origin sends
+  (`agent.sendMessage`, `agent.queueMessage` and the other RPC routes that
+  strip `fromAgentId`) and agent sends (`ws.agent.send`, `sendToTask`,
+  `create`, `wakeOrCreate`) strip `remoteAgentId` and `nodeId` from
+  caller-supplied `script_monitor_wake` metadata, so a forged wake is still
+  refused as a home-run wake without a notification.
+
+**Changing or removing a definition.** An upsert or `script.remove` stops every
+live machine run of the script (`scriptStop` to each machine), settles each
+unfinished one as `cancelled` with an error naming the replacement or removal,
+exactly as for the home run, and drops all `machineRuns` entries. Later starts
+use the new definition. Archive and restore change no run.
+
+A machine run follows the usual runtime contract: `starting` before the
+`script.start` reply, `running` when the machine reports the process (`pid` is
+the process id on the machine), `exited` with `exitCode` when it ends. Starting,
+restarting or running a machine run fails with:
+
+- `-32602` `machine-update-required` (the
+  [remote machine error](./nodes.md#remote-machine-errors) data,
+  `update: "machine"`) when an existing machine run's machine now links with
+  nodeProtocol 7 (a remote agent on a protocol 7 machine cannot reach
+  `script.*` at all: its machine refuses the call with `remote-agent-unsupported:`);
+- `-32603` `machine-unreachable` with `attempts` when no link is up after the
+  on-demand connect;
+- `-32602` `remote-script-agent-ending` while the run's agent is being stopped
+  for good (agent deletion or retirement, workspace retirement or deletion, or
+  machine removal), from the moment the backend begins the agent's final stop
+  until that stop is over: the machine acknowledges it (on a machine below
+  nodeProtocol 9, the plain stop sent in its place) or its record is dropped
+  past its bound. A lease end does not end it: after a failed
+  `remoteMachines.remove` the final stop stays queued, and the refusal holds
+  until it is acknowledged or expires. The message is
+  `remote-script-agent-ending: agent <agentId> is being stopped for good; its
+  scripts cannot start`. `script.restart` checks this before stopping
+  anything, so a refused restart leaves the current run as it was. It covers
+  the remote agent's `script.start`, `script.restart` and `script.run`, and the
+  app's `script.restart({ remoteAgentId })` (the app's `start` and `run` with
+  `remoteAgentId` already fail `remote-script-start-remote-only`).
+
+**Events.** Machine-run transitions are published as `script:changed` with
+`action: "updated"` and the full row in `data.script`, never as `script:state`
+or `script:output`, so a client that predates `machineRuns` never applies them
+to the home run. Machine-run output is not broadcast; read it with
+`script.output({ remoteAgentId })`.
+
+**Definitions from remote agents.** The backend sets
+
+```ts
+remoteAuthor?: { agentId: string; nodeId: string };
+```
+
+on a script a remote agent creates (persisted record, full rows, `script.get`,
+`ScriptSummary`, `script:changed`). It is never a request parameter: a
+`remoteAuthor` member in `script.create` params, from any caller, fails
+`-32602` `remote-script-author-readonly`, and upserts keep the stored value. A
+remote agent may create scripts, and may upsert, `remove`, `archive` or
+`restore` only scripts whose `remoteAuthor.agentId` is itself; any other fails
+`-32602` `remote-script-not-owned`. It may read and start any saved script. A
+`cwd` is resolved inside the starting agent's checkout on a machine run; an
+absolute `cwd`, or one that escapes the checkout, fails that run with
+`node-script-invalid-cwd`.
+
+**No autoStart from remote agents.** A remote agent's `script.create` or upsert
+with `autoStart: true`, or its upsert of a script whose stored `autoStart` is
+true, fails `-32602` `remote-script-autostart-unsupported`. So a remote agent
+can never cause a home run without the user. The user and local agents can
+set `autoStart` on any script; it starts only the home run, and daemon
+startup starts no machine run.
+
+**Lost runs.** When the machine disconnects, each live machine run on it
+becomes `status: "exited"`, `exitCode: -1`, with `error`
+`remote-script-lost: the machine disconnected` (link dropped or replaced by a
+newer binding) or `remote-script-lost: the machine was removed`
+(`remoteMachines.remove`), under the total exit contract (above); a command's
+`lastRun.outcome` is `interrupted` with the same `error`. Monitors of those runs
+settle as exited, and the run is not reattached on reconnect. Removing the
+machine, revoking its credential or deleting the agent stops every machine run
+of that agent first and drops its entries.
+
+Two agent reasons settle a machine run the same way (`exited`, `exitCode: -1`,
+`interrupted` for a command, its monitor settled as exited):
+
+- `remote-script-lost: the agent was deleted`: `agent.delete` stops the
+  agent's live machine runs and waits at most 10 s for the machine's
+  acknowledgements; a run whose stop is still unacknowledged then is lost with
+  this reason before the agent's final stop is recorded.
+- `remote-script-lost: the agent was stopped for good`: when the agent's final
+  stop is over (the machine acknowledges it, or, below nodeProtocol 9, the
+  plain stop sent in its place; or its record is dropped past its bound), any
+  machine run of the agent the machine never reported ending is settled with
+  this reason. Agent deletion and machine removal settle the agent's runs
+  first with their own reasons, so in practice this reason follows an agent's
+  retirement or its workspace's retirement or deletion.
+
+**Services.** A service's machine run restarts under the usual policy, but its
+ports are not tunnelled: `detectedUrl` is the address the process printed on
+the machine. Clients show the machine instead of an Open link for a machine run.
+
+Without `remoteScripts: 1`, a remote agent's `script.*` calls are refused with
+`remote-agent-unsupported:`, and no row carries `machineRuns` or `remoteAuthor`.

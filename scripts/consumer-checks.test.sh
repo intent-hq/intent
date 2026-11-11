@@ -61,7 +61,12 @@ run_check() {
   return "$status"
 }
 
-all_checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-transfer-selection-contract check-backend-keychain-contract check-agent-worker-contract check-app-ui-targets check-note-pagination-contract"
+# The check list and every count below come from the runner itself (its
+# usage line prints `checks: <targets>`), so adding a check needs no edit here.
+all_checks=$(cd "$temp_dir" && "$script_bash" scripts/consumer-checks.sh --help 2>&1 | sed -n 's/^checks: //p') || true
+check_count=0
+for target in $all_checks; do check_count=$((check_count + 1)); done
+[ "$check_count" -gt 0 ] || fail "could not read the check list from consumer-checks.sh --help"
 expect_all_ran() {
   local target
   for target in $all_checks; do
@@ -73,20 +78,27 @@ if ! run_check; then
   fail "all-green run exited non-zero: $check_output"
 fi
 expect_all_ran "all-green run"
-grep -q -- '--no-print-directory RUSTUP_CARGO= -o event-catalog-check -o check-mcp-bindings docs-check$' "$stub_log" ||
-  fail "docs-check was not invoked with its prerequisites assumed old: $(cat "$stub_log")"
-[ "$(grep -c . "$stub_log")" -eq 11 ] || fail "expected 11 make invocations: $(cat "$stub_log")"
+# The monorepo row leaves check-doc-links to run as a docs-check
+# prerequisite, so `make consumer-checks` checks doc links the way the ci.yml
+# docs-check job does.
+grep -q -- '--no-print-directory RUSTUP_CARGO= -o event-catalog-check -o check-mcp-bindings -o check-protocol-status-labels docs-check$' "$stub_log" ||
+  fail "docs-check was not invoked with its prerequisites assumed old (and check-doc-links left to run): $(cat "$stub_log")"
+[ "$(grep -c . "$stub_log")" -eq "$check_count" ] || fail "expected $check_count make invocations: $(cat "$stub_log")"
 # The Makefile prepends the rust-toolchain.toml toolchain's bin/ to every
 # recipe's PATH; upstream that file is the caller's PR head, so every make
 # call must empty the probe on its command line (see the real-make run below).
-[ "$(grep -c -- '--no-print-directory RUSTUP_CARGO= ' "$stub_log")" -eq 11 ] ||
+[ "$(grep -c -- '--no-print-directory RUSTUP_CARGO= ' "$stub_log")" -eq "$check_count" ] ||
   fail "not every make invocation carries the RUSTUP_CARGO= override: $(cat "$stub_log")"
 grep -q -- '--no-print-directory RUSTUP_CARGO= check-makefile-targets$' "$stub_log" ||
   fail "monorepo context did not run check-makefile-targets at the pinned gitlink: $(cat "$stub_log")"
 grep -q 'CHECK_MAKEFILE_TARGETS_GITLINK' "$stub_log" &&
   fail "monorepo context overrode the check-makefile-targets gitlink: $(cat "$stub_log")"
-[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$check_output")" -eq 11 ] ||
-  fail "summary table did not list 11 passing rows: $check_output"
+grep -q -- '--no-print-directory RUSTUP_CARGO= check-app-guide-sources$' "$stub_log" ||
+  fail "monorepo context did not run check-app-guide-sources at the pinned gitlinks: $(cat "$stub_log")"
+grep -q 'CHECK_APP_GUIDE_SOURCES_UPSTREAM' "$stub_log" &&
+  fail "monorepo context ran check-app-guide-sources in upstream mode: $(cat "$stub_log")"
+[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$check_output")" -eq "$check_count" ] ||
+  fail "summary table did not list $check_count passing rows: $check_output"
 grep -q '::warning::' <<<"$check_output" && fail "all-green run printed a warning: $check_output"
 grep -q '^Fix order:' <<<"$check_output" && fail "monorepo context printed the upstream fix-order line: $check_output"
 [ "$(tail -n 1 <<<"$check_output")" = "consumer-checks: all checks passed" ] ||
@@ -113,12 +125,33 @@ grep -q '^  check-transfer-selection-contract  *FAIL  *docs/protocol/fixtures/tr
 grep -q 'test-transfer-selection-contract' "$stub_log" &&
   fail "lightweight checks invoked the Cargo/renderer proof"
 
-if run_check STUB_FAIL=check-note-pagination-contract; then
-  fail "invalid note paging fixture was accepted"
+if run_check STUB_FAIL=check-note-truncated-read-contract; then
+  fail "invalid note truncated-read fixture was accepted"
 fi
-expect_all_ran "note pagination fixture failure"
-grep -q '^  check-note-pagination-contract  *FAIL  *docs/protocol/fixtures/notes/' <<<"$check_output" ||
-  fail "note paging failure did not name its fixture path: $check_output"
+expect_all_ran "note truncated-read fixture failure"
+grep -q '^  check-note-truncated-read-contract  *FAIL  *docs/protocol/fixtures/notes/' <<<"$check_output" ||
+  fail "note truncated-read failure did not name its fixture path: $check_output"
+
+if run_check STUB_FAIL=check-browser-routing-contract; then
+  fail "invalid browser-routing fixture was accepted"
+fi
+expect_all_ran "browser-routing fixture failure"
+grep -q '^  check-browser-routing-contract  *FAIL  *docs/protocol/fixtures/browser-routing/' <<<"$check_output" ||
+  fail "browser-routing failure did not name its fixture path: $check_output"
+
+if run_check STUB_FAIL=check-suggested-prompts-contract; then
+  fail "invalid suggested-prompts cases were accepted"
+fi
+expect_all_ran "suggested-prompts cases failure"
+grep -q '^  check-suggested-prompts-contract  *FAIL  *docs/protocol/fixtures/suggested-prompts/v1/' <<<"$check_output" ||
+  fail "suggested-prompts failure did not name its fixture path: $check_output"
+
+if run_check STUB_FAIL=check-fixture-copies; then
+  fail "a fixture copy that bypasses the shared tool was accepted"
+fi
+expect_all_ran "fixture copy bypass"
+grep -q '^  check-fixture-copies  *FAIL  *scripts/check-fixture-copies.mjs REGISTERED' <<<"$check_output" ||
+  fail "fixture copy bypass did not name the registry: $check_output"
 
 if run_check STUB_FAIL=check-agent-worker-contract; then
   fail "worker contract failure must fail consumer checks"
@@ -173,12 +206,22 @@ fi
 [ "$(tail -n 1 <<<"$check_output")" = "Fix order: additions land the monorepo docs change first (docs may lead the pin); removals land the component first and drop the docs entry after the bump; then re-run this job." ] ||
   fail "upstream context did not end with the fix-order line: $check_output"
 [ "$(grep -c '^Fix order:' <<<"$check_output")" -eq 1 ] || fail "fix-order line printed more than once: $check_output"
+# Upstream, the doc link check stays out of the component PR gate: the docs
+# row assumes check-doc-links up to date.
+grep -q -- '--no-print-directory RUSTUP_CARGO= -o event-catalog-check -o check-mcp-bindings -o check-protocol-status-labels -o check-doc-links docs-check$' "$stub_log" ||
+  fail "upstream context did not assume check-doc-links up to date for docs-check: $(cat "$stub_log")"
 # Upstream, packages/intentd is the caller's PR head rather than the pin, so
 # check-makefile-targets must read that head instead of the monorepo gitlink.
 grep -q -- '--no-print-directory RUSTUP_CARGO= CHECK_MAKEFILE_TARGETS_GITLINK=HEAD check-makefile-targets$' "$stub_log" ||
   fail "upstream context did not point check-makefile-targets at the caller head: $(cat "$stub_log")"
 [ "$(grep -c 'CHECK_MAKEFILE_TARGETS_GITLINK' "$stub_log")" -eq 1 ] ||
   fail "the gitlink override leaked into another make invocation: $(cat "$stub_log")"
+# check-app-guide-sources reads the checkout HEADs upstream and only warns for
+# a cloudlands-fe file the pin does not carry.
+grep -q -- '--no-print-directory RUSTUP_CARGO= CHECK_APP_GUIDE_SOURCES_UPSTREAM=1 check-app-guide-sources$' "$stub_log" ||
+  fail "upstream context did not run check-app-guide-sources in upstream mode: $(cat "$stub_log")"
+[ "$(grep -c 'CHECK_APP_GUIDE_SOURCES_UPSTREAM' "$stub_log")" -eq 1 ] ||
+  fail "the app guide upstream override leaked into another make invocation: $(cat "$stub_log")"
 
 if run_check STUB_FAIL=docs-check CONSUMER_CHECKS_CONTEXT=upstream; then
   fail "upstream context masked a non-advisory failure"
@@ -266,6 +309,23 @@ run_real_make "$make_bin" --no-print-directory check-protocol-catalog
 grep -q -e '^attacker node scripts/check-protocol-catalog.mjs$' \
   -e '^attacker bin on recipe PATH: node scripts/check-protocol-catalog.mjs$' "$marker_log" ||
   fail "fixture control: an unhardened make did not expose the attacker's bin to the recipe (rustup stub or Makefile PATH prepend changed?); exit $real_status:"$'\n'"$real_output"$'\n'"$(cat "$marker_log")"
+# The node calls a real run must make come from the Makefile itself: a dry run
+# (`make -n`, which the runner word-splits out of $MAKE) of the same make calls
+# prints every recipe, and each `node ...` line is replayed through sh with
+# `node` defined to log the way the trusted node does, so quoting and globs
+# expand exactly as they do for the real recipe.
+run_real_make env MAKE="$make_bin -n" "$script_bash" scripts/consumer-checks.sh --context upstream
+upstream_dry_run=$real_output
+expected_node_log=$fixture/expected-node.log
+: >"$expected_node_log"
+while IFS= read -r recipe_line; do
+  case "$recipe_line" in
+    node\ *) (cd "$fixture" && sh -c 'node() { echo "trusted node $*"; }; '"$recipe_line") >>"$expected_node_log" ||
+      fail "could not replay dry-run recipe line: $recipe_line" ;;
+  esac
+done <<<"$real_output"
+[ -s "$expected_node_log" ] ||
+  fail "the dry run listed no node recipe lines (make -n output changed?):"$'\n'"$real_output"
 run_real_make env MAKE="$make_bin" "$script_bash" scripts/consumer-checks.sh --context upstream
 [ "$real_status" -eq 1 ] ||
   fail "real-make run exited $real_status (expected 1: the trusted check-protocol-catalog fails):"$'\n'"$real_output"
@@ -273,8 +333,9 @@ run_real_make env MAKE="$make_bin" "$script_bash" scripts/consumer-checks.sh --c
   fail "a caller-controlled toolchain executable ran under consumer-checks:"$'\n'"$(cat "$marker_log")"$'\n'"$real_output"
 grep -q '^trusted node scripts/check-protocol-catalog.mjs$' "$trusted_log" ||
   fail "the trusted node did not run check-protocol-catalog:"$'\n'"$(cat "$trusted_log")"
-[ "$(grep -c '^trusted node ' "$trusted_log")" -eq 18 ] ||
-  fail "expected the 18 node invocations to run the trusted node:"$'\n'"$(cat "$trusted_log")"
+# Every node call the Makefile recipes make ran, each with the trusted node.
+node_calls_diff=$(diff <(sort "$expected_node_log") <(grep '^trusted node ' "$trusted_log" | sort)) ||
+  fail "the trusted node calls differ from the Makefile recipes' node calls (< expected from make -n, > ran):"$'\n'"$node_calls_diff"
 if ! grep -qFx 'trusted node scripts/check-doc-line-length.mjs' "$trusted_log" ||
   ! grep -qFx 'trusted node --test scripts/check-doc-line-length.test.mjs' "$trusted_log"; then
   fail "the protocol line-length ratchet and its tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
@@ -284,15 +345,30 @@ if ! grep -qFx 'trusted node --test scripts/lib/markdown-tables.test.mjs' "$trus
   ! grep -qFx 'trusted node --test scripts/check-doc-table-cells.test.mjs' "$trusted_log"; then
   fail "the shared Markdown table scanner tests and the protocol table cell-count check did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
 fi
-grep -qFx 'trusted node --test docs/protocol/fixtures/scripts/monitors.test.mjs docs/protocol/fixtures/scripts/contract.test.mjs' "$trusted_log" ||
-  fail "script monitor and compact contract tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
-grep -q '^trusted node --test docs/protocol/fixtures/submission-correlation/contract.test.mjs$' "$trusted_log" ||
-  fail "submission correlation contract tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
+if ! grep -qFx 'trusted node --test scripts/protocol-fixture-tests.test.mjs' "$trusted_log" ||
+  ! grep -qFx 'trusted node scripts/protocol-fixture-tests.mjs' "$trusted_log"; then
+  fail "the shared protocol fixture test runner did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
+fi
+grep -qFx 'trusted node --test docs/protocol/fixtures/browser-routing/contract.test.mjs' "$trusted_log" ||
+  fail "browser-routing contract tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
 grep -q '^trusted docs-check$' "$trusted_log" || fail "docs-check.sh did not run:"$'\n'"$(cat "$trusted_log")"
 grep -q '^  check-protocol-catalog  *FAIL  ' <<<"$real_output" ||
   fail "the trusted checker's failure did not reach the summary table:"$'\n'"$real_output"
-[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$real_output")" -eq 10 ] ||
-  fail "real-make run did not list the other 10 checks as pass:"$'\n'"$real_output"
+[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$real_output")" -eq $((check_count - 1)) ] ||
+  fail "real-make run did not list the other $((check_count - 1)) checks as pass:"$'\n'"$real_output"
+# Against the real Makefile: the upstream dry run above skipped the doc link
+# check, and a monorepo dry run of the runner must include it (and its tests),
+# as standalone `make docs-check` does.
+grep -qF 'node scripts/check-doc-links.mjs' <<<"$upstream_dry_run" &&
+  fail "upstream consumer-checks ran the doc link check:"$'\n'"$upstream_dry_run"
+run_real_make env MAKE="$make_bin -n" "$script_bash" scripts/consumer-checks.sh
+if ! grep -qFx 'node --test scripts/check-doc-links.test.mjs' <<<"$real_output" ||
+  ! grep -qFx 'node scripts/check-doc-links.mjs' <<<"$real_output"; then
+  fail "monorepo consumer-checks did not run the doc link check and its tests in the docs-check row:"$'\n'"$real_output"
+fi
+run_real_make "$make_bin" -n --no-print-directory docs-check
+grep -qFx 'node scripts/check-doc-links.mjs' <<<"$real_output" ||
+  fail "make docs-check does not run the doc link check the ci.yml docs-check job runs:"$'\n'"$real_output"
 
 # The reusable workflow pipes the runner through `tee`, so its step must run
 # under GitHub's `shell: bash` (`bash --noprofile --norc -eo pipefail {0}`);
@@ -379,7 +455,14 @@ grep -q '^::error::consumer-checks:' <<<"$guard_output" ||
   fail "self-test checkout failure did not emit an error:"$'\n'"$guard_output"
 
 queue_gate_line="        if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'"
-downstream_gates=$(awk -v queue_gate="$queue_gate_line" -v gate="$gate_line" -v guard="- name: $guard_name" '
+# The intentd changed-tests shell suites: a selection step for intentd callers,
+# then the steps it selects (scripts/test_consumer_checks_shell_suites.py).
+suites_select_line="        if: inputs.component == 'intentd' && steps.monorepo.outcome == 'success'"
+suites_gate_line="        if: steps.shell-suites.outputs.selected == 'true' && steps.monorepo.outcome == 'success'"
+# The stale-rerun explainer runs only after a failed step (see below).
+stale_gate_line="        if: failure() && steps.monorepo.outcome == 'success'"
+downstream_gates=$(awk -v queue_gate="$queue_gate_line" -v gate="$gate_line" -v guard="- name: $guard_name" \
+  -v suites_select="$suites_select_line" -v suites_gate="$suites_gate_line" -v stale_gate="$stale_gate_line" '
   function flush() { if (after_guard && name != "") print (gated ? "gated " : "ungated ") name }
   /^      - / {
     flush()
@@ -390,13 +473,74 @@ downstream_gates=$(awk -v queue_gate="$queue_gate_line" -v gate="$gate_line" -v 
     if (index($0, guard)) guard_seen = 1
     next
   }
-  $0 == gate || $0 == queue_gate { gated = 1 }
+  $0 == gate || $0 == queue_gate || $0 == suites_select || $0 == suites_gate || $0 == stale_gate { gated = 1 }
   END { flush() }
 ' "$workflow")
 grep -q '^ungated ' <<<"$downstream_gates" &&
   fail "every step after the guard must carry \"$gate_line\":"$'\n'"$downstream_gates"
-[ "$(grep -c '^gated ' <<<"$downstream_gates")" -eq 9 ] ||
-  fail "expected 9 gated steps after the guard (lightweight and connected checks):"$'\n'"$downstream_gates"
+[ "$(grep -c '^gated ' <<<"$downstream_gates")" -eq 13 ] ||
+  fail "expected 13 gated steps after the guard (lightweight, shell-suite, connected checks and the stale-rerun explainer):"$'\n'"$downstream_gates"
+
+# A failed rerun that reused an old monorepo commit must say how to recover:
+# "Re-run failed jobs" keeps the reusable workflow SHA of the first attempt
+# (intentd#2825, run 41041440483). The step must be the last one, run after
+# any failed step, and pass the attempt number to the explainer.
+stale_name='Explain a failed rerun against an old monorepo commit'
+stale_block=$(workflow_step "$stale_name")
+[[ -n "$stale_block" ]] || fail "workflow step '$stale_name' not found in $workflow"
+[ "$(awk '/^      - name: / { last = $0 } END { print last }' "$workflow")" = "      - name: $stale_name" ] ||
+  fail "'$stale_name' must be the last step so it sees every earlier failure"
+grep -qFx "$stale_gate_line" <<<"$stale_block" ||
+  fail "'$stale_name' must run on failure after a successful monorepo checkout:"$'\n'"$stale_block"
+grep -qFx '          RUN_ATTEMPT: ${{ github.run_attempt }}' <<<"$stale_block" ||
+  fail "'$stale_name' must pass github.run_attempt as RUN_ATTEMPT:"$'\n'"$stale_block"
+grep -qFx '        run: bash scripts/consumer-checks-stale-rerun.sh' <<<"$stale_block" ||
+  fail "'$stale_name' must run scripts/consumer-checks-stale-rerun.sh:"$'\n'"$stale_block"
+
+stale_script=$repo_root/scripts/consumer-checks-stale-rerun.sh
+stale_repo=$temp_dir/stale-rerun
+git init -q "$stale_repo"
+stale_commit() {
+  git -C "$stale_repo" -c user.name=test -c user.email=test@example.invalid commit -q --allow-empty -m "$1"
+}
+stale_commit first
+stale_first=$(git -C "$stale_repo" rev-parse HEAD)
+stale_commit docs-fix
+stale_commit another
+stale_main=$(git -C "$stale_repo" rev-parse HEAD)
+git -C "$stale_repo" branch -q fake-main "$stale_main"
+# run_stale <attempt> <checkout> [main ref]; sets stale_status and stale_output.
+run_stale() {
+  git -C "$stale_repo" checkout -q --detach "$2"
+  stale_status=0
+  stale_output=$(cd "$stale_repo" && RUN_ATTEMPT="$1" MAIN_REF="${3:-fake-main}" \
+    "$script_bash" --noprofile --norc -e "$stale_script" 2>&1) || stale_status=$?
+}
+run_stale 2 "$stale_first"
+[ "$stale_status" -eq 0 ] || fail "stale-rerun explainer exited $stale_status:"$'\n'"$stale_output"
+[ "$stale_output" = "::error::consumer-checks: attempt 2 reused intent-hq/intent@${stale_first:0:8}, which is 2 commits behind main (${stale_main:0:8}). \"Re-run failed jobs\" keeps the monorepo commit from the first attempt, so a monorepo fix merged since then is not in this run. Start a new run (for example, push to the PR branch) or use \"Re-run all jobs\"." ] ||
+  fail "stale rerun did not get the recovery error:"$'\n'"$stale_output"
+run_stale 2 "$stale_main~1"
+grep -qF 'which is 1 commit behind main' <<<"$stale_output" ||
+  fail "one commit behind must be singular:"$'\n'"$stale_output"
+# expect_silent <description>: the last run_stale exited 0 with no output.
+expect_silent() {
+  if [ "$stale_status" -ne 0 ] || [ -n "$stale_output" ]; then
+    fail "stale-rerun explainer must be silent for $1 (exit $stale_status):"$'\n'"$stale_output"
+  fi
+}
+run_stale 1 "$stale_first"
+expect_silent "a first attempt"
+run_stale 2 "$stale_main"
+expect_silent "a current monorepo commit"
+run_stale 2 "$stale_first" missing-ref
+expect_silent "a missing main ref"
+run_stale x "$stale_first"
+expect_silent "a non-numeric attempt"
+# A HEAD not on main (the self-test's merge-queue commit) is not a stale rerun.
+stale_commit side
+run_stale 2 HEAD
+expect_silent "a HEAD not behind main"
 
 step_name='Run the consumer checks (upstream context)'
 step_block=$(workflow_step "$step_name")
@@ -464,13 +608,14 @@ echo "consumer-checks tests passed under $("$script_bash" -c 'echo "bash $BASH_V
 # it a failure instead.
 bash -n "$script" || fail "consumer-checks.sh does not parse"
 bash -n "${BASH_SOURCE[0]}" || fail "consumer-checks.test.sh does not parse"
+bash -n "$repo_root/scripts/consumer-checks-stale-rerun.sh" || fail "consumer-checks-stale-rerun.sh does not parse"
 bash4_constructs='(^|[^A-Za-z0-9_])(declare|local|typeset)([[:blank:]]+-[A-Za-z]+)*[[:blank:]]+-[A-Za-z]*[An][A-Za-z]*([^A-Za-z]|$)|(^|[^A-Za-z0-9_])(mapfile|readarray|coproc)([^A-Za-z0-9_]|$)|\$\{([A-Za-z_][A-Za-z_0-9]*|[0-9]+|[@*#?!$-])(\[[^]]*\])?(\^\^?|,,?)[^}]*\}|&>>|\|&|;;?&'
 # Full-line comments and the pattern itself are not scanned.
 gate_matches() {
   grep -nE "$bash4_constructs" "$@" | grep -vE '^([^:]*:)?[0-9]+:[[:blank:]]*#' |
     grep -v -F -e 'bash4_constructs' || true
 }
-gate_hits=$(gate_matches "$script" "${BASH_SOURCE[0]}")
+gate_hits=$(gate_matches "$script" "${BASH_SOURCE[0]}" "$repo_root/scripts/consumer-checks-stale-rerun.sh")
 [[ -z "$gate_hits" ]] || fail "Bash 4+ constructs found (stock macOS bash is 3.2):"$'\n'"$gate_hits"
 
 # shellcheck source=scripts/find-bash3.sh

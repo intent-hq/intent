@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { GOLDEN_FILES, inspectFixtures, resolveGoldenPath } from './check-transfer-selection-contract.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const GENERATOR = 'crates/intent-services/src/transfer_selection_contract.rs';
+// The contract test lives in the crate that owns the transfer feature.
+export const GENERATOR_SOURCE = 'crates/intent-svc-transfer/src/transfer_selection_contract.rs';
 const EXPORTER = 'scripts/test-transfer-selection-contract.sh';
 const RENDERER = 'src/lib/components/chat/input/ModelPicker.transfer-selection-contract.test.ts';
 const LOADER = 'scripts/transfer-selection-fixtures.mjs';
@@ -53,7 +54,9 @@ export function inspectSources(root, env = process.env) {
 
 export async function preflight(root = ROOT, env = process.env) {
   const sources = inspectSources(root, env);
-  for (const file of [GENERATOR, EXPORTER]) required(path.join(root, 'packages/intentd'), file);
+  const intentdRoot = path.join(root, 'packages/intentd');
+  for (const file of [GENERATOR_SOURCE, EXPORTER]) required(intentdRoot, file);
+  sources.generator = GENERATOR_SOURCE;
   for (const file of [RENDERER, LOADER]) required(path.join(root, 'packages/cloudlands-fe'), file);
   const fixtureRoot = path.join(root, 'docs/protocol/fixtures/transfer-selection');
   if (env.TRANSFER_SELECTION_FIXTURE_ROOT !== undefined) {
@@ -62,8 +65,8 @@ export async function preflight(root = ROOT, env = process.env) {
   }
   assert.equal(env.TRANSFER_SELECTION_GENERATED, undefined, 'connected gate generates its own fresh input; unset TRANSFER_SELECTION_GENERATED');
   for (const file of GOLDEN_FILES) await inspectFixtures({ fixtureRoot, generated: path.join(fixtureRoot, file) });
-  sources.golden = path.basename(await resolveGoldenPath({ fixtureRoot, intentdRoot: path.join(root, 'packages/intentd') }));
-  sources.generatorSha256 = sha256(path.join(root, 'packages/intentd', GENERATOR));
+  sources.golden = path.basename(await resolveGoldenPath({ fixtureRoot, intentdRoot }));
+  sources.generatorSha256 = sha256(path.join(intentdRoot, sources.generator));
   return { sources, fixtureRoot };
 }
 

@@ -1,0 +1,99 @@
+{
+  "fixtureFormatVersion": 1,
+  "description": "The daemon events that PROTOCOL 06-events.md section 6.6 names as the start of an agent turn, with one replayable example each. A client treats each entry as turn start: an idle agent reads as running once it sees the event. turn is the 6.6 turn kind: agent-initiated (harness-wake, opens its own assistant message), prompt (daemon-dispatched session/prompt) or any. match lists dotted event paths that must hold for the event to count. The 6.6 Turn-start signals table lists the same entries; scripts/check-turn-start-contract.mjs checks both against event-types.json.",
+  "events": [
+    {
+      "id": "harness-wake-start",
+      "type": "agent:stream:start",
+      "turn": "agent-initiated",
+      "match": {
+        "data.reason": "harness-wake"
+      },
+      "event": {
+        "type": "agent:stream:start",
+        "workspaceId": "ws-turn-start",
+        "id": "evt-turn-start-1",
+        "timestamp": "2026-10-30T12:00:01.000Z",
+        "actor": {
+          "type": "agent",
+          "id": "agent-turn-start",
+          "name": "Turn start"
+        },
+        "data": {
+          "agentId": "agent-turn-start",
+          "messageId": "msg-turn-start-wake",
+          "reason": "harness-wake"
+        }
+      }
+    },
+    {
+      "id": "running-status-edge",
+      "type": "agent:status-changed",
+      "turn": "any",
+      "match": {
+        "data.status": "active",
+        "data.isActive": true
+      },
+      "event": {
+        "type": "agent:status-changed",
+        "workspaceId": "ws-turn-start",
+        "id": "evt-turn-start-2",
+        "timestamp": "2026-10-30T12:00:02.000Z",
+        "actor": {
+          "type": "agent",
+          "id": "agent-turn-start",
+          "name": "Turn start"
+        },
+        "data": {
+          "agentId": "agent-turn-start",
+          "status": "active",
+          "isActive": true,
+          "stopReason": null,
+          "stopReasonTimestamp": null
+        }
+      }
+    },
+    {
+      "id": "first-activity-ping",
+      "type": "agent:stream:activity",
+      "turn": "any",
+      "event": {
+        "type": "agent:stream:activity",
+        "workspaceId": "ws-turn-start",
+        "id": "evt-turn-start-3",
+        "timestamp": "2026-10-30T12:00:03.000Z",
+        "actor": {
+          "type": "agent",
+          "id": "agent-turn-start",
+          "name": "Turn start"
+        },
+        "data": {
+          "agentId": "agent-turn-start",
+          "messageId": "msg-turn-start-activity"
+        }
+      }
+    },
+    {
+      "id": "queue-drain-start",
+      "type": "agent:queue:processing",
+      "turn": "prompt",
+      "event": {
+        "type": "agent:queue:processing",
+        "workspaceId": "ws-turn-start",
+        "id": "evt-turn-start-4",
+        "timestamp": "2026-10-30T12:00:04.000Z",
+        "actor": {
+          "type": "agent",
+          "id": "agent-turn-start",
+          "name": "Turn start"
+        },
+        "data": {
+          "agentId": "agent-turn-start",
+          "messageId": "queue-turn-start-1",
+          "content": "Queued follow-up",
+          "turnId": "turn-turn-start-1"
+        }
+      }
+    }
+  ]
+}

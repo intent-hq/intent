@@ -1,0 +1,6 @@
+# Stale status labels grandfathered when check-protocol-status-labels was added:
+# `<path> <capability> <count>`, sorted, where count is the number of "prepared" /
+# "not implemented" labels in that doc whose subject is a capability the pinned intentd
+# advertises. Checked by `scripts/check-protocol-status-labels.mjs` (run from
+# `make docs-check`). Entries only ratchet down: drop a stale label and write the
+# count the check names. Regenerate with `node scripts/check-protocol-status-labels.mjs --print-baseline`.

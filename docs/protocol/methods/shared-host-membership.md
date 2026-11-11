@@ -69,7 +69,7 @@ roles to unlock it.
 
 #### Effective workspace membership
 
-The prepared [workspace guest role extension](./multiplayer.md#workspace-guest-roles-prepared)
+The [workspace guest role extension](./multiplayer.md#workspace-guest-roles)
 adds `manager` alongside the existing guest `collaborator` role. Its scoped agent
 and saved-script permissions do not change the `canManage` precedence below.
 Under `workspaceGuestRoles: 1`, guest roster rows and caller-relative `myRole`
@@ -190,7 +190,7 @@ type HostInvite = {
 };
 ```
 
-##### Invitation account search (additive, prepared)
+##### Invitation account search (additive)
 
 `host.invite.searchAccounts` is a daemon-global read. It uses the same
 administrator authorization as `host.invite.create`: owner wire callers and
@@ -244,10 +244,18 @@ Provider references: [GitLab Users API](https://docs.gitlab.com/api/users/),
 [GitLab REST authentication](https://docs.gitlab.com/api/rest/authentication/),
 and [GitHub user search](https://docs.github.com/en/rest/search/search#search-users).
 
-The creator's **Intent authority** suffices. Neither host nor workspace invitation
-issuance requires a repository connection, working repository token, or external
-owner profile. This intentionally replaces §5.48's live-forge prerequisite.
-An unpinned workspace invite makes no forge call. A pin is resolved at issuance
+Issuance needs the creator's **Intent authority** and a **connected owner forge**:
+the host's GitHub credential or its bound GitLab instance must answer for a live
+account when the invite is created (a cached owner profile or a rejected credential
+does not qualify). With neither connected, host and workspace invitation issuance
+(open and pinned) is `-32603 { code: "github-identity-required" }` and nothing is
+stored; when neither is connected but one could not be reached, the refusal is the
+retryable `-32603 { code: "github-unreachable" }`. The same check gates redemption: `invite.challenge`,
+`invite.prove` and `invite.accept` on a valid open invite refuse with that code
+while no owner forge is connected, leaving the invite open, so unused invites
+become redeemable again once a forge reconnects. Guests and members who already
+joined keep their access; `invite.inspect` is unchanged.
+An unpinned workspace invite makes no lookup beyond that connection check. A pin is resolved at issuance
 to the existing provider/canonical-instance/stable-ID triple, never just a login.
 For host invites `pinLogin` must be nonblank, `pinProvider` explicit, `pinHost`
 defaults to `github.com` or `gitlab.com` independently of connected repositories;
@@ -497,7 +505,8 @@ Repository credential selection follows the repository's origin and the host's
 owner-configured accounts/helpers, never a member's login or proof credential.
 Existing Git author/committer and repository overrides remain authoritative.
 `sourceControl.github.exposeGitCredentialToChildren` still controls managed helper
-injection; other owner-configured helpers remain usable. Missing repository/AI
+injection, and also gates the `GH_TOKEN` that remote agents get on a nodeProtocol 15
+[machine link](../node-link.md#forge-token-on-the-machine-nodeprotocol-15); other owner-configured helpers remain usable. Missing repository/AI
 setup affects only operations that need it. It cannot prevent invitations,
 reconnect or otherwise-supported workspace creation. A connected GitLab identity
 does not establish that a native GitLab repository/MR provider is available.
@@ -1077,22 +1086,19 @@ removal ends access without waiting for a cached visibility verdict. See
 [§8](../08-permission-flow.md). This does not admit other guest-denied management
 events or RPCs.
 
-#### Multiplayer lab rollout (client policy)
+#### Multiplayer client policy
 
-The existing saved **`labs:multiplayerEnabled`** preference is default-off; missing
-or unhydrated means off. It gates the Collaboration **tab itself**, page content,
-host invites/members, workspace sharing/rosters/presence entry points, joined-host
-navigation, collaboration sign-in, and the new shared-host pairing/device controls.
-Direct settings routes, legacy aliases, commands/search and open dialogs obey the
-same selector. Disabled incoming invites offer explicit enable-Multiplayer recovery
-before the join; they do not silently enable it. The GitLab lab is independent and
-cannot bypass Multiplayer. Compose visibility with actual server capabilities and
-current role. Enabling a local preference grants no daemon authority.
-
-Disabling hides/dismisses experimental surfaces and stale actions without deleting
-saved sessions, revoking membership, rotating links or stopping shared work. Keep
-ordinary single-user controls and the legacy owner Devices/pairing flow available.
-Re-enabling refreshes server authority before showing management actions.
+Multiplayer is always on in the desktop client. The former saved
+**`labs:multiplayerEnabled`** preference, its command-palette toggles and its
+app-setting path are retired: clients neither read nor write a saved value. The
+Collaboration tab, host invites/members, workspace sharing/rosters/presence entry
+points, joined-host navigation, collaboration sign-in and the shared-host
+pairing/device controls are shown subject only to actual server capabilities and
+current role. Incoming invites never ask the user to enable Multiplayer: an invite
+that arrives before the originating window has published its collaboration policy
+waits for that window's automatic readiness acknowledgement (with a Try again action
+only if that acknowledgement fails), then continues. GitLab has no client-side gate.
+No client-side policy grants daemon authority.
 
 #### Required behavioral conformance
 
@@ -1150,5 +1156,5 @@ the assertions; passing documentation gates is not runtime evidence.
 | Remove/rotate shared personal credential and reconnect every device | All affected links/sessions fail; unrelated people and work remain; TLS/route parity retained |
 | Device identity spoof and guest device query/subscription | Server-derived person/role; no unrelated device/principal leak through snapshots, live or durable events |
 | Desktop/iOS invited v2 migration and mixed-version fixture above | Both codecs/stores follow identical opaque keys, legacy alias recovery, independent removal retention and route/clock semantics; owner service remains v1. Run the complete old-reader logging/B/C/stale-writer fixture, then collect physical device sync evidence separately |
-| Lab missing/off/on, route aliases, runtime disable, both GitLab flag states | No hidden experimental content mounts; explicit recovery; owner legacy pairing and saved access preserved |
+| Lab missing/off/on, route aliases, runtime disable | No hidden experimental content mounts; explicit recovery; owner legacy pairing and saved access preserved |
 | Old daemon/client and different local/remote host setup | Legacy owner/guest behavior only; no unsupported purpose fallback; selected host supplies roles/models/repos/pairing after every reconnect |

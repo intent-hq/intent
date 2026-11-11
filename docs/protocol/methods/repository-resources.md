@@ -8,7 +8,7 @@
 | sourceControl.read.detail | workspaceId, readLifetimeId, target, refresh? | Qualified merge-request snapshot or issue detail with availability and observed quota |
 | sourceControl.read.release | workspaceId, readLifetimeId | {released: true} |
 
-**Prepared additive contract.** Require the original connection's
+**Additive contract.** Require the original connection's
 [`repositoryResourceRead: 1`](client-hello.md#resource-read-capability) before
 capture. The typed forms and bounds below describe explicit GitLab detail reads;
 catalog presence or a numeric protocol version alone does not establish support.
@@ -317,9 +317,9 @@ link unless a provider-verified resolver establishes its instance, project and
 issue IID; its numeric segment is not automatically an issue IID. Group, epic or
 unknown resource links are likewise not converted into issue detail requests.
 
-### Prepared project pages and discussions
+### Project pages and discussions
 
-This separate, prepared [protocol 15.1 extension](../versioning.md) adds bounded
+This separate [protocol 15.1 extension](../versioning.md) adds bounded
 project lists and complete conversation reads. It requires
 `repositoryResourcePages: 1` on the original connection in addition to the existing
 detail-read contract. It defines scoped capture, detail and release alongside
@@ -386,7 +386,7 @@ a mismatched present context cannot be released as if it belonged to the caller.
 
 #### Known repository identity before workspace creation
 
-The prepared `sourceControl.read.resolveKnownRepository` method accepts exactly
+The `sourceControl.read.resolveKnownRepository` method accepts exactly
 `context`, `readLifetimeId` and `path`. It requires `{ "kind": "host" }` and the
 original Host Owner capture; a workspace context is refused. `path` must be an
 absolute path registered as a known repository and identify its actual local
@@ -415,7 +415,7 @@ request. It neither persists a choice nor creates a workspace or live Git-root
 lifetime. Match the returned context, lifetime, scope, revision and path to the
 original request. Even a resolved canonical target grants no remote permission;
 each later explicit list or detail read still requires original caller,
-account and project admission. This prepared method requires the page capability
+account and project admission. This method requires the page capability
 and does not change legacy capture or selection methods.
 
 #### Lists, filters and continuation
@@ -442,7 +442,7 @@ combination. An illustrative initial page is:
 {"jsonrpc":"2.0","id":213,"method":"sourceControl.read.list","params":{"context":{"kind":"host"},"readLifetimeId":"host-read-example","repository":{"provider":"gitlab","instanceBaseUrl":"https://gitlab.example:8443/gitlab","projectPath":"group/subgroup/project"},"kind":"merge-request","query":{"state":"closed","filter":"all","search":"","limit":20}}}
 ```
 
-The prepared GitLab provider supports `all`, `created`, `assigned` and
+The GitLab provider supports `all`, `created`, `assigned` and
 `review-requested` for merge requests, and `all`, `created` and `assigned` for
 issues. The self filters use the authenticated account on the captured
 connection, not a client-supplied user identity. `all` adds no involvement
@@ -529,10 +529,9 @@ illustrative result deliberately contains no item payload:
 
 `quota` retains the existing decimal-string-or-null fields; unknown status and
 quota never become zero. A failure is not a successful empty page. The item
-forms below describe the prepared provider projection; complete delivery and
-invalidation forwarding still require qualification before claiming support.
-The invalidation body below does not establish a deployed private
-notice; no global event schema is added.
+forms below describe the provider projection. intentd forwards the private
+invalidation notice below on the capturing connection; no global event schema
+is added.
 
 #### List and discussion items
 
@@ -604,7 +603,7 @@ fresh authorized read. Optional unsupported/restricted sections, rate limits
 and transient failures stay distinct from denial of the whole project and must
 identify the unavailable section without hiding readable facts.
 
-The prepared socket-private notification is `sourceControl.read.invalidated`.
+The socket-private notification is `sourceControl.read.invalidated`.
 Its body contains exactly `readLifetimeIds` (an array of strings), `sequence`
 (a canonical decimal u64 string), `repository` (the full canonical repository
 target) and `coverage`. It belongs to the original socket and carries no

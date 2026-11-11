@@ -86,7 +86,7 @@ The raw incremental text itself flows on the internal `chat:stream:delta` event 
 **agent:stream:end details.**
 
 - the turn-worker terminal emit (`agent_session.rs` `run_prompt_turn`) covers **both** normal completion **and** error-terminated turns and additively carries ([monorepo#732](https://github.com/intent-hq/monorepo/issues/732), [intent-hq/intentd#575](https://github.com/intent-hq/intentd/pull/575)): `messageId` — the turn's assistant message id, present whenever the turn persisted an assistant message (set only **after** the successful store append, so the event can never advertise a row that was never written); and `trailingBlocks` — the drained §7.1 `AtTurnEnd` resource blocks (e.g. `ws.app.question.ask` question blocks) in registration order, **byte-identical** to the trailing blocks of the persisted message, **omitted** when none were drained.
-  `finishReason` — the **abnormal finish reason**: present only when the turn completed with a non-`end_turn` ACP stop reason (`refusal` | `max_tokens` | `max_turn_requests`), carrying that stop reason verbatim; omitted on normal (`end_turn`) completions, error-terminated turns, and every non-turn-worker emit site — never `null`.
+  `finishReason` — the **abnormal finish reason**: present only when the turn completed with a non-`end_turn` ACP stop reason (`refusal` | `max_tokens` | `max_turn_requests` | `cancelled` — see §7.3 for when `cancelled` appears), carrying that stop reason verbatim; omitted on normal (`end_turn`) completions, error-terminated turns, and every non-turn-worker emit site — never `null`.
   When the turn persisted an assistant row, the same value is durably tagged on that row as `metadata.finishReason` (§7 transcript metadata), so a reloading client can render the ending without having seen this event.
   An abnormal finish reason is still a **completion** (`agent:idle` follows with its existing lifecycle `finishReason` field; no `agent:failed`); distinct from the interrupt path's `stopReason: "interrupted"` below.
   The two fields are not independently optional in one direction: `trailingBlocks` is a trailing slice of the persisted message's blocks, so its presence **implies** `messageId` is present (a client always has the id to associate the blocks with); the converse does not hold — `messageId` routinely appears without `trailingBlocks`.
@@ -182,7 +182,7 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   atomic conversation page can contain fewer rows than that reconstructed window.
 
   The daemon owns continuation until it has sent the requested number of initial
-  rows or reached the actual beginning of the conversation. A slim page's 512 KiB
+  rows or reached the actual beginning of the conversation. A slim page's 480,000-byte
   budget can split the initial transfer into multiple bounded reads; it must not
   silently lower the target. Slim block projections, the one-message floor, bounded
   buffering, and connection backpressure remain in force. The final cursor points
@@ -228,16 +228,19 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   atomic snapshots additionally inherit the **slim page byte budget** (within v7.2 —
   [intent-hq/intentd#1314](https://github.com/intent-hq/intentd/pull/1314)): atomic initial,
   successful-resume and recovery snapshots reuse the `agent.getConversation` read, so a snapshot page is bounded
-  at `SLIM_PAGE_BUDGET_BYTES` (512 KiB) total serialized message bytes and may carry fewer than
+  at `SLIM_PAGE_BUDGET_BYTES` (480,000 bytes) total serialized message bytes and may carry fewer than
   the chosen message limit, with `nextToken` re-minted at the first excluded row (§5.5) — the client
   pages older history exactly as before, just in more round-trips. The budget covers the
   live-turn merge too: after the in-flight message is appended it anchors as the newest row
-  (always served, even alone over budget — the §5.5 one-message floor), and oldest persisted
+  (always served; if it alone is over budget it is cut to fit with `textTruncated` text previews
+  and `bodyOmitted` block stubs — the §5.5 single-message bound), and oldest persisted
   rows are evicted until the merged page fits both the chosen message limit and byte budget,
   with `truncated`/`nextToken` re-minted at the eviction boundary so the evicted rows stay
   reachable via `agent.getConversation`. Progressive initial delivery instead owns
   bounded continuation until its target or exhaustion; it withholds the cursor
-  until the terminal history frame, as specified above. Since v10.0
+  until the terminal history frame, as specified above. Its seq-0 row and each `history`
+  frame's row are cut the same way when one row alone is over the page budget (§5.5
+  single-message bound), so every progressive frame stays within the read budget. Since v10.0
   every frame also inherits the `agent.getConversation` legacy-inline-file-block projection
   (§5.5): a persisted pre-10.0 `{ type: "file", data, … }` block with no non-empty
   `attachmentId` is served as `{ type: "text", text: "Attached file: <fileName>" }` (`"Attached
@@ -719,6 +722,14 @@ the terminal `agent:stream:end` carries the drained blocks as `trailingBlocks` (
 so a client that finalizes the in-flight message from accumulated chunks can append them
 immediately instead of waiting for a transcript re-fetch.
 
+**Secret-request resource blocks (`AtTurnEnd`).** A third resource MIME type,
+`application/vnd.intent.secret-request+json`, carries requests an agent makes with the MCP
+`ws.secret.request` binding. These blocks use the same `AtTurnEnd` drain, ordering and
+`trailingBlocks` delivery as question blocks, with an `intent-secret-request://<requestId>` URI and
+the request's `name` as `resource.name`. The payload holds only `requestId`, `agentId`, `name` and
+`reason`, never a value. Unlike a question block, it never sets the pending-questions marker. See
+[§5.56 Secret requests](./methods/secrets.md#turn-end-resource).
+
 *The `ws.app.question.ask` binding.* JS signature
 `ws.app.question.ask({ question, header, options, explanation?, multiSelect? })` →
 `{ ok: true, attachmentId, message }`. **One question per call** — the model calls it once per
@@ -912,6 +923,18 @@ A persisted non-assistant row
 live-streaming phase: the row's real `role` plus the authoritative `messageSeq`/`timestamp`/
 `streamingComplete:true` (and the row's `metadata` when present) in a single frame.
 
+**Single-message bound on deltas (15.4, additive; presence-detected).** Every delta frame stays
+within the 500 KiB read budget. A terminal reconcile or non-assistant row delta whose entities would
+not fit in one frame is split across several consecutive `delta` frames (consecutive `seq`), each
+within the budget: entities keep their order and their `added` / `updated` bucket, every terminal
+entity still carries `streamingComplete:true`, and `removedIds` rides on the last frame. The row
+itself is cut exactly as in the snapshot (`textTruncated` text previews, `bodyOmitted` block stubs,
+§5.5). In full-text mode (no `deltaEncoding`), a live `text` / `thinking` block whose accumulated
+text has grown past the page budget is sent as the same preview — a prefix plus
+`textTruncated: true` / `textBytes` — on every later chunk and in a degraded terminal frame; the
+full text is read through `agent.getMessageBlock`, which resolves the in-flight turn. Incremental
+mode is unchanged (fragments are already small).
+
 ### 7.2 Interrupted partial-turn persistence
 
 On a **user interrupt** of an in-flight turn — `agent.stop`, `agent.sendQueuedMessageNow`, or `agent.sendMessage` / `agent.sendToTask` called with the request parameter `priority: "interrupt"` — the daemon persists the streamed-so-far partial assistant message **before** emitting the terminal `agent:stream:end`. The partial turn's content blocks are written to the transcript under the assistant `messageId` minted at turn start (the same id carried by the live `chat:stream:delta` / `agent:stream:activity` events, and from which the `chat.subscribe` synthetic block ids are derived as `{messageId}:{blockIndex}` — §7.1), tagged on the message row with:
@@ -943,10 +966,10 @@ Added in [intent-hq/intentd#336](https://github.com/intent-hq/intentd/pull/336);
 
 ### 7.3 Abnormal finish-reason persistence
 
-A prompt turn that **completes** with a non-`end_turn` ACP stop reason — `refusal`, `max_tokens`, or `max_turn_requests` — is an *abnormal ending*: the turn succeeded at the transport level (no error, no interrupt), but the agent stopped for a reason the user should see. The daemon makes that reason durable so clients can render it after a reload, not just live:
+A prompt turn that **completes** with a non-`end_turn` ACP stop reason — `refusal`, `max_tokens`, `max_turn_requests`, or a provider-resolved `cancelled` (below) — is an *abnormal ending*: the turn succeeded at the transport level (no error, no interrupt), but the agent stopped for a reason the user should see. The daemon makes that reason durable so clients can render it after a reload, not just live:
 
 - **Row metadata.** The turn's assistant row is tagged with `metadata.finishReason` carrying the ACP stop reason verbatim (e.g. `{ "finishReason": "refusal" }`), visible on `agent.getConversation` / `agent.getSession` transcript reads and the §7.1 `chat.subscribe` frames that carry row `metadata`. Normal (`end_turn`) completions persist **no** metadata for this — the common path stays noise-free. A **zero-output** abnormal turn (the prompt resolved abnormally before emitting any `session/update`) still persists an empty marker row — `contentBlocks: []` plus the `metadata.finishReason` tag — mirroring the §7.2 pre-first-token interrupt marker: the lifecycle events below are ephemeral, so the row is the only durable record of the ending.
 - **Terminal event.** The turn-worker terminal `agent:stream:end` carries the same value as the additive `finishReason?` field (§7 emitted-events table) — present only on abnormal completions, omitted otherwise, never `null`.
-- **Still a completion.** An abnormal ending follows the normal completion lifecycle: `agent:idle` fires (its existing lifecycle `finishReason` field carries the same stop reason, as it always has) and `agent:failed` does not. Distinct from §7.2's interrupt contract (`metadata.stopReason: "interrupted"` / event `stopReason: "interrupted"`): an interrupt is externally imposed mid-turn, an abnormal finish is the agent's own resolved stop reason. The ACP `cancelled` stop reason never reaches this path — cancellation routes through the §7.2 interrupt flush.
+- **Still a completion.** An abnormal ending follows the normal completion lifecycle: `agent:idle` fires (its existing lifecycle `finishReason` field carries the same stop reason, as it always has) and `agent:failed` does not. Distinct from §7.2's interrupt contract (`metadata.stopReason: "interrupted"` / event `stopReason: "interrupted"`): an interrupt is externally imposed mid-turn, an abnormal finish is the agent's own resolved stop reason. A cancel the daemon requests (stop, message preemption, suspend) never reaches this path: it aborts the turn worker and routes through the §7.2 interrupt flush. `cancelled` reaches it only when the provider itself resolved the prompt `cancelled` — a provider-initiated cancel, or a stale daemon `session/cancel` (ACP cancels are notifications) that the adapter applied to the NEXT prompt and that the turn worker's one silent redrive did not recover ([intent-hq/intentd#2817](https://github.com/intent-hq/intentd/pull/2817): an output-free `cancelled` within 60 s of a daemon cancel, with no client request, is redriven once without persisting a row or emitting terminal events). Such a turn persists like any other abnormal ending — typically the zero-output marker row with `metadata.finishReason: "cancelled"` and no `metadata.interrupted` — and clients render it as a "stopped before it started" notice rather than the §7.2 Stopped indicator.
 
 Presence-detected additive fields (row `metadata.finishReason`, event `finishReason?`) within the current protocol version; no method-catalog or wire-shape change, so no version bump.

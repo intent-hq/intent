@@ -18,11 +18,26 @@ EXCEPTIONS = {('runner-route.yml', 'probe'), ('manual-signed-build.yml', 'smoke-
 # socket), so jobs that need either stay on a hosted runner.
 HOSTED_ONLY = {
     ('bootstrap-install.yml', 'bootstrap-install'): 'runs sudo docker',
+    ('bootstrap-install.yml', 'workspace-setup'): 'runs sudo docker',
 }
 EXCEPTIONS |= set(HOSTED_ONLY)
+# The runner smoke jobs read their self-hosted labels from the plan job
+# (infra/runners/smoke_plan.py: a pool label, plus intent-host-<host> when a
+# host is given; test_runners.py checks the plan's labels).
+PLANNED = {('intent-cache-smoke.yml', '${{ matrix.runs_on }}'),
+           ('intent-cache-smoke.yml', '${{ fromJSON(needs.plan.outputs.heavy) }}')}
 MAINTENANCE = {('m1mac-smoke.yml', 'smoke'), ('provision-m1mac.yml', 'provision'), ('provision-m1mac.yml', 'verify'), ('macos-prune.yml', 'prune'), ('windows-prune.yml', 'prune'),
                ('intent-cache-smoke.yml', 'isolation'), ('intent-cache-smoke.yml', 'fresh'), ('intent-cache-smoke.yml', 'cache-reader'),
                ('intent-cache-smoke.yml', 'cache-reader-small'), ('intent-cache-smoke.yml', 'isolation-xl')}
+
+# GitHub's larger runners are off: every paid size bursts to its WarpBuild
+# runner, read from the probe so the two never drift apart.
+WARP = dict(re.findall(r"'([\w.-]+)': '(warp-[\w.-]+)'", re.search(r"const warp = \{(.*?)\};", (ROOT / '.github/workflows/runner-route.yml').read_text(), re.S)[1]))
+
+
+def burst_label(label):
+    """Where a label runs without a self-hosted slot: a paid size on WarpBuild, a free label itself."""
+    return WARP.get(label, label)
 
 
 def jobs(text):
@@ -55,7 +70,7 @@ def violations(text, filename):
         runner = runner[1].strip('"\'')
         if runner in FREE or (filename, job) in EXCEPTIONS or (job == 'route' and 'id: decide' in body and 'listSelfHostedRunnersForOrg' in body):
             continue
-        if runner.startswith('[self-hosted,') and (filename, job) in MAINTENANCE:
+        if (runner.startswith('[self-hosted,') or (filename, runner) in PLANNED) and (filename, job) in MAINTENANCE:
             continue
         routed = re.fullmatch(r"\$\{\{ fromJSON\(needs\.(route|runner-route)\.outputs\.(runners|slots|cloud|linux_labels|check_labels).*\}\}", runner)
         # Matrix legs that may take a pool read their own slot first.
@@ -86,6 +101,10 @@ def slot_violations(text):
     for entry in listed:
         if entry.get('label') not in POOLED:
             errors.append(f"{entry['key']}: {entry.get('label')} is not an intent-cache pool label")
+        # `burst` only upsizes a heavy job's burst runner (paid 8x to paid 16x); it
+        # must never turn a free label paid or shrink a job.
+        if 'burst' in entry and (entry.get('label'), entry['burst']) != ('gh-linux-8x', 'gh-linux-16x'):
+            errors.append(f"{entry['key']}: burst {entry['burst']} must upsize gh-linux-8x to gh-linux-16x")
     for job, body in jobs(text).items():
         runner = re.search(r'^    runs-on: (.+)$', body, re.M)
         if not runner or 'outputs.slots' not in runner[1]:
@@ -97,8 +116,8 @@ def slot_violations(text):
             errors.append(f'{job}: reads an unlisted slot')
             continue
         used.add(key)
-        if read[3] and entry['label'] != read[3]:
-            errors.append(f"{job}: fallback {read[3]} differs from listed {entry['label']}")
+        if read[3] and burst_label(entry['label']) != read[3]:
+            errors.append(f"{job}: fallback {read[3]} differs from {burst_label(entry['label'])} for listed {entry['label']}")
         if read[4] and entry['label'] not in body:
             errors.append(f"{job}: no matrix leg asks for the listed {entry['label']}")
         if bool(read[2]) != bool(entry.get('shards') or entry.get('legs')):
@@ -185,6 +204,14 @@ class RunnerPolicy(unittest.TestCase):
         self.assertEqual(len(slot_violations(listing.format('windows-2025', ',"events":["merge_group"]') + job)), 2)
         self.assertEqual(slot_violations('jobs:\n' + job), ['a: reads an unlisted slot'])
 
+        # A burst label only upsizes a heavy job; free or downsized bursts are rejected.
+        bursts = '    with:\n      slot_jobs: >-\n        [{{"key":"a","label":"{}","burst":"{}","events":["merge_group"]}}]\njobs:\n'
+        heavy = job.replace('ubuntu-24.04', 'warp-ubuntu-2404-x64-8x')
+        self.assertEqual(slot_violations(bursts.format('gh-linux-8x', 'gh-linux-16x') + heavy), [])
+        self.assertEqual(slot_violations(bursts.format('ubuntu-24.04', 'gh-linux-16x') + job),
+                         ['a: burst gh-linux-16x must upsize gh-linux-8x to gh-linux-16x'])
+        self.assertEqual(slot_violations(bursts.format('gh-linux-16x', 'gh-linux-8x') + job.replace('ubuntu-24.04', 'warp-ubuntu-2404-x64-16x')),
+                         ['a: burst gh-linux-8x must upsize gh-linux-8x to gh-linux-16x'])
     def test_all_workloads_are_routed(self):
         for path in (ROOT / '.github/workflows').glob('*.yml'):
             with self.subTest(workflow=path.name):
@@ -222,13 +249,34 @@ class RunnerPolicy(unittest.TestCase):
         # Pool sizes are org/repo variables, so adding hosts needs no workflow change;
         # the defaults keep today's routing (no xl slots).
         route = (ROOT / '.github/workflows/runner-route.yml').read_text()
-        for env, var, default in [('THRESHOLD', 'CI_LINUX_HEAVY_SLOTS', 2), ('XL_THRESHOLD', 'CI_LINUX_XL_SLOTS', 0)]:
+        for env, var, default in [('THRESHOLD', 'CI_LINUX_HEAVY_SLOTS', 2), ('XL_THRESHOLD', 'CI_LINUX_XL_SLOTS', 0), ('BIGMEM_THRESHOLD', 'CI_LINUX_BIGMEM_SLOTS', 0)]:
             self.assertIn(f"          {env}: ${{{{ vars.{var} || '{default}' }}}}\n", route)
         self.assertIn("xl: ['self-hosted', 'linux', 'x64', 'intent-cache-xl'],", route)
         # The Linux kill switch covers xl, and only 16-core jobs may take an xl slot.
         self.assertIn("xl: process.env.LINUX_RUNNER_DISABLED === 'true',", route)
         self.assertIn("xl: ['gh-linux-16x'],", route)
-        self.assertLess(route.index("xl: ['gh-linux-16x'],"), route.index("linux: ['gh-linux-8x', 'gh-linux-16x'],"))
+        # 16-core jobs overflow from xl only to bigmem heavy slots (30 GB or more),
+        # never to plain heavy slots: a 12 GB slot OOM-kills their rustc.
+        self.assertIn("bigmem: ['self-hosted', 'linux', 'x64', 'intent-cache', 'intent-cache-bigmem'],", route)
+        self.assertIn("bigmem: process.env.LINUX_RUNNER_DISABLED === 'true',", route)
+        self.assertLess(route.index("xl: ['gh-linux-16x'],"), route.index("bigmem: ['gh-linux-16x'],"))
+        self.assertIn("linux: ['gh-linux-8x'],", route)
+        self.assertNotRegex(route, r"linux: \[[^\]]*'gh-linux-16x'")
+
+    def test_no_job_can_land_on_a_github_larger_runner(self):
+        # A paid size reaches a runner only through the probe; a fallback, used if
+        # the route job failed, names the WarpBuild label.
+        paid = '|'.join(map(re.escape, WARP))
+        self.assertEqual(sorted(WARP), ['gh-linux-16x', 'gh-linux-8x', 'gh-linux-arm64-8x', 'gh-windows-16x', 'gh-windows-8x', 'macos-15-xlarge', 'macos-26-xlarge'])
+        for path in (ROOT / '.github/workflows').glob('*.yml'):
+            if path.name == 'runner-route.yml':
+                continue
+            text = path.read_text()
+            with self.subTest(workflow=path.name):
+                self.assertEqual(re.findall(r"""(?:fromJSON\('|\|\| ')\[\"(%s)\"\]'""" % paid, text), [])
+                self.assertEqual(re.findall(r'^    runs-on: (%s)\s*$' % paid, text, re.M), [])
+        route = (ROOT / '.github/workflows/runner-route.yml').read_text()
+        self.assertNotIn('WARPBUILD_DISABLED', route)
 
     def test_policy_rejects_new_paid_pins(self):
         for label in ['gh-linux-8x', 'gh-linux-16x', 'gh-windows-16x', 'macos-26-xlarge', 'macos-15-xlarge',

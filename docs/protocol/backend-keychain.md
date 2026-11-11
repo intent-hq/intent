@@ -164,7 +164,9 @@ Required component CI must:
 
 1. Read and validate the lock's full source commit; reject floating references.
 2. Check out **intent-hq/intent** at exactly that SHA (never fall back to main).
-   Sparse checkout needs `scripts/backend-keychain-contract.mjs` and
+   Sparse checkout needs `scripts/backend-keychain-contract.mjs`,
+   `scripts/lib/fixture-copy.mjs` (the shared fixture-copy tool; see
+   [Copied fixtures](./README.md#copied-fixtures)) and
    `docs/protocol/fixtures/backend-keychain/v1/`; Git objects for those blobs must
    be available. No npm dependencies or submodule initialization are required.
 3. Run the checked-out canonical script's `verify` command with explicit roots,
@@ -177,7 +179,9 @@ Required component CI must:
 `make check-backend-keychain-contract` (also in `make consumer-checks`) always
 validates the canonical corpus, without compiling native components. It inspects
 each initialized component's mirror/lock when either exists; partial adoption,
-corruption, or differing adopted source commits/digests fails. A pinned component
+corruption, a mirror whose bytes differ from the commit its lock names, or differing
+adopted source commits/digests fails. Mirrors are held to their lock and source commit,
+never to today's corpus rules, and a mirror behind canonical warns. A pinned component
 with neither file is reported as **pre-adoption**, and uninitialized checkouts
 (including private optional iOS) as **uninspected**, never as conformance passes.
 This monorepo check checks integrity and agreement; exact-source provenance is

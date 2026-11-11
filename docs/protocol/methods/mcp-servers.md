@@ -43,7 +43,7 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
 | mcp.servers.getStatus | serverId (req), workspaceId? | { status: McpServerStatus } — optional point read; live updates arrive via `mcp.servers:status-changed` |
 
 - **McpServerConfig** — `{ id, name, transport: "stdio"|"http"|"sse", command?, args?: string[],
-  env?: object, url?, headers?: object, enabled: boolean, scope?: "user"|"workspace" }`. `command`
+  env?: object, url?, headers?: object, enabled: boolean, scope?: "user"|"workspace", plugin? }`. `command`
   / `args` / `env` apply to `stdio`; `url` / `headers` describe `http`/`sse`. All three
   transports are supported: `stdio` servers are spawned as daemon child processes, while
   `http`/`sse` servers are **probed from the daemon host** (see "Remote transports" below) —
@@ -51,6 +51,15 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
   their health. Sensitive `env` and
   `headers` values are **redacted** (presence/placeholder only) on `list`/`create`/`update`
   responses, mirroring `settings.*` (§5.12).
+- **Plugin servers** ([§5.57](./plugins.md)) — when `agentPlugins: 1` is advertised, the
+  servers of enabled Agent Plugins are listed with the user's servers. Their `id` is
+  `plugin:<plugin>/<server>`, `name` is `<plugin>-<server>`, and `plugin` names the plugin;
+  user servers never carry `plugin`. Their definitions are derived from the plugin on every
+  read and never stored: `update` and `delete` refuse them with `-32602`, and `create`
+  refuses any `id` that starts with `plugin:`. Everything else is the same as for a user
+  server: `toggle` (global, through `mcp.disabledServers`, and per workspace), `restart`,
+  `getStatus`, status events, OAuth sign-in, `ws.mcp.*` and the agent session MCP set. A
+  plugin server whose `name` matches a user server's is skipped.
 - **Placeholder-preserve on write** ([intent-hq/intentd#1730](https://github.com/intent-hq/intentd/pull/1730),
   fixes [intent-hq/intent#1181](https://github.com/intent-hq/intent/issues/1181)) — because
   reads are redacted, the natural `list` → edit → `update` round trip echoes the `********`
@@ -150,6 +159,17 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
   "serverId":"srv-fs","state":"running","pid":4821,"toolCount":7,"startedAt":1750000000000 },
   "workspaceDisabled":true } }
 ```
+
+- **Remote agents** (agents placed on another machine, [nodes §5.50](./nodes.md#daemon-to-daemon-remote-machines))
+  use the servers of **this** daemon's hub. `ws.mcp.*` is forwarded to the backend
+  and behaves as for a local agent. The agent's provider also sees each server a
+  local agent's spawn gets, less those disabled for the workspace and `sse` ones, as a server
+  in its own session; its tool calls run in this hub, shared with every other
+  remote agent and `ws.mcp`, with a 10-minute cap instead of the 55 s `ws.mcp`
+  cap. Only tools are proxied. Server configs, env, headers and OAuth tokens
+  stay on this daemon; the machine gets names and ids only. See [user MCP
+  servers](../node-link.md#user-mcp-servers-nodeprotocol-11). No method names or
+  wire fields change.
 
 > **No `memories.*` wire surface.** Long-term agent **memories** exist as an internal context source the
 > agent runtime consumes; they are **not** exposed over the wire (no client caller). The internal

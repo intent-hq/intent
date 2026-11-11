@@ -136,8 +136,8 @@ function observe(c) {
   };
 }
 
-test('wire additions and prepared capability agree with canonical docs', () => {
-  assert.equal(fixture.status, 'prepared-synthetic-not-runtime-evidence');
+test('wire additions and capability agree with canonical docs', () => {
+  assert.equal(fixture.status, 'shipped-synthetic-not-runtime-evidence');
   assert.deepEqual(fixture.capability, { submissionCorrelation: 1 });
   for (const field of ['messageId?: string', 'submissionIds?: string[]', 'mergeEligible?: boolean', 'recoverySources?: RecoverySource[]']) {
     assert.ok(doc.includes(`\`${field}\``), `document ${field}`);

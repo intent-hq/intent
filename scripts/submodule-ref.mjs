@@ -7,12 +7,16 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const short = (sha) => sha.slice(0, 7);
+export const short = (sha) => sha.slice(0, 7);
 
-/** Output of a git command, or null when it fails (not a repository, unknown ref, ...). */
-function gitOrNull(args, cwd) {
+/**
+ * Output of a git command, or null when it fails (not a repository, unknown ref, ...). Trimmed by default;
+ * `trim: false` keeps file contents (`git show <rev>:<path>`) byte for byte so line numbers hold.
+ */
+export function gitOrNull(args, cwd, { trim = true } = {}) {
   try {
-    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const out = execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 256 * 1024 * 1024 });
+    return trim ? out.trim() : out;
   } catch {
     return null;
   }

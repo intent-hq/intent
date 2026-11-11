@@ -24,8 +24,8 @@ class HostedRunners(unittest.TestCase):
 
     def test_connected_compilation_uses_self_hosted_cache(self):
         workflow = (ROOT / '.github/workflows/consumer-checks.yml').read_text()
-        self.assertIn('run: python3 scripts/setup-sccache.py', workflow)
-        self.assertLess(workflow.index('run: python3 scripts/setup-sccache.py'),
+        self.assertIn('run: python3 packages/intentd/scripts/setup-sccache.py', workflow)
+        self.assertLess(workflow.index('run: python3 packages/intentd/scripts/setup-sccache.py'),
                         workflow.index('name: Run the connected transfer selection contract'))
         for path in (ROOT / '.github/workflows').glob('*.yml'):
             self.assertNotIn('Swatinem/rust-cache', path.read_text())
