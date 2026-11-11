@@ -1288,15 +1288,19 @@ the Northflank API token); `cloudMachines.list` `providerKinds`;
 `CloudMachineState.volumeId`; `entries[].provider` and `action` on
 `cloud-machine-unavailable`, with the new reasons `project-missing` and
 `permission-denied`; the provider-neutral placement
-`{ target: "cloud", cloudMachineId? }`, whose resolved `target` is `"e2b"` for
-an E2B entry and `"cloud"` otherwise; and the launch member `resumedFromDisk`,
+`{ target: "cloud", cloudMachineId? }` (a request value only: a resolved
+placement keeps `target: "e2b"` for every provider, so older clients still
+parse Northflank agents, and `target: "e2b"` with a `cloudMachineId` of any
+provider is accepted); and the launch member `resumedFromDisk`,
 which needs no nodeProtocol. `CloudMachineProvider.templateProject` and
 `CloudMachineSizeInfo.plan` are now absent on Northflank rows. A Northflank
 machine pauses by scaling its service to 0 and resumes from its volume only:
 processes and live script runs end, and the agents relaunch on the same
 machine with a [disk resume notice](./methods/nodes.md#northflank-pause-and-resume).
-E2B entries, the entry `"e2b"` and `target: "e2b"` behave as before. Older
-clients read only the entry `"e2b"`, so they show no Northflank entry. No
+E2B entries, the entry `"e2b"` and `target: "e2b"` without `cloudMachineId`
+behave as before. Older clients read only the entry `"e2b"`, so they show no
+Northflank entry; they show a Northflank agent as a cloud agent named after
+its entry, and may list its machine row as an E2B one. No
 method or event is added or renamed, so the method and event catalogs and the
 surface counts are unchanged, and no `AgentLite` or `Workspace` field is added.
 The public protocol version is unchanged; clients detect Northflank only

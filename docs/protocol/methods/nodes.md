@@ -643,7 +643,8 @@ remote placement needs `target` omitted or `"remote"` and `checkout` omitted or
 `-32602`. With `cloudMachines: 1`, `target: "e2b"` starts the agent on a new
 [cloud machine](#placement-on-e2b), from the entry that the optional
 `cloudMachineId` names; with `cloudMachineProviders: 1`, `target: "cloud"`
-does the same for an entry of any provider. `placement: { "target": "local" }` (no other
+does the same and, without `cloudMachineId`, picks among the entries of every
+provider. `placement: { "target": "local" }` (no other
 members), from any caller, means "run on the backend": it creates an ordinary
 local agent, as if no placement were sent, and on `agent.delegate` it may be
 combined with `isolation`. `target: "local"` with `os`, `arch`, `nodeId`,
@@ -1426,10 +1427,11 @@ wherever the [placement subset](#placement-subset) accepts a remote placement,
 including batch entries and `workspace.create`'s `initialAgent.placement`.
 With `cloudMachineProviders: 1`, so is the provider-neutral
 `placement: { "target": "cloud", "cloudMachineId"?: string }`; without it,
-`target: "cloud"` is `-32602` `invalid-params`. The two differ only in which
-entries they may use: `"e2b"` only E2B entries, `"cloud"` the entries of every
-provider. A `cloudMachineId` that names a Northflank entry with
-`target: "e2b"` is `-32602` `invalid-params`.
+`target: "cloud"` is `-32602` `invalid-params`. Both start a cloud machine
+from the entry that `cloudMachineId` names, of any provider. They differ only
+when `cloudMachineId` is omitted: `"e2b"` then picks among the E2B entries
+only, with the fallback to the entry `"e2b"`, and `"cloud"` among the entries
+of every provider, with no fallback ([steps](#placement-on-e2b) below).
 `checkout` may be omitted or `"isolated"`. `os`, `arch`, `nodeId` and
 `exclusive` fail with `-32602`, and so does `cloudMachineId` with any other
 `target`. A placement with either target always starts a new sandbox for the
@@ -1439,28 +1441,36 @@ sandbox's `nodeId` ([sub-agents of remote agents](#sub-agents-of-remote-agents))
 One sandbox serves the agent it was started for (`cloud.agentId`) and the
 sub-agents that share it.
 
-The [entry](#named-e2b-entries) is, in this order, among the entries the
-target may use:
+The [entry](#named-e2b-entries) is, in this order:
 
-1. With no such entry at all: `cloud-machine-unavailable` reason `not-configured`.
-2. The entry that `cloudMachineId` names.
+1. With no entry at all: `cloud-machine-unavailable` reason `not-configured`.
+2. The entry that `cloudMachineId` names, of any provider.
 3. Without it, for an agent that another agent creates: the entry of the
    nearest agent in the creating agent's chain (that agent first) whose
    `placement.cloudMachineId` is set. Agents on the backend, on other machines,
-   whose entry was removed, or whose entry the target may not use are skipped.
-4. Else the only such entry.
-5. Else the entry `"e2b"`, so that an older client's placement still starts
-   (`target: "e2b"` only).
+   or whose entry was removed are skipped, and with `target: "e2b"` also
+   agents whose entry is not an E2B entry.
+4. Else the only candidate entry: the only E2B entry for `"e2b"`, the only
+   entry for `"cloud"`.
+5. Else, for `target: "e2b"` only, the entry `"e2b"`, so that an older
+   client's placement still starts.
 6. Else `cloud-machine-unavailable` reason `entry-required`, whose `entries`
-   name every such entry so that the caller can choose one.
+   name every candidate entry so that the caller can choose one. With no
+   candidate at all (`target: "e2b"` and only Northflank entries), it is
+   `not-configured`.
 
 The resolved placement always carries the entry's `cloudMachineId`, on the
 reply and on later reads, and a new sandbox for the same agent (an
 [agent without a sandbox](#sandbox-lifecycle)) uses the same entry while it
-exists. Its `target` follows the entry, not the request: `"e2b"` for an E2B
-entry, so older clients see E2B agents as before, and `"cloud"` for any other
-provider. Clients treat both targets as a cloud machine and read the provider
-from the entry. An agent whose entry was removed keeps its `target`.
+exists. Its `target` is always `"e2b"`, whatever the request and the entry's
+provider: in a resolved placement `"e2b"` means "a cloud machine", for history
+reasons. So older clients, whose agent schema accepts only `local`, `remote`
+and `e2b`, keep `nodeId`, `cloudStart` and `placementError` on a Northflank
+agent and route it as a remote one. Clients read the provider from the entry
+(or `cloud.provider` on its machine row), never from `target`. `"cloud"` is a
+request value only. Sending a resolved placement back (for example a
+[proposal stamp](./workspace.md)) names the entry, so it starts on the same
+provider.
 
 Admission runs these checks in order, before any write, sandbox or charge. Checks
 2 and 3 also run for every agent placed onto an existing sandbox (a sub-agent
@@ -1491,7 +1501,7 @@ carries a `profileEnv`:
    with an empty `machines` and `retryable: false`. The model is checked only
    when the sandbox reports its capabilities.
 
-The reply then returns the agent with the resolved `placement.target`,
+The reply then returns the agent with `placement.target: "e2b"`,
 `placement.cloudMachineId`, the entry's name as `nodeName`,
 `effectiveIsolation: "pending"`, no `nodeId`, and `cloudStart: { step }`. The backend starts the sandbox after the reply:
 
@@ -1535,7 +1545,7 @@ machine follows it except where
 
 **Agent without a sandbox.** When its sandbox is deleted for any reason other
 than the agent's own delete, the backend drops the agent's lease and machine
-row but keeps the agent, with its cloud `placement.target` and no `nodeId`. Its next
+row but keeps the agent, with `placement.target: "e2b"` and no `nodeId`. Its next
 message, also after a restore, starts a new sandbox as at placement, and the
 launch [relaunches without a checkout](../node-link.md#relaunch-without-a-checkout)
 from its saved `head` and `wip`. Work it did not push is lost; its first turn
@@ -1571,13 +1581,13 @@ the machine's disk. Everything above applies, with these differences:
    not an image ([entries](#northflank-entries)).
 3. **Region.** Northflank fixes the region per project. The entry reports it
    and does not set it.
-4. **Commands** in the container go through Northflank's command execution
-   API. The route to the machine is the same tailcat route as on E2B; the
-   service opens no port.
+4. **Commands** in the container go through Northflank's
+   [command execution WebSocket](#northflank-command-execution). The route to
+   the machine is the same tailcat route as on E2B; the service opens no port.
 
-All Northflank API calls go to `https://api.northflank.com/v1` with the entry's
-token as a bearer token. The token is never logged, returned, sent to the
-container or put in an error.
+All Northflank REST calls go to `https://api.northflank.com/v1` with the
+entry's token as a bearer token. The token is never logged, returned, sent to
+the container or put in an error.
 
 ###### Northflank entries
 
@@ -1641,9 +1651,18 @@ At `creating-sandbox`, the backend makes two resources, with the same name
 `intent-backend-<12 lowercase hex>` (from the backend's `backendId`):
 
 1. A volume: `POST /projects/{projectId}/volumes`, with
-   `spec: { accessMode: "ReadWriteOnce", storageSize: <diskGiB × 1024> }` and
-   one mount at the image user's home folder. The home folder holds intentd's
-   data folder and the agents' work folders.
+   `spec: { accessMode: "ReadWriteOnce", storageSize: <diskGiB × 1024> }`
+   (megabytes) and one mount, `containerMountPath: "/home/user"`, the image
+   user's home folder. It holds intentd's data folder (`~/.intentd`), the
+   agents' work folders and the provider CLIs' own state (for example
+   `~/.claude`). A new volume is empty and Northflank does not copy the
+   image's files into it, so it hides whatever the image has under
+   `/home/user`. The image therefore installs intentd, tailcat, the provider
+   CLIs and every tool outside `/home/user` (for example under `/usr/local`
+   or `/opt`), puts nothing it needs at run time in the home folder, and
+   its start command creates the folders it needs there when they are
+   missing. The image's user is `user` with home `/home/user`, as in the E2B
+   templates.
 2. A deployment service: `POST /projects/{projectId}/services/deployment`,
    with `billing.deploymentPlan` set to the size's plan,
    `deployment.instances: 1`,
@@ -1658,9 +1677,33 @@ volume is made but the service is not, the backend deletes the volume.
 
 At `starting-daemon`, the image's own command starts `intentd serve` with the
 tunnel on. The backend waits for the deployment status `COMPLETED`, then runs
-`executor.mint` over the container's local socket through the command execution
-API, as on E2B. Northflank failing to pull the image, or the container exiting
-before intentd answers, is `bootstrap-failed`.
+`executor.mint` over the container's local socket through
+[command execution](#northflank-command-execution), as on E2B. Northflank
+failing to pull the image, or the container exiting before intentd answers, is
+`bootstrap-failed`.
+
+<a id="northflank-command-execution"></a>**Command execution.** Northflank has
+no REST endpoint for it. Its CLI and JavaScript client use a WebSocket, and the
+backend speaks the same protocol, as Northflank's published JavaScript client
+(`@northflank/js-client` 0.12) implements it:
+
+1. Open `wss://api.northflank.com/v1/command-exec/projects/{projectId}/services/{serviceId}`.
+2. Send the first frame, a JSON text message:
+   `{ "type": "init", "data": { "auth": { "type": "apiToken", "apiToken": <token> }, "context": { "command": [<argv>], "user"?: …, "shell"?: … } } }`.
+   The token goes in this frame, never in the URL.
+3. Northflank answers `{ "type": "init", "data": { "auth": "successful" } }`;
+   any other `auth` value is a failure (`key-rejected` or
+   `permission-denied` by its message).
+4. Then `stdOut` and `stdErr` frames carry `data` text, and one `completion`
+   frame carries `data: { exitCode, status: "Success" | "Failure" | "Unknown", message? }`.
+   An `error` frame (`data.message`) ends the command.
+5. The backend may send `payload` frames (`data`: stdin text) and one
+   `{ "type": "stdInEnd" }`. It runs one command per connection, with no shell
+   and no TTY, and closes the socket after `completion`.
+
+The backend never logs these frames. Because the protocol is not part of
+Northflank's REST reference, the adapter's live test runs a command this way,
+so a change at Northflank fails the test and not a user's start.
 
 To delete a sandbox, the backend calls
 `DELETE /projects/{projectId}/services/{serviceId}?delete_child_objects=true`,
@@ -2053,8 +2096,11 @@ see it) and `permission-denied` (the token lacks a Northflank permission;
 `-32602` from `configure` and placement, and an agent's `placementError` when
 a start or resume is refused; they are not retryable.
 `entry-required` is `-32602` from placement only, and not retryable: the
-placement named no entry, several exist and none is `"e2b"`
-([placement on a cloud machine](#placement-on-e2b)); its message lists the entry names.
+placement named no entry and several candidates exist: for `target: "e2b"`,
+several E2B entries and none is `"e2b"`; for `target: "cloud"`, which never
+falls back to `"e2b"`, more than one entry of any provider
+([placement on a cloud machine](#placement-on-e2b)); its message lists the
+candidate names.
 The others are `-32603` from `cloudMachines.configure`, `pause` and `kill`, or
 an agent's `placementError` after the reply: `api-error` (the provider failed or was
 unreachable, retryable), `template-missing` (no template or image tagged with this backend's

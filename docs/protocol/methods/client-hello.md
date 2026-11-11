@@ -191,7 +191,8 @@ no caller authority.
 [Northflank](./nodes.md#cloud-machines-on-northflank) as well as E2B:
 `cloudMachines.configure` takes `provider: "northflank"` with its
 Northflank-only members, `cloudMachines.list` returns `providerKinds`, and
-placement takes the provider-neutral `target: "cloud"`. It is advertised only
+placement takes the provider-neutral request `target: "cloud"` (resolved
+placements still say `"e2b"` for every provider). It is advertised only
 together with `cloudMachineEntries: 1`. Clients offer Northflank, and send
 `target: "cloud"`, only when it is exactly `1`; they offer each kind in
 `providerKinds`. It grants no caller authority.
