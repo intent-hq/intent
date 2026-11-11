@@ -186,6 +186,17 @@ It is advertised only together with `cloudMachines: 1`. Clients send these
 members, and offer more than one entry, only when it is exactly `1`; it grants
 no caller authority.
 
+**Cloud machine providers (additive).** Exact integer
+`server.capabilities.cloudMachineProviders: 1` means entries can use
+[Northflank](./nodes.md#cloud-machines-on-northflank) as well as E2B:
+`cloudMachines.configure` takes `provider: "northflank"` with its
+Northflank-only members, `cloudMachines.list` returns `providerKinds`, and
+placement takes the provider-neutral request `target: "cloud"` (resolved
+placements still say `"e2b"` for every provider). It is advertised only
+together with `cloudMachineEntries: 1`. Clients offer Northflank, and send
+`target: "cloud"`, only when it is exactly `1`; they offer each kind in
+`providerKinds`. It grants no caller authority.
+
 **Remote scripts (additive).** Exact integer `server.capabilities.remoteScripts: 1`
 means a remote agent's `ws.script.*` calls are forwarded and the scripts it starts run on
 its machine, listed in `machineRuns` on their rows ([§5.8](./scripts.md#scripts-of-remote-agents-remotescripts-1)).

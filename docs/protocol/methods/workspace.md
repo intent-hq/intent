@@ -380,7 +380,7 @@ send it unchanged as `initialAgent.placement`:
 |---|---|
 | The backend | `{ "target": "local" }` |
 | A remote machine | `{ "target": "remote", "nodeId": "<the agent's nodeId>" }` |
-| An E2B sandbox | `{ "target": "e2b", "cloudMachineId": "<the agent's entry>" }` — a **new** sandbox from the same [named entry](./nodes.md#named-e2b-entries), never the proposer's own; `cloudMachineId` is omitted when the agent has no recorded entry |
+| A cloud machine (E2B or [Northflank](./nodes.md#cloud-machines-on-northflank)) | `{ "target": "e2b", "cloudMachineId": "<the agent's entry>" }` — a **new** sandbox from the same [named entry](./nodes.md#named-e2b-entries), of the same provider, never the proposer's own; `cloudMachineId` is omitted when the agent has no recorded entry |
 
 An E2B stamp without `cloudMachineId` follows the rule for an omitted `cloudMachineId` on
 an agent no other agent created: the only entry, else the legacy `"e2b"` entry, else
