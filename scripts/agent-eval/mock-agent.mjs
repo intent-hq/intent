@@ -123,6 +123,23 @@ function syncAccountSkills() {
   }
 }
 
+/**
+ * What Claude Code does when claude.ai connectors load: its session record in
+ * the config dir lists the connector's tools, and the agent can call one.
+ */
+const CONNECTOR_TOOL = 'mcp__claude_ai_Gmail__search_threads';
+function useConnector() {
+  const dir = process.env.EVAL_MOCK_CONFIG_DIR;
+  if (!dir) throw new Error('mock-agent: connector needs EVAL_MOCK_CONFIG_DIR');
+  const sessions = path.join(dir, 'projects', 'eval-mock');
+  fs.mkdirSync(sessions, { recursive: true });
+  const record = { type: 'attachment', attachment: { type: 'deferred_tools_delta', addedNames: [CONNECTOR_TOOL, 'mcp__workspace-mcp__workspace_api'] } };
+  fs.appendFileSync(path.join(sessions, `${SESSION_ID}.jsonl`), JSON.stringify(record) + '\n');
+  const toolCallId = `eval-mock-${++toolSeq}`;
+  update({ sessionUpdate: 'tool_call', toolCallId, title: CONNECTOR_TOOL, kind: 'other', status: 'pending', rawInput: { query: 'in:inbox' } });
+  update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'no threads' } }] });
+}
+
 async function prompt(id, params) {
   const text = (params?.prompt ?? []).filter((p) => p.type === 'text').map((p) => p.text).join('\n');
   const solution = loadSolutions().find((s) => text.includes(s.match));
@@ -130,6 +147,7 @@ async function prompt(id, params) {
   totals.inputTokens += used;
   update({ sessionUpdate: 'usage_update', used, size: 200000 });
   if (solution?.syncSkills) syncAccountSkills();
+  if (solution?.connector) useConnector();
   for (const step of solution?.steps ?? []) await runStep(step);
   const reply = solution?.reply ?? 'ready';
   totals.outputTokens += Math.ceil(reply.length / 4);

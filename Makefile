@@ -1507,7 +1507,9 @@ rpc: ## Send one JSON-RPC request to the running intentd: make rpc METHOD=worksp
 # command); it never reads ~/.claude or ~/.codex. Each run copies only that
 # sign-in into a fresh dir with the skill/plugin sync roots blocked, re-checks it
 # after every task-run, and fails the report if anything appeared (Claude Code
-# re-syncs account skills mid-run). MOCK_AGENT=1 runs the scripted smoke CI
+# re-syncs account skills mid-run). claude.ai account connectors are turned off
+# (ENABLE_CLAUDEAI_MCP_SERVERS=false) and the report fails if an agent was
+# offered or called one anyway. MOCK_AGENT=1 runs the scripted smoke CI
 # uses: no credentials, every task must pass and every negative control hold.
 AGENT_EVAL_BIN ?= $(or $(INTENTD_BIN),$(INTENTD_DIR)/target/debug/intentd)
 agent-eval: ## Compare harness versions with real agents: make agent-eval PROVIDER=claude-code MODEL=opus [HARNESS="3.9 3.10"] [N=1] [QUICK=1] [TASKS=a,b] [INTENTD_BIN=path] [MOCK_AGENT=1]

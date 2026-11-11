@@ -12,7 +12,9 @@
 // sign-in, with its skill/plugin sync roots blocked. Claude Code re-syncs the
 // account's skills on a timer, so the dir is re-checked after every task-run;
 // a run that saw anything is marked tainted, the entries are quarantined, and
-// the report fails.
+// the report fails. claude.ai account connectors are turned off through the
+// provider env; a run whose agent was offered or called one anyway (seen in the
+// provider's own session records or in agent:tool:call names) is tainted too.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -21,7 +23,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import { EVAL_CACHE, PROVIDERS, isolationLeaks, preflightProvider, quarantineLeaks, startDaemon, syncBackCredentials, versions } from './lib/daemon.mjs';
+import { EVAL_CACHE, PROVIDERS, connectorTraces, isConnectorTool, isolationLeaks, preflightProvider, quarantineLeaks, startDaemon, syncBackCredentials, versions } from './lib/daemon.mjs';
 import { renderMarkdown, summarize } from './lib/report.mjs';
 import { connect } from './lib/rpc.mjs';
 import { addScores, scoreTranscript } from './lib/score.mjs';
@@ -174,9 +176,11 @@ async function runTask({ arm, task, run, opts, root }) {
 
     let score = scoreTranscript([]);
     const agents = (await rpc.call('agent.list', { workspaceId })).agents ?? [];
+    const connectors = new Set();
     for (const a of agents) {
       const messages = await transcript(rpc, a.id, workspaceId);
       const events = toolEvents.get(a.id);
+      for (const name of connectorCalls(messages, events)) connectors.add(name);
       if (a.id === agent.id) {
         result.model = (await rpc.call('agent.get', { agentId: a.id, workspaceId })).agent.model ?? opts.model ?? null;
         ctx.lastReply = lastReplyOf(messages);
@@ -187,6 +191,7 @@ async function runTask({ arm, task, run, opts, root }) {
       }
     }
     result.agents = agents.length;
+    if (connectors.size) result.connectorTools = [...connectors].sort();
     result.score = score;
     await sleep(1500);
     result.tokens = tokenTotal((await rpc.call('workspace.getTokenUsage', { workspaceId })).tokenUsage) - trivialTokens;
@@ -202,11 +207,43 @@ async function runTask({ arm, task, run, opts, root }) {
   return result;
 }
 
+/** claude.ai connector tools an agent called, by transcript block or live event name. */
+export function connectorCalls(messages, events) {
+  const names = new Set();
+  for (const m of messages) {
+    for (const b of Array.isArray(m.blocks) ? m.blocks : []) {
+      if (b?.type !== 'tool_use') continue;
+      for (const n of [b.name, b.input?._acpTitle]) if (isConnectorTool(n)) names.add(n);
+    }
+  }
+  for (const ev of events?.values() ?? []) for (const n of [ev.toolName, ev.title]) if (isConnectorTool(n)) names.add(n);
+  return [...names];
+}
+
+/**
+ * Taint a task-run whose agent had claude.ai connector tools: those its agents
+ * called (`result.connectorTools`, from runTask) plus what the provider's own
+ * records in the config dir gained since the last check.
+ */
+export function checkConnectors(isolation, result) {
+  if (!isolation.spec?.connectors) return [];
+  const seen = new Set([...(result.connectorTools ?? []), ...connectorTraces(isolation.dir, isolation.spec, (isolation.scanned ??= new Map()))]);
+  if (!seen.size) return [];
+  const tools = [...seen].sort();
+  result.connectorTools = tools;
+  result.pass = false;
+  result.detail = `claude.ai connectors loaded (${tools.join(', ')}); ${result.detail ?? ''}`;
+  if (!result.control) (isolation.connectors ??= []).push({ task: result.task, harness: result.harness, run: result.run, tools });
+  return tools;
+}
+
 /**
  * Re-check the run's provider config after a task-run. Leaks taint the result
  * (a FAIL, never cached) and are quarantined so the next task-run starts clean.
+ * Connector tools taint it too (see checkConnectors).
  */
 export function checkIsolation(isolation, result) {
+  checkConnectors(isolation, result);
   if (!isolation.dir) return [];
   const leaks = isolationLeaks(isolation.dir, isolation.spec);
   if (!leaks.length) return leaks;
@@ -220,9 +257,10 @@ export function checkIsolation(isolation, result) {
 
 /**
  * Bump when the runner changes what a cached result means. 2: results are
- * isolation-checked (older entries may have run with synced skills).
+ * isolation-checked (older entries may have run with synced skills). 3: and
+ * connector-checked (older entries may have had claude.ai connectors).
  */
-export const BASELINE_SCHEMA = 2;
+export const BASELINE_SCHEMA = 3;
 
 /** A task's cache identity: everything that decides its outcome. */
 export const taskHash = (task) => hash([task.prompt, task.check.toString(), task.setup?.toString() ?? null, task.afterFirstTurn?.toString() ?? null]);
@@ -243,6 +281,11 @@ export function baselineCache(opts, ver) {
     get: (h, t, r) => (fs.existsSync(file(h, t, r)) ? { ...JSON.parse(fs.readFileSync(file(h, t, r), 'utf8')), cached: true } : null),
     put: (h, t, r, res) => fs.writeFileSync(file(h, t, r), JSON.stringify(res)),
   };
+}
+
+/** The report's connector record: the opt-out the provider got and what got through anyway. */
+export function connectorReport(providerEnv, seen) {
+  return { optOut: providerEnv?.ENABLE_CLAUDEAI_MCP_SERVERS ?? null, ok: seen.length === 0, seen };
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -272,7 +315,7 @@ export async function main(argv = process.argv.slice(2)) {
     fs.rmSync(root, { recursive: true, force: true });
     throw error;
   }
-  const isolation = { dir: configDir, spec: PROVIDERS[opts.provider], quarantine: path.join(root, 'quarantine'), leaks: [] };
+  const isolation = { dir: configDir, spec: PROVIDERS[opts.provider], quarantine: path.join(root, 'quarantine'), leaks: [], connectors: [], scanned: new Map() };
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const out = path.resolve(opts.out ?? path.join('.dev', 'agent-eval', `${stamp}-${opts.provider}`));
   fs.mkdirSync(out, { recursive: true });
@@ -303,7 +346,8 @@ export async function main(argv = process.argv.slice(2)) {
         const data = method === 'events.event' && params?.event?.type === 'agent:tool:call' ? params.event.data : null;
         if (!data?.toolCallId || !data.agentId) return;
         if (!toolEvents.has(data.agentId)) toolEvents.set(data.agentId, new Map());
-        toolEvents.get(data.agentId).set(data.toolCallId, { status: data.status, output: data.output });
+        const prev = toolEvents.get(data.agentId).get(data.toolCallId);
+        toolEvents.get(data.agentId).set(data.toolCallId, { status: data.status, output: data.output, toolName: data.toolName ?? prev?.toolName, title: data.title ?? prev?.title });
       });
       await rpc.call('events.subscribe', { eventTypes: ['agent:tool:call'] });
     }
@@ -314,7 +358,7 @@ export async function main(argv = process.argv.slice(2)) {
           const r = cached || (await runTask({ arm, task, run, opts, root }));
           if (!cached) checkIsolation(isolation, r);
           writeBack();
-          if (i === 0 && cache && !cached && !r.error && !r.isolationLeaks) cache.put(arm.harness, task, run, r);
+          if (i === 0 && cache && !cached && !r.error && !r.isolationLeaks && !r.connectorTools) cache.put(arm.harness, task, run, r);
           results.push(r);
           log(`${r.pass ? 'PASS' : 'FAIL'} ${arm.harness} ${task.id}#${run}${r.cached ? ' (cached)' : ''}: ${r.detail ?? ''}`);
         }
@@ -339,6 +383,7 @@ export async function main(argv = process.argv.slice(2)) {
     if (configDir) {
       const late = { task: '(after the last task-run)', harness: '-', run: '-' };
       if (checkIsolation(isolation, late).length) log(`config leak after the last task-run: ${late.isolationLeaks.join(', ')}`);
+      if (late.connectorTools) log(`claude.ai connectors after the last task-run: ${late.connectorTools.join(', ')}`);
       writeBack();
       fs.rmSync(configDir, { recursive: true, force: true });
     }
@@ -355,6 +400,7 @@ export async function main(argv = process.argv.slice(2)) {
     versions: ver,
     tasks: tasks.map((t) => t.id),
     isolation: { ok: isolation.leaks.length === 0, leaks: isolation.leaks },
+    ...(isolation.spec?.connectors ? { connectors: connectorReport(providerEnv, isolation.connectors) } : {}),
     results: taskResults,
     controls: controlResults.map(({ task, harness, control, held, detail }) => ({ task, harness, expect: control, held, detail })),
     summary: summarize(taskResults, opts.harness),
@@ -368,6 +414,10 @@ export async function main(argv = process.argv.slice(2)) {
   if (failure) throw failure;
   if (!report.isolation.ok) {
     log(`provider config leaked into ${isolation.leaks.length} task-run(s); the report is not trustworthy (see Isolation in report.md)`);
+    return 1;
+  }
+  if (report.connectors && !report.connectors.ok) {
+    log(`claude.ai connectors reached ${report.connectors.seen.length} task-run(s); the report is not trustworthy (see claude.ai connectors in report.md)`);
     return 1;
   }
   if (report.controls.some((c) => !c.held)) {

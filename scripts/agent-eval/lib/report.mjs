@@ -49,6 +49,18 @@ export function renderMarkdown(report) {
   } else if (report.isolation) {
     lines.push('Isolation: ok (provider config re-checked after every task-run).', '');
   }
+  if (report.connectors && !report.connectors.ok) {
+    lines.push(
+      '## claude.ai connectors: FAILED',
+      '',
+      `The agents below were offered or called claude.ai account connectors (ENABLE_CLAUDEAI_MCP_SERVERS=${report.connectors.optOut ?? 'unset'}; an intentd that does not forward it leaves them on). Do not trust this report.`,
+      '',
+      ...report.connectors.seen.map((c) => `- ${c.harness} ${c.task}#${c.run}: ${cell(c.tools.join(', '))}`),
+      '',
+    );
+  } else if (report.connectors) {
+    lines.push(`claude.ai connectors: none seen (ENABLE_CLAUDEAI_MCP_SERVERS=${report.connectors.optOut ?? 'unset'}).`, '');
+  }
   const metrics = [
     ['Passed', 'passed'],
     ['Runner errors', 'errors'],
