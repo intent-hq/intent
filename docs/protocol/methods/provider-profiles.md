@@ -697,7 +697,7 @@ metadata = {
   toProvider: string;     // the profile reference that runs instead
   model: string | null;   // the agent's model; null = provider default
   reason: "machine-signed-out" | "sandbox-no-sign-in";
-  machine: string;        // the machine's name, or "E2B"
+  machine: string;        // the machine's name, or the cloud entry's name, for example "E2B"
 }
 ```
 
@@ -822,7 +822,7 @@ interface DefaultConfig {
 }
 type DefaultRemoteLaunch =
   | "send"             // marked: its overrides are sent (none saved: nothing is sent)
-  | "machine-sign-in"  // not marked: nothing is sent; the machine's own sign-in runs it (refused on E2B)
+  | "machine-sign-in"  // not marked: nothing is sent; the machine's own sign-in runs it (refused on cloud machines)
   | "refused";         // its saved environment cannot be read: launches fail closed
 ```
 
@@ -976,7 +976,7 @@ See [provider credentials](../node-link.md#provider-credentials-profile-environm
 Only a configuration the user marked [remote-compatible](#remote-compatibility)
 is sent. The [launch rules](./nodes.md#placement-across-machines) decide every
 remote launch: placement, sub-agents, `agent.setModel` and quota failover. An
-unmarked profile, or an unmarked Default on E2B, fails before any write with
+unmarked profile, or an unmarked Default on a cloud machine, fails before any write with
 `-32602` `profile-not-remote-compatible`
 ([remote machine errors](./nodes.md#remote-machine-errors)). A remote agent can
 switch to another allowed configuration or model that its machine offers; see
@@ -1009,12 +1009,12 @@ machines** of that base provider, in the saved profile order, instead:
   of the provider as candidates (their CLI must be installed); it chooses a
   machine as usual; **then**, if the chosen machine is signed out, the profile is
   sent ([placement across machines](./nodes.md#placement-across-machines), step 5);
-- on [E2B](./nodes.md#placement-on-e2b), which has no sign-in; there the profile
+- on a [cloud machine](./nodes.md#placement-on-e2b) (E2B or Northflank), which has no sign-in; there the profile
   must also send a set variable.
 
 A machine whose sign-in is `signed-in` or `unknown` runs the Default on its own
 sign-in first. Only when no marked profile qualifies does the original refusal
-stand (`machine-not-signed-in`, or on E2B `profile-not-remote-compatible` /
+stand (`machine-not-signed-in`, or on a cloud machine `profile-not-remote-compatible` /
 `cloud-profile-required`). A profile chosen explicitly is never replaced. The
 agent is created on the picked profile: its `provider` is that profile's
 reference, so lists and detail reads show it, and its transcript gets one
@@ -1033,7 +1033,7 @@ was `unknown` and then fails on authentication reports `node-provider-signed-out
 ([machine codes](../node-link.md#machine-start-failure-codes)).
 
 There is no setting to stop a machine using its own sign-in. On
-[E2B](./nodes.md#placement-on-e2b) the CLIs are never signed in, so only the
+[cloud machines](./nodes.md#placement-on-e2b) (E2B and Northflank) the CLIs are never signed in, so only the
 second rule applies. Providers without profiles have only the first.
 
 #### Compatibility

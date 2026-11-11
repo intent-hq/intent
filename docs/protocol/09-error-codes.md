@@ -212,8 +212,11 @@ retryable }`) and `cloud-machine-unavailable` with `reason`
 E2B entry, several exist and none is `"e2b"`; data adds `entries`). All three carry the
 optional `cloudMachineId` of the named E2B entry. `-32603`: `cloud-machine-unavailable` with
 the other reasons (`api-error`, `template-missing`, `bootstrap-failed`,
-`sandbox-lost`). After a placement reply the same codes arrive as the agent's
-`placementError.code`. No error carries the E2B key.
+`sandbox-lost`). With [Northflank entries](./methods/nodes.md#cloud-machines-on-northflank)
+(`cloudMachineProviders: 1`), `provider` in all three datas can be
+`"northflank"`, and `cloud-machine-unavailable` adds the `-32602` reasons
+`project-missing` and `permission-denied` (data adds `action`). After a placement reply the same codes arrive as the agent's
+`placementError.code`. No error carries the E2B key or the Northflank token.
 
 ### Truncated note read errors
 

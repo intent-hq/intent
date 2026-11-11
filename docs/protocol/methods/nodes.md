@@ -346,6 +346,10 @@ advertises it only together with `remoteMachines: 1`.
 `client.hello.server.capabilities.cloudMachineEntries: 1` means it keeps
 several [named E2B entries](#named-e2b-entries); it is advertised only together
 with `cloudMachines: 1`.
+`client.hello.server.capabilities.cloudMachineProviders: 1` means entries can
+also use [Northflank](#cloud-machines-on-northflank), placement accepts the
+provider-neutral `target: "cloud"`, and `cloudMachines.list` returns
+`providerKinds`; it is advertised only together with `cloudMachineEntries: 1`.
 
 ##### Machine methods: executor credentials
 
@@ -638,7 +642,8 @@ remote placement needs `target` omitted or `"remote"` and `checkout` omitted or
 `agent.delegate` a remote `placement` combined with `isolation` fail with
 `-32602`. With `cloudMachines: 1`, `target: "e2b"` starts the agent on a new
 [cloud machine](#placement-on-e2b), from the entry that the optional
-`cloudMachineId` names. `placement: { "target": "local" }` (no other
+`cloudMachineId` names; with `cloudMachineProviders: 1`, `target: "cloud"`
+does the same for an entry of any provider. `placement: { "target": "local" }` (no other
 members), from any caller, means "run on the backend": it creates an ordinary
 local agent, as if no placement were sent, and on `agent.delegate` it may be
 combined with `isolation`. `target: "local"` with `os`, `arch`, `nodeId`,
@@ -793,6 +798,7 @@ An explicit `placement` wins. A remote parent, on a machine or on a
 | `{ "target": "remote", "nodeId": <a machine> }`, or `os` / `arch` | That machine, admitted as usual; it may be the parent's own |
 | `{ "target": "remote", "nodeId": <a sandbox of the chain> }` | That sandbox ([cloud machine rows](#cloud-machine-rows), item 4) |
 | `{ "target": "e2b", "cloudMachineId"? }` | A **new** sandbox that the sub-agent owns ([placement on E2B](#placement-on-e2b)), also when the parent itself runs on a sandbox; without `cloudMachineId`, from the entry of the nearest agent in the chain that has one ([entry rules](#placement-on-e2b)) |
+| `{ "target": "cloud", "cloudMachineId"? }` | The same, from an entry of any provider, for example a new Northflank service |
 | `{ "target": "local" }` | The backend ([backend sub-agents](#backend-sub-agents-of-remote-agents)) |
 
 What the child starts from depends only on where it runs, as in the table
@@ -820,8 +826,8 @@ work never fails the create.
 ###### Who pays for a sandbox an agent starts
 
 A sandbox started for an agent that another agent creates (a sub-agent with
-`target: "e2b"`, or a top-level agent that an agent creates with
-`target: "e2b"`) runs in the E2B project of its [entry](#named-e2b-entries),
+`target: "e2b"` or `"cloud"`, or a top-level agent that an agent creates with
+one of them) runs in the E2B or Northflank project of its [entry](#named-e2b-entries),
 like every sandbox. Its
 `cloud.startedBy` is the person behind the creating agent's chain: the
 backend walks up from the creating agent (that agent first) and takes the
@@ -831,8 +837,8 @@ example for an agent created before the backend recorded its creator). That
 person is the sandbox's *starter*, so they can `cloudMachines.pause` and
 `cloudMachines.kill` it. A sandbox placed by a user or client names that
 caller, as before. There is no cap on the number of sandboxes that agents
-start; E2B's plan limits are the only limit, and a refused create fails that
-agent with `cloud-quota`.
+start; the provider's plan limits and quotas are the only limit, and a refused
+create fails that agent with `cloud-quota`.
 
 ###### When a parent stops
 
@@ -870,7 +876,7 @@ providers each machine offers follows
 | The Default | Yes | Its overrides are sent. With none, nothing is sent and the machine's own sign-in runs it, as in the next row. |
 | The Default | No | Nothing is sent. The machine's own sign-in runs it, if the provider is detected and not disabled there. A machine whose sign-in is `unknown` is still tried. On a `signed-out` or `auth-failed` one, admission [auto-picks](./provider-profiles.md#remote-auto-pick) the first marked profile of that provider; with none it is refused with `machine-not-signed-in`. |
 | A provider without profiles (for example Unsloth) | — | Allowed. Nothing is sent. The model must be on that machine's own list (`model-unavailable` otherwise). |
-| Anything, on [E2B](#placement-on-e2b) | — | Must send a `profileEnv` (`cloud-profile-required` otherwise, as today), and a profile or Default must also be marked. The machine's own sign-in never applies, because a sandbox has no sign-in. A plain Default that cannot run there [auto-picks](./provider-profiles.md#remote-auto-pick) the first marked profile that sends a set variable. |
+| Anything, on a [cloud machine](#placement-on-e2b) (E2B or Northflank) | — | Must send a `profileEnv` (`cloud-profile-required` otherwise, as today), and a profile or Default must also be marked. The machine's own sign-in never applies, because a cloud machine has no sign-in. A plain Default that cannot run there [auto-picks](./provider-profiles.md#remote-auto-pick) the first marked profile that sends a set variable. |
 
 A **machine sign-in launch** is a launch of the bare `codex` or `claude-code`
 reference that sends nothing: an unmarked Default, or a marked Default with no
@@ -1143,15 +1149,20 @@ backend resolves no identity, nothing is set, and a commit fails or falls back
 to the machine's own git identity. No method, setting or result member is added, and a machine
 from before starts its agents as before.
 
-##### Cloud machines (E2B)
+<a id="cloud-machines-e2b"></a>
 
-A *cloud machine* is a remote machine that the backend starts itself, in an
-[E2B](https://e2b.dev) sandbox, with an E2B API key that the backend owner
-saved in a [named entry](#named-e2b-entries). Each
+##### Cloud machines
+
+A *cloud machine* is a remote machine that the backend starts itself, with a
+key that the backend owner saved in a [named entry](#named-e2b-entries). Each
+entry has a *cloud provider* (`provider`): an [E2B](https://e2b.dev) entry
+starts sandboxes, and a [Northflank](#cloud-machines-on-northflank) entry
+starts Northflank services. This section calls either one a *sandbox* unless a
+rule names the provider. Each
 sandbox runs a normal intentd daemon with a fresh identity and is used as an
 exposed machine over the unchanged
 [executor link](../node-link.md#cloud-machines). The backend creates one
-sandbox for each agent placed with `target: "e2b"`, top-level or sub-agent;
+sandbox for each agent placed with `target: "e2b"` or `"cloud"`, top-level or sub-agent;
 that agent's sub-agents share it unless they are given another
 [placement](#sub-agents-of-remote-agents). The sandbox pauses when it is idle and is deleted when its agent
 ends for good.
@@ -1167,16 +1178,16 @@ authority.
 
 | Method | Who | Params | Result |
 | --- | --- | --- | --- |
-| cloudMachines.configure | Owner | cloudMachineId? (the entry to update; omit to create one), name? (1-64 UTF-8 bytes; required to create a new entry), provider? (`"e2b"`, the only value; default `"e2b"`), apiKey? (secret; required to create an entry unless `apiKeyFrom` is given), apiKeyFrom? (the `cloudMachineId` of another entry whose saved key this entry copies), size? (one of the entry's `sizes`; default `"4x8"`), idlePauseMinutes? (1-1440, default 10), pausedDeleteDays? (1-30, default 7), templateProject? (E2B project slug that publishes the templates; default Intent's E2B project), validateOnly? (boolean, default false) | `{ provider: CloudMachineProvider }`; creates or updates one entry ([which entry](#named-e2b-entries)); with `apiKey` or `apiKeyFrom`, tests the key with one E2B read before it saves anything; an omitted member keeps its saved value. With `validateOnly: true` it saves nothing and emits no event: it tests the given key (or else the entry's saved one; with neither it fails `cloud-machine-unavailable` reason `not-configured`) and checks that the template `<templateProject>/intent-node-<size>:<intentdVersion>` exists, then returns the entry as it would be saved, with `state: "ready"`. Any failed test is an error, never a result: a rejected key is `key-rejected`, a missing template `template-missing`, an E2B failure `api-error` (all `cloud-machine-unavailable`). A normal save runs the same tests first |
-| cloudMachines.list | Owner, members | — | `{ providers: CloudMachineProvider[], machines: RemoteMachine[] }`; `providers` are the entries, in creation order; `machines` are the live cloud machines of every entry, each with `cloud`; a member sees only the machines of workspaces they can manage; never returns a key |
-| cloudMachines.remove | Owner | cloudMachineId? (the entry; default `"e2b"`), provider? (`"e2b"`, the only value), stopAgents? (boolean, default false) | `{ ok: true, unconfirmedStops: string[] }`; removes one entry; with any sandbox of that entry (running or paused) and no `stopAgents: true` fails `-32602` `machine-in-use` with `runningAgents`; with `stopAgents: true` sends each agent on that entry's sandboxes a final stop, waits at most 90 s, then deletes those sandboxes, their machine rows, the entry and its key ([removing an entry](#named-e2b-entries)); an id that names no entry is a no-op, and any other `provider` is `-32602` `invalid-params` |
+| cloudMachines.configure | Owner | cloudMachineId? (the entry to update; omit to create one), name? (1-64 UTF-8 bytes; required to create a new entry), provider? (`CloudProviderKind`; default `"e2b"` on create; on update it must equal the entry's provider), apiKey? (secret: an E2B API key, or a Northflank API token; required to create an entry unless `apiKeyFrom` is given), apiKeyFrom? (the `cloudMachineId` of another entry of the same provider whose saved key this entry copies), size? (one of the entry's `sizes`; default `"4x8"`), idlePauseMinutes? (1-1440, default 10), pausedDeleteDays? (1-30, default 7), validateOnly? (boolean, default false); E2B only: templateProject? (E2B project slug that publishes the templates; default Intent's E2B project); Northflank only ([settings](#northflank-entries)): projectId? (required to create), plans?, image?, diskGiB? | `{ provider: CloudMachineProvider }`; creates or updates one entry ([which entry](#named-e2b-entries)); with `apiKey` or `apiKeyFrom`, tests the key with one provider read before it saves anything; an omitted member keeps its saved value. A member of the other provider is `-32602` `invalid-params`. With `validateOnly: true` it saves nothing and emits no event: it tests the given key (or else the entry's saved one; with neither it fails `cloud-machine-unavailable` reason `not-configured`) and checks that what the entry starts exists (E2B: the template `<templateProject>/intent-node-<size>:<intentdVersion>`; Northflank: the project, the plans and the image), then returns the entry as it would be saved, with `state: "ready"`. Any failed test is an error, never a result: a rejected key is `key-rejected`, a missing template or image `template-missing`, a provider failure `api-error`, and on Northflank also `project-missing` and `permission-denied` (all `cloud-machine-unavailable`). A normal save runs the same tests first |
+| cloudMachines.list | Owner, members | — | `{ providers: CloudMachineProvider[], machines: RemoteMachine[], providerKinds?: CloudProviderKind[] }`; `providers` are the entries, in creation order; `machines` are the live cloud machines of every entry, each with `cloud`; `providerKinds` (only with `cloudMachineProviders: 1`) are the providers this backend can configure, in the order a client offers them, for example `["e2b", "northflank"]`; a member sees only the machines of workspaces they can manage; never returns a key |
+| cloudMachines.remove | Owner | cloudMachineId? (the entry; default `"e2b"`), provider? (`CloudProviderKind`; when given, it must equal the entry's provider), stopAgents? (boolean, default false) | `{ ok: true, unconfirmedStops: string[] }`; removes one entry; with any sandbox of that entry (running or paused) and no `stopAgents: true` fails `-32602` `machine-in-use` with `runningAgents`; with `stopAgents: true` sends each agent on that entry's sandboxes a final stop, waits at most 90 s, then deletes those sandboxes (on Northflank, each service with its volume), their machine rows, the entry and its key ([removing an entry](#named-e2b-entries)); an id that names no entry is a no-op, and a `provider` that is not the entry's is `-32602` `invalid-params` |
 | cloudMachines.pause | Owner, starter | machineId (req) | `{ machine: RemoteMachine }`; pauses the sandbox now; while an agent on it has a running turn fails `-32602` `machine-in-use` with `runningAgents`; an already paused sandbox is returned unchanged |
 | cloudMachines.kill | Owner, starter | machineId (req) | `{ ok: true, unconfirmedStops: string[] }`; sends each agent on the sandbox a final stop (resuming a paused sandbox first), waits at most 90 s, then deletes the sandbox and its machine row even when stops are unconfirmed |
 
 - **Who.** *Owner* is the local UDS seat or a WSS connection with the owner
   token. *Members* are [shared-host members](./shared-host-membership.md#member-execution-and-safe-host-reads),
-  who can also place agents on E2B: their agents spend the owner's E2B
-  account, with no per-person cap. *Starter* is the principal in
+  who can also place agents on cloud machines: their agents spend the owner's
+  E2B or Northflank account, with no per-person cap. *Starter* is the principal in
   `cloud.startedBy`: the caller of the placing method, or for a placement made
   by an agent the person behind its chain
   ([who pays](#who-pays-for-a-sandbox-an-agent-starts)). Others get `-32003`.
@@ -1190,7 +1201,9 @@ authority.
   go unconfirmed, `kill` and `remove` delete the sandbox anyway: a sandbox costs
   money while it runs, and a broken one must still be removable.
 - **Key.** An E2B API key belongs to exactly one E2B project; an entry's
-  sandboxes run in that project, under its plan and limits. The backend keeps
+  sandboxes run in that project, under its plan and limits. A Northflank
+  entry's key is an API token, and its services run in the entry's
+  `projectId`. Both are kept the same way, as `apiKey`. The backend keeps
   each entry's key in its secret store under `cloudMachines.<cloudMachineId>.apiKey`
   (`cloudMachines.e2b.apiKey` for the entry `"e2b"`). An entry holds only this
   reference; `apiKeyFrom` copies the other entry's key into the new account, so
@@ -1200,20 +1213,23 @@ authority.
   [excluded from workspace routing](../workspace-routing.md#excluded-methods-and-variants).
 
 ```ts
+type CloudProviderKind = "e2b" | "northflank"; // open: clients skip an entry whose kind they do not know
+
 interface CloudMachineProvider {               // one named entry
-  id: string;                              // the cloudMachineId: "e2b" or "e2b-<12 lowercase hex>"
-  provider: "e2b";                         // the cloud provider kind
+  id: string;                              // the cloudMachineId: "e2b", "e2b-<12 lowercase hex>" or "northflank-<12 lowercase hex>"
+  provider: CloudProviderKind;             // the cloud provider kind
   name: string;                            // the entry's name, for example "E2B" or "Team project"
-  state: "ready" | "key-rejected" | "unreachable"; // result of the last E2B call
-  template: string;                        // the template the backend starts: "<templateProject>/intent-node-<size>:<intentdVersion>"
-  templateProject: string;                    // E2B project slug that publishes the templates
-  agentProviders: string[];                // base provider ids whose CLIs the templates install, for example "claude-code"
-  sizes: CloudMachineSizeInfo[];           // published sizes for this intentd version, smallest first
+  state: "ready" | "key-rejected" | "unreachable"; // result of the last provider call
+  template: string;                        // what the backend starts: the E2B template "<templateProject>/intent-node-<size>:<intentdVersion>", or the Northflank image "<image>:<intentdVersion>"
+  templateProject?: string;                // E2B only: project slug that publishes the templates
+  agentProviders: string[];                // base provider ids whose CLIs the templates or image install, for example "claude-code"
+  sizes: CloudMachineSizeInfo[];           // sizes this entry can start, smallest first
   size: CloudMachineSize;                  // the size new sandboxes use
   idlePauseMinutes: number;
   pausedDeleteDays: number;
   configuredAt: string;
-  checkedAt?: string;                      // last successful E2B call
+  checkedAt?: string;                      // last successful provider call
+  northflank?: NorthflankEntrySettings;    // Northflank only
 }
 
 type CloudMachineSize = "2x4" | "4x8" | "8x16" | "16x32"; // <vCPU>x<GiB>
@@ -1222,11 +1238,12 @@ interface CloudMachineSizeInfo {
   id: CloudMachineSize;
   vcpu: number;                            // 2, 4, 8, 16
   memoryMiB: number;                       // 4096, 8192, 16384, 32768
-  plan: "hobby" | "pro-raised-limits";     // the lowest E2B plan that allows it
+  plan?: "hobby" | "pro-raised-limits";    // E2B only: the lowest E2B plan that allows it
+  deploymentPlan?: string;                 // Northflank only: the deployment plan id, for example "nf-compute-400"
 }
 ```
 
-Each size is its own template. With every intentd release Intent publishes, under
+On E2B, each size is its own template. With every intentd release Intent publishes, under
 `<templateProject>/`, each tagged `<intentdVersion>` and `latest`:
 
 | Size | Template | vCPU | Memory | E2B plan |
@@ -1243,6 +1260,9 @@ build E2B refuses for resource limits, and does not fail. A skipped size gets no
 `<intentdVersion>` tag, and its `latest` tag stays on the last release that
 built it. The `plan` column of `sizes` describes E2B's plans; it does not depend
 on `templateProject`.
+
+The rules below are for E2B entries; Northflank sizes are in
+[Northflank entries](#northflank-entries).
 
 - **Published sizes only.** `sizes` lists only the sizes whose
   `<templateProject>/intent-node-<size>:<intentdVersion>` tag exists. The backend
@@ -1266,16 +1286,21 @@ on `templateProject`.
 
 ###### Named E2B entries
 
-The owner can save several E2B *entries*. Each entry has its own id, name, key
-(so entries can use different E2B projects), template project, size,
-`idlePauseMinutes` and `pausedDeleteDays`. Every `CloudMachineProvider` row is
+The owner can save several *entries*, of E2B or (with
+`cloudMachineProviders: 1`) Northflank. Each entry has its own id, name,
+provider, key (so entries can use different projects), size,
+`idlePauseMinutes` and `pausedDeleteDays`, plus its provider's own settings.
+An entry's provider never changes. Every `CloudMachineProvider` row is
 one entry, and every sandbox belongs to the entry it started from. A backend
 that keeps entries advertises `cloudMachineEntries: 1`. Clients send
 `cloudMachineId`, `name` and `apiKeyFrom` only when it is exactly `1`.
 
 - **Ids.** The backend picks the id when it creates the entry and never
-  changes it: `"e2b"` while no entry has that id, else
-  `"e2b-<12 lowercase hex>"`. A `cloudMachineId` that is not a string of at
+  changes it: for E2B, `"e2b"` while no entry has that id, else
+  `"e2b-<12 lowercase hex>"`; for Northflank, always
+  `"northflank-<12 lowercase hex>"`, so the id `"e2b"` always names an E2B
+  entry. Clients never parse the provider from an id; they read `provider`.
+  A `cloudMachineId` that is not a string of at
   most 64 bytes is `-32602` `invalid-params`. A string that names no entry
   gets a different answer on each method, on purpose:
 
@@ -1292,14 +1317,21 @@ that keeps entries advertises `cloudMachineEntries: 1`. Clients send
   `nodeName` (each publishes `agent:updated`).
 - **Limit.** At most 16 entries. Creating a 17th is `-32602` `invalid-params`.
 - **Which entry `configure` writes.** With `cloudMachineId`, that entry.
-  Without it, and with `name`, a new entry. Without both (the call an older
+  Without it, and with `name`, a new entry of `provider` (default `"e2b"`).
+  Without both (the call an older
   client sends), the entry `"e2b"`; when it does not exist, the call creates it
   with the first free name of `"E2B"`, `"E2B 2"`, `"E2B 3"` and so on, so it
-  never fails on the name. Creating needs `apiKey` or `apiKeyFrom`, else
-  `cloud-machine-unavailable` reason `not-configured`. With `validateOnly`, a
+  never fails on the name. `provider: "northflank"` without `cloudMachineId`
+  needs `name`, else `-32602` `invalid-params`. Creating needs `apiKey` or
+  `apiKeyFrom`, else `cloud-machine-unavailable` reason `not-configured`, and a
+  Northflank entry also needs `projectId`, else `-32602` `invalid-params`. A
+  `provider` that differs from the entry's on an update is `-32602`
+  `invalid-params`. With `validateOnly`, a
   call that would create an entry runs every create check (name, limit,
-  `apiKeyFrom`, key, template) and returns the row with `id: ""`.
-- **Copying a key.** `apiKeyFrom` names another entry, on create or update. The
+  `apiKeyFrom`, key, template or image, and on Northflank project and plans)
+  and returns the row with `id: ""`.
+- **Copying a key.** `apiKeyFrom` names another entry of the same provider, on
+  create or update; an entry of the other provider is `-32602` `invalid-params`. The
   backend copies that entry's saved key into this entry's own secret account
   once: a later key change on either entry does not reach the other. An entry
   with no saved key is `-32602` `not-found`; this entry's own id, or
@@ -1308,8 +1340,8 @@ that keeps entries advertises `cloudMachineEntries: 1`. Clients send
   (see the method). Agents left on the entry, with no sandbox, lose
   `placement.cloudMachineId`; their next start picks an entry again as for an
   omitted `cloudMachineId` ([placement on E2B](#placement-on-e2b)), so a later
-  entry that reuses the id `"e2b"` never inherits them by accident. When E2B
-  would not delete a sandbox (for example a rejected key), the backend keeps
+  entry that reuses the id `"e2b"` never inherits them by accident. When the
+  provider would not delete a sandbox (for example a rejected key), the backend keeps
   the removed entry's key, hidden from every read, only for the reaper. It
   deletes that key once the reaper finds no sandbox with this backend's
   metadata left in the entry's project.
@@ -1323,9 +1355,12 @@ that keeps entries advertises `cloudMachineEntries: 1`. Clients send
   events by id, so events about other entries do not change what it shows. It
   keeps working with the entry `"e2b"`: it configures and removes it, and its
   placements fall back to it ([placement on E2B](#placement-on-e2b)). It does
-  not show the other entries, and it still lists and can kill their sandboxes,
-  because their machine rows keep `cloud.provider: "e2b"`. When no entry
-  `"e2b"` exists, it shows E2B as not configured.
+  not show the other entries, and it still lists and can kill the sandboxes of
+  other E2B entries, because their machine rows keep `cloud.provider: "e2b"`.
+  It may list a Northflank machine as an E2B one; `cloudMachines.kill` still
+  works on it. When no entry `"e2b"` exists, it shows E2B as not configured.
+  A client that knows `provider` skips an entry, and shows a machine row
+  without provider details, when the provider is one it does not know.
 
 ###### Cloud machine rows
 
@@ -1343,14 +1378,15 @@ interface RemoteMachine {
 }
 
 interface CloudMachineState {
-  provider: "e2b";
+  provider: CloudProviderKind;
   cloudMachineId: string;                  // the entry the sandbox started from
-  sandboxId: string;                       // E2B's sandbox id
+  sandboxId: string;                       // E2B's sandbox id, or the Northflank service id
+  volumeId?: string;                       // Northflank only: the service's volume id
   state: "running" | "pausing" | "paused" | "resuming" | "stopping";
-  template: string;                        // the template this sandbox started from
+  template: string;                        // the template or image this sandbox started from
   size: CloudMachineSize;
   startedBy: { principalId: string; displayName: string | null };
-  agentId: string;                         // the agent the sandbox was started for: top-level, or a sub-agent placed with target "e2b"
+  agentId: string;                         // the agent the sandbox was started for: top-level, or a sub-agent placed with target "e2b" or "cloud"
   workspaceId: string;
   startedAt: string;
   runningSeconds: number;                  // seconds not paused since start, for cost estimates
@@ -1381,37 +1417,50 @@ and to member connections for the providers and for the machines of workspaces
 they can manage, as `cloudMachines.list` shows them. It never goes to guests and
 never carries the key.
 
-###### Placement on E2B
+<a id="placement-on-e2b"></a>
+
+###### Placement on a cloud machine
 
 `placement: { "target": "e2b", "cloudMachineId"?: string }` is accepted
 wherever the [placement subset](#placement-subset) accepts a remote placement,
 including batch entries and `workspace.create`'s `initialAgent.placement`.
+With `cloudMachineProviders: 1`, so is the provider-neutral
+`placement: { "target": "cloud", "cloudMachineId"?: string }`; without it,
+`target: "cloud"` is `-32602` `invalid-params`. The two differ only in which
+entries they may use: `"e2b"` only E2B entries, `"cloud"` the entries of every
+provider. A `cloudMachineId` that names a Northflank entry with
+`target: "e2b"` is `-32602` `invalid-params`.
 `checkout` may be omitted or `"isolated"`. `os`, `arch`, `nodeId` and
 `exclusive` fail with `-32602`, and so does `cloudMachineId` with any other
-`target`. A placement with `target: "e2b"` always starts a new sandbox for the
+`target`. A placement with either target always starts a new sandbox for the
 placed agent, also from an agent that already runs on a cloud machine. A
 sub-agent shares its parent's sandbox only with an omitted placement or the
 sandbox's `nodeId` ([sub-agents of remote agents](#sub-agents-of-remote-agents)).
 One sandbox serves the agent it was started for (`cloud.agentId`) and the
 sub-agents that share it.
 
-The [entry](#named-e2b-entries) is, in this order:
+The [entry](#named-e2b-entries) is, in this order, among the entries the
+target may use:
 
-1. With no entry at all: `cloud-machine-unavailable` reason `not-configured`.
+1. With no such entry at all: `cloud-machine-unavailable` reason `not-configured`.
 2. The entry that `cloudMachineId` names.
 3. Without it, for an agent that another agent creates: the entry of the
    nearest agent in the creating agent's chain (that agent first) whose
    `placement.cloudMachineId` is set. Agents on the backend, on other machines,
-   or whose entry was removed are skipped.
-4. Else the only entry.
-5. Else the entry `"e2b"`, so that an older client's placement still starts.
+   whose entry was removed, or whose entry the target may not use are skipped.
+4. Else the only such entry.
+5. Else the entry `"e2b"`, so that an older client's placement still starts
+   (`target: "e2b"` only).
 6. Else `cloud-machine-unavailable` reason `entry-required`, whose `entries`
-   name every entry so that the caller can choose one.
+   name every such entry so that the caller can choose one.
 
 The resolved placement always carries the entry's `cloudMachineId`, on the
 reply and on later reads, and a new sandbox for the same agent (an
 [agent without a sandbox](#sandbox-lifecycle)) uses the same entry while it
-exists.
+exists. Its `target` follows the entry, not the request: `"e2b"` for an E2B
+entry, so older clients see E2B agents as before, and `"cloud"` for any other
+provider. Clients treat both targets as a cloud machine and read the provider
+from the entry. An agent whose entry was removed keeps its `target`.
 
 Admission runs these checks in order, before any write, sandbox or charge. Checks
 2 and 3 also run for every agent placed onto an existing sandbox (a sub-agent
@@ -1435,22 +1484,24 @@ carries a `profileEnv`:
    such variables. The Default configuration with no overrides sends none, even
    when it is marked `remoteCompatible`. Clients use the same rule on the
    [profile reads](./provider-profiles.md#remote-compatibility) to show which
-   configurations can run on E2B. For an agent on a cloud machine,
+   configurations can run on a cloud machine. For an agent on a cloud machine,
    `agent.setModel` to such a configuration fails with `cloud-profile-required`,
    and [backup failover](./provider-profiles.md#backup-failover) skips it.
 4. The base provider is in the entry's `agentProviders`, else `model-unavailable`
    with an empty `machines` and `retryable: false`. The model is checked only
    when the sandbox reports its capabilities.
 
-The reply then returns the agent with `placement.target: "e2b"`,
+The reply then returns the agent with the resolved `placement.target`,
 `placement.cloudMachineId`, the entry's name as `nodeName`,
 `effectiveIsolation: "pending"`, no `nodeId`, and `cloudStart: { step }`. The backend starts the sandbox after the reply:
 
 | Step | Work |
 | --- | --- |
-| `creating-sandbox` | Create the sandbox from the entry's template with the entry's key, with the backend's metadata |
+| `creating-sandbox` | Create the sandbox from the entry's template with the entry's key, with the backend's metadata (on Northflank: the volume, then the service, [below](#northflank-services)) |
 | `starting-daemon` | Start intentd and tailcat in the sandbox, then mint its executor credential |
 | `connecting` | Add the hidden machine row and bind the executor link |
+
+The step names are the same for every provider.
 
 When the link binds, the agent gets `nodeId` and loses `cloudStart`; the
 checkout and setup continue as for any
@@ -1467,7 +1518,9 @@ comes back for that start and a new start clears the old `placementError`.
 
 A sandbox is *busy* while any agent on it has a running turn, a queued
 message, a pending permission request, or a live script run on the machine
-(`machineRuns`). Otherwise it is *idle*.
+(`machineRuns`). Otherwise it is *idle*. The table is for E2B; a Northflank
+machine follows it except where
+[Northflank pause and resume](#northflank-pause-and-resume) says otherwise.
 
 | Event | Backend action |
 | --- | --- |
@@ -1482,7 +1535,7 @@ message, a pending permission request, or a live script run on the machine
 
 **Agent without a sandbox.** When its sandbox is deleted for any reason other
 than the agent's own delete, the backend drops the agent's lease and machine
-row but keeps the agent, with `placement.target: "e2b"` and no `nodeId`. Its next
+row but keeps the agent, with its cloud `placement.target` and no `nodeId`. Its next
 message, also after a restore, starts a new sandbox as at placement, and the
 launch [relaunches without a checkout](../node-link.md#relaunch-without-a-checkout)
 from its saved `head` and `wip`. Work it did not push is lost; its first turn
@@ -1490,7 +1543,7 @@ there gets the [new machine notice](../node-link.md#relaunch-without-a-checkout)
 which says so. When its entry was removed, that start picks an entry again
 ([removing an entry](#named-e2b-entries)).
 
-**Template.** The backend starts only the template tagged with its own exact
+**Template.** On E2B, the backend starts only the template tagged with its own exact
 intentd version in the entry's size, `<templateProject>/intent-node-<size>:<intentdVersion>`,
 where `templateProject` is the entry's setting (default: Intent's publisher E2B project). It
 never falls back to another tag: a missing tag fails the start with
@@ -1503,6 +1556,160 @@ deleted when the agent it was started for (`cloud.agentId`) ends for good;
 sub-agents still on it get a final stop first. A sub-agent's own sandbox is
 deleted when that sub-agent ends for good, not when its parent does
 ([when a parent stops](#when-a-parent-stops)).
+
+###### Cloud machines on Northflank
+
+With `cloudMachineProviders: 1`, an entry with `provider: "northflank"` starts
+each sandbox as one [Northflank](https://northflank.com) deployment service in
+the entry's project, from the published Intent node image, with one volume for
+the machine's disk. Everything above applies, with these differences:
+
+1. **Disk only.** Northflank keeps no memory snapshot. A pause stops the
+   container and keeps the volume, and a resume starts the container again from
+   that volume ([pause and resume](#northflank-pause-and-resume)).
+2. **One image for every size.** The size picks a Northflank deployment plan,
+   not an image ([entries](#northflank-entries)).
+3. **Region.** Northflank fixes the region per project. The entry reports it
+   and does not set it.
+4. **Commands** in the container go through Northflank's command execution
+   API. The route to the machine is the same tailcat route as on E2B; the
+   service opens no port.
+
+All Northflank API calls go to `https://api.northflank.com/v1` with the entry's
+token as a bearer token. The token is never logged, returned, sent to the
+container or put in an error.
+
+###### Northflank entries
+
+```ts
+interface NorthflankEntrySettings {
+  projectId: string;                       // the Northflank project the services run in
+  region: string;                          // the project's region, read from Northflank, for example "europe-west"
+  image: string;                           // image repository, without a tag; default "ghcr.io/intent-hq/intent-node"
+  plans: Partial<Record<CloudMachineSize, string>>; // deployment plan id per size in `sizes`
+  diskGiB: number;                         // volume size of each new service
+}
+```
+
+`cloudMachines.configure` takes these Northflank-only members:
+
+| Member | Rule |
+| --- | --- |
+| `projectId` | Required to create. A Northflank id: 3-100 bytes of letters, digits and single hyphens. Changing it while the entry has any sandbox is `-32602` `machine-in-use` with `runningAgents`. |
+| `plans` | A partial map from size to plan id. A given size replaces its plan; the other sizes keep theirs. A size that Northflank entries do not offer is `-32602` `invalid-params`. |
+| `image` | An image repository without tag or digest, pulled without credentials (a public image). The backend appends `:<intentdVersion>`. |
+| `diskGiB` | 5-500, default 20. It applies to new services only, because Northflank cannot make a volume smaller. |
+
+`region` is not a parameter: the backend reads it from the project. To run in
+another region, the owner makes another Northflank project and entry.
+
+Northflank entries offer three sizes. Each one has a default plan:
+
+| Size | Default plan | vCPU | Memory |
+| --- | --- | --- | --- |
+| `2x4` | `nf-compute-200` | 2 | 4 GiB |
+| `4x8` (default) | `nf-compute-400` | 4 | 8 GiB |
+| `8x16` | `nf-compute-800-16` | 8 | 16 GiB |
+
+`16x32` is not offered, because Northflank's default quota allows at most
+8 vCPU and 16 GiB per instance; `size: "16x32"` on a Northflank entry is
+`-32602` `invalid-params`. `sizes` always lists the three sizes, each with its
+`deploymentPlan`, and no `plan`.
+
+`configure` with `apiKey`, `apiKeyFrom`, `projectId`, `plans` or `image`, a
+create, and every `validateOnly` call test, in this order, before anything is saved:
+
+1. `GET /projects/{projectId}`: `401` is `key-rejected`, `403`
+   `permission-denied`, `404` `project-missing`. It also reads `region`.
+2. `GET /plans`: each plan of the entry exists, with the vCPU and memory of its
+   size, else `-32602` `invalid-params` naming the size.
+3. The image tag `<image>:<intentdVersion>` exists in its registry, else
+   `template-missing`.
+4. `GET /projects/{projectId}/services`, which the reaper needs (`403` is
+   `permission-denied`).
+
+All four failures are `cloud-machine-unavailable`, except step 2. The token
+needs these Northflank permissions in the project: read the project; create,
+read, update and delete services and volumes; pause and resume services; and
+run commands in a service. A token without one gets `permission-denied` when
+that call is refused, also later, at a start.
+
+###### Northflank services
+
+At `creating-sandbox`, the backend makes two resources, with the same name
+`intent-<12 lowercase hex>` (random per sandbox) and the tags `intent-node` and
+`intent-backend-<12 lowercase hex>` (from the backend's `backendId`):
+
+1. A volume: `POST /projects/{projectId}/volumes`, with
+   `spec: { accessMode: "ReadWriteOnce", storageSize: <diskGiB × 1024> }` and
+   one mount at the image user's home folder. The home folder holds intentd's
+   data folder and the agents' work folders.
+2. A deployment service: `POST /projects/{projectId}/services/deployment`,
+   with `billing.deploymentPlan` set to the size's plan,
+   `deployment.instances: 1`,
+   `deployment.external.imagePath: "<image>:<intentdVersion>"`, no ports, and
+   `createOptions.volumesToAttach` naming the volume. A service with a
+   `ReadWriteOnce` volume runs at most one instance.
+
+`sandboxId` is the service id and `volumeId` the volume id. Northflank applies
+only tags that exist in the team, so the backend adds the two tags to the team
+when they are missing; a token that cannot is `permission-denied`. When the
+volume is made but the service is not, the backend deletes the volume.
+
+At `starting-daemon`, the image's own command starts `intentd serve` with the
+tunnel on. The backend waits for the deployment status `COMPLETED`, then runs
+`executor.mint` over the container's local socket through the command execution
+API, as on E2B. Northflank failing to pull the image, or the container exiting
+before intentd answers, is `bootstrap-failed`.
+
+To delete a sandbox, the backend calls
+`DELETE /projects/{projectId}/services/{serviceId}?delete_child_objects=true`,
+which deletes the attached volume too, and then deletes the volume by id if it
+still exists. The reaper lists the project's services and volumes, keeps those
+that carry this backend's tag, and deletes each one without a machine row.
+
+###### Northflank pause and resume
+
+A Northflank machine pauses and resumes from its disk only:
+
+| Event | Backend action |
+| --- | --- |
+| Sandbox busy | Nothing: a Northflank service has no timeout. |
+| Sandbox idle for `idlePauseMinutes`, or `cloudMachines.pause` | `POST /projects/{projectId}/services/{serviceId}/pause`, which scales the service to 0. The link drops and the container stops. The volume stays; compute billing stops, and the volume is still billed. |
+| New message for an agent on a paused machine | `POST .../resume`, which scales it back to 1. The container starts from the image and intentd starts from the volume, with the same daemon id, certificate, tailcat key and executor credential, so the machine row and `nodeId` stay. The backend redials with a new generation. |
+| Northflank restarts the container itself (for example a crash or a node move) | The same as a resume, without the pause. |
+| Agent ends for good, `cloudMachines.kill` or `remove`, or paused for `pausedDeleteDays` | As on E2B: resume when paused, final stop, then delete the service and volume. |
+| The service or volume is removed outside Intent | `cloud-machine-unavailable` reason `sandbox-lost`, as on E2B. |
+
+**What a resume keeps.** Everything on the volume: intentd's data, each
+agent's checkout with its uncommitted changes, provider session files, and other
+files in the home folder.
+
+**What a resume loses.** Memory and every process: the agents' running
+provider processes, terminals, background processes and live script runs. Each
+live script run ends as when a machine disconnects
+(`remote-script-lost: the machine disconnected`,
+[lost runs](./scripts.md#scripts-of-remote-agents-remotescripts-1)). Files
+outside the home folder, such as packages installed into the system, are lost
+too, because the container starts again from the image.
+
+**What the agent is told.** After a resume or a container restart, no agent
+runs on the machine (`welcome.runningAgents` is empty). Each agent that was on
+it relaunches at its next message, or at once when a message is queued, on the
+same machine, in its kept checkout, with its conversation kept, as after a
+machine restart. That launch carries
+[`resumedFromDisk`](../node-link.md#cloud-machines), and the agent's first turn
+starts with one notice: the machine was stopped and started again from its disk;
+its checkout, uncommitted changes and home folder were kept; running processes,
+terminals and scripts stopped, so it must start again the ones it still needs;
+and software installed outside the home folder may be gone. When the checkout
+is missing, the launch
+[relaunches without a checkout](../node-link.md#relaunch-without-a-checkout)
+instead, as usual.
+
+**Version.** A paused service keeps the image tag it started with. It resumes
+and binds while the nodeProtocol ranges overlap; otherwise it is deleted
+without a final stop, as on E2B.
 
 ##### Node mode
 
@@ -1816,42 +2023,53 @@ are `-32602`. Errors never include the
 token.
 
 The [cloud machines](#cloud-machines-e2b) add three codes. None of them
-carries the E2B key.
+carries the key. In all three, `provider` is the entry's cloud provider
+(`CloudProviderKind`); a client shows the provider's name in the message it
+writes, and treats an unknown provider as a cloud provider without a name.
 
-`cloud-machine-unavailable` means E2B cannot start or keep a sandbox:
+`cloud-machine-unavailable` means the provider cannot start or keep a sandbox:
 
 ```ts
 interface CloudMachineUnavailableData {
   code: "cloud-machine-unavailable";
-  provider: "e2b";
+  provider: CloudProviderKind;
   cloudMachineId?: string;           // the entry, when one was named or resolved
   reason: "not-configured" | "key-rejected" | "entry-required" | "api-error"
-        | "template-missing" | "bootstrap-failed" | "sandbox-lost" | string; // open enum
+        | "template-missing" | "bootstrap-failed" | "sandbox-lost"
+        | "project-missing" | "permission-denied" | string; // open enum
   retryable: boolean;
-  status?: number;                   // E2B's HTTP status, when E2B answered
-  entries?: { cloudMachineId: string; name: string }[]; // only with "entry-required"
+  status?: number;                   // the provider's HTTP status, when it answered
+  entries?: { cloudMachineId: string; name: string; provider: CloudProviderKind }[]; // only with "entry-required"
+  action?: string;                   // only with "permission-denied": the refused call, for example "create-service"
 }
 ```
 
 `not-configured` and `key-rejected` are `-32602` from placement and
 `cloudMachines.configure` (not retryable: the owner must save a working key).
+`project-missing` (the Northflank project does not exist or the token cannot
+see it) and `permission-denied` (the token lacks a Northflank permission;
+`action` names the call: `read-project`, `list-services`, `create-tag`,
+`create-volume`, `create-service`, `exec`, `pause`, `resume` or `delete`) are
+`-32602` from `configure` and placement, and an agent's `placementError` when
+a start or resume is refused; they are not retryable.
 `entry-required` is `-32602` from placement only, and not retryable: the
 placement named no entry, several exist and none is `"e2b"`
-([placement on E2B](#placement-on-e2b)); its message lists the entry names.
+([placement on a cloud machine](#placement-on-e2b)); its message lists the entry names.
 The others are `-32603` from `cloudMachines.configure`, `pause` and `kill`, or
-an agent's `placementError` after the reply: `api-error` (E2B failed or was
-unreachable, retryable), `template-missing` (no template tagged with this backend's
+an agent's `placementError` after the reply: `api-error` (the provider failed or was
+unreachable, retryable), `template-missing` (no template or image tagged with this backend's
 exact version), `bootstrap-failed` (intentd, tailcat or the credential mint failed in
-the sandbox) and `sandbox-lost` (E2B removed a sandbox that had an agent). The
+the sandbox, or Northflank could not pull the image) and `sandbox-lost` (the
+provider removed a sandbox, or its Northflank volume, that had an agent). The
 message says no sandbox was left behind, or that the agent's pushed work is
 kept.
 
-When E2B rejects the saved key (for example the owner revoked it at E2B), the
+When the provider rejects the saved key (for example the owner revoked it there), the
 entry's `state` becomes `key-rejected` and `cloudMachines.pause` of its sandboxes fails with
 `-32602` `cloud-machine-unavailable` reason `key-rejected`. `cloudMachines.kill`
 and `remove` still succeed: they send the final stops they can, then remove the
-backend's machine rows and leases. A sandbox E2B would not delete stays in the
-owner's E2B account; the reaper deletes it once a working key is saved for
+backend's machine rows and leases. A sandbox the provider would not delete stays in the
+owner's account; the reaper deletes it once a working key is saved for
 that entry.
 
 `cloud-profile-required` is `-32602`, from placement and from `agent.setModel`
@@ -1861,7 +2079,7 @@ on an agent on a cloud machine, before any write, when the launch would send no
 ```ts
 interface CloudProfileRequiredData {
   code: "cloud-profile-required";
-  provider: "e2b";
+  provider: CloudProviderKind;
   cloudMachineId?: string;
   providerRef: string;               // the reference as given
 }
@@ -1870,18 +2088,18 @@ interface CloudProfileRequiredData {
 Its message reads, for example, "Work uses this backend's Claude sign-in, which
 E2B can't use; pick a profile with an API key or token." It is not retryable.
 
-`cloud-quota` means E2B refused for a plan limit: too many running sandboxes, too
+`cloud-quota` means the provider refused for a plan limit: too many running sandboxes, too
 many requests, or a size the project's plan or limits do not allow (for example
-`8x16` on Hobby). Intent sets
+`8x16` on E2B Hobby, or a Northflank project quota). Intent sets
 no limit of its own.
 
 ```ts
 interface CloudQuotaData {
   code: "cloud-quota";
-  provider: "e2b";
-  cloudMachineId?: string;           // the entry whose E2B project refused
+  provider: CloudProviderKind;
+  cloudMachineId?: string;           // the entry whose project refused
   limit: "concurrency" | "rate" | "plan";
-  retryAfterSeconds?: number;        // from E2B's Retry-After
+  retryAfterSeconds?: number;        // from the provider's Retry-After
   retryable: boolean;                // false for "plan"
 }
 ```
@@ -1891,7 +2109,9 @@ It is `-32602` from `cloudMachines.pause` and `kill`, an agent's
 is refused. The backend retries a `rate` refusal itself before it reports one.
 A `plan` refusal is `retryable: false`: the owner must pick a smaller size, or
 use E2B Pro and ask E2B support to raise the project's limits; the message names
-both.
+both. On Northflank, a refusal for the project's or account's quota (resource
+count, vCPU, memory or volume size) is `limit: "plan"`, and its message says to
+pick a smaller size or raise the quota at Northflank; a `429` is `rate`.
 
 ##### Link traffic capture
 

@@ -1272,6 +1272,36 @@ catalogs, the protocol-to-app field parity rows and the surface counts are
 unchanged and the consumer checks need no staged row. The public protocol
 version is unchanged; clients detect entries only through the flag.
 
+**Northflank cloud machines — capability `cloudMachineProviders: 1` (additive).**
+Cloud machine entries become provider-neutral: `CloudProviderKind` is
+`"e2b" | "northflank"`, and an entry's `provider` (and `cloud.provider`, and
+`provider` on the three cloud error datas) can now be `"northflank"`. A
+[Northflank entry](./methods/nodes.md#cloud-machines-on-northflank) starts one
+Northflank deployment service with one volume per sandbox, in the entry's
+project, from the size-independent image `<image>:<intentdVersion>`, with a
+deployment plan per size (`2x4`, `4x8` and `8x16`). New optional members:
+`cloudMachines.configure` `provider: "northflank"` and the Northflank-only
+`projectId`, `plans`, `image` and `diskGiB` (`apiKey` and `apiKeyFrom` carry
+the Northflank API token); `cloudMachines.list` `providerKinds`;
+`CloudMachineProvider.northflank` (`projectId`, read-only `region`, `image`,
+`plans`, `diskGiB`); `CloudMachineSizeInfo.deploymentPlan`;
+`CloudMachineState.volumeId`; `entries[].provider` and `action` on
+`cloud-machine-unavailable`, with the new reasons `project-missing` and
+`permission-denied`; the provider-neutral placement
+`{ target: "cloud", cloudMachineId? }`, whose resolved `target` is `"e2b"` for
+an E2B entry and `"cloud"` otherwise; and the launch member `resumedFromDisk`,
+which needs no nodeProtocol. `CloudMachineProvider.templateProject` and
+`CloudMachineSizeInfo.plan` are now absent on Northflank rows. A Northflank
+machine pauses by scaling its service to 0 and resumes from its volume only:
+processes and live script runs end, and the agents relaunch on the same
+machine with a [disk resume notice](./methods/nodes.md#northflank-pause-and-resume).
+E2B entries, the entry `"e2b"` and `target: "e2b"` behave as before. Older
+clients read only the entry `"e2b"`, so they show no Northflank entry. No
+method or event is added or renamed, so the method and event catalogs and the
+surface counts are unchanged, and no `AgentLite` or `Workspace` field is added.
+The public protocol version is unchanged; clients detect Northflank only
+through the flag.
+
 **Secrets for remote agents — nodeProtocol 14 (additive result fields and error code; no method-catalog change, so no version bump).**
 A remote top-level agent can now request and use secrets
 ([§5.56 remote agents](./methods/secrets.md#remote-agents)). Its

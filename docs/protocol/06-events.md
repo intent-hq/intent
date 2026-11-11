@@ -790,7 +790,8 @@ guests, and never carries the executor token.
 and `{ machine: RemoteMachine }` or `{ machineId, removed: true }` when a cloud
 machine row or its sandbox state changes. It is delivered to owner connections,
 and to shared-host member connections with the same visibility as
-`cloudMachines.list`, never to guests, and never carries the E2B key.
+`cloudMachines.list`, never to guests, and never carries the E2B key or the
+Northflank token. Entries and rows of every cloud provider use the same event.
 Cloud machine rows never appear in `remoteMachine:changed`.
 
 [Link traffic capture](./methods/nodes.md#link-traffic-capture) defines

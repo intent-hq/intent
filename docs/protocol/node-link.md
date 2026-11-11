@@ -2475,6 +2475,7 @@ interface LaunchCommand {
   forge?: ForgeLaunch;             // protocol 15 only, top-level agents only; see Forge token on the machine
   gitIdentity?: GitIdentity;       // any protocol; see Commit identity
   newMachine?: string;             // any protocol; see Relaunch without a checkout
+  resumedFromDisk?: true;          // any protocol; see Cloud machines
   harnessVersion?: string;         // any protocol; see below
   agentName?: string;              // any protocol; display label, see Display labels
   workspaceTitle?: string;         // any protocol; display label, see Display labels
@@ -4146,16 +4147,21 @@ delays, changes or reorders them, and it adds no frame type.
 ### Cloud machines
 
 A [cloud machine](./methods/nodes.md#cloud-machines-e2b) is a machine the
-backend starts itself in an E2B sandbox. It uses this link unchanged: there is
-no new nodeProtocol, frame, path or route type, and the sandbox daemon offers
-the same range as any daemon of its version. Only the way the machine is
-enrolled and reached differs.
+backend starts itself in an E2B sandbox or a
+[Northflank service](./methods/nodes.md#cloud-machines-on-northflank). It uses
+this link unchanged: there is no new nodeProtocol, frame, path or route type,
+and the machine daemon offers the same range as any daemon of its version.
+Only the way the machine is enrolled, reached and resumed differs.
 
-1. **Fresh identity.** The template that E2B starts never runs intentd, so its
-   snapshot holds no daemon id, certificate or tailcat key. intentd first starts
-   in each new sandbox and makes its own. Two sandboxes never share an identity.
+1. **Fresh identity.** The template that E2B starts, and the image that
+   Northflank starts, never ran intentd, so they hold no daemon id, certificate
+   or tailcat key. intentd first starts in each new sandbox and makes its own.
+   Two sandboxes never share an identity. A Northflank machine keeps its
+   identity on its volume across a pause and a resume.
 2. **Enrollment.** In place of the frontend relay of the expose flow, the
-   backend uses E2B's authenticated process API as the owner channel: it
+   backend uses the provider's authenticated command API as the owner channel
+   (E2B's process API, or Northflank's command execution API, where the
+   image's own command starts intentd): it
    starts `intentd serve` with the tunnel on, then runs `executor.mint` over
    the sandbox's local socket with the backend's `remoteMachines.backendInfo`
    values. The token goes straight into the backend secret store and never
@@ -4163,15 +4169,25 @@ enrolled and reached differs.
    itself, with the same probe as `remoteMachines.add`.
 3. **Route.** The backend dials only the tailcat route (`tcAddress`; `hosts`
    is empty). It never uses E2B's public sandbox URL: E2B ends TLS at its
-   proxy, so the certificate pin would fail there. The sandbox accepts no
-   public traffic.
+   proxy, so the certificate pin would fail there. A Northflank service opens
+   no port. The sandbox accepts no public traffic.
 4. **Provider sign-in.** A sandbox has no sign-in of its own. Every launch on
    a cloud machine carries a [`profileEnv`](#provider-credentials-profile-environment);
    placement refuses one that would not (`cloud-profile-required`).
 5. **Pause and resume.** A pause drops the link and its git connections like
-   any outage. Memory and the checkout stay. On resume tailcat joins again and
+   any outage. On E2B, memory and the checkout stay. On resume tailcat joins again and
    the backend redials with a new generation; the hello's `ackedSeq` replays
    the journal as usual.
+   On Northflank only the disk stays: the resumed daemon is a new process
+   with the same identity, so `welcome.runningAgents` is empty and the backend
+   relaunches each agent on the same machine. That launch, and the first launch
+   of each agent after Northflank restarted the container itself (the backend
+   sees an agent it had running missing from `welcome.runningAgents`), carries
+   `resumedFromDisk: true`. The machine then starts the agent's first turn with
+   the [disk resume notice](./methods/nodes.md#northflank-pause-and-resume),
+   in the same notice as any `unapplied/<sha>` notice of a
+   [relaunch without a checkout](#relaunch-without-a-checkout). It needs no nodeProtocol: a machine from
+   before ignores the member and starts the agent with no notice.
 6. **Deletion.** The backend deletes the sandbox only after the agent's
    [final stop](#final-stop-nodeprotocol-9) is acknowledged, or after its wait
    ends. Deleting the sandbox also removes the credential, certificate and
