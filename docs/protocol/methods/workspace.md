@@ -359,7 +359,9 @@ message is no longer tracked), so the caller should retain the `proposalId` retu
 `proposeSibling` as the stable handle to address the proposal after it has been applied
 or dismissed — the miss error says so and points at it. A `workspace.create` failure
 surfaces the structured error and records NO resolution, so the card stays pending for
-Retry. **Turn-end caveat:** a proposal emitted in the CURRENT turn is recorded as pending
+Retry. The one exception is a `launch-failed` after the workspace commits, which keeps
+the workspace and resolves the proposal `applied`
+([proposer placement](#51-workspace), below). **Turn-end caveat:** a proposal emitted in the CURRENT turn is recorded as pending
 only when the turn persists, so the agent can apply proposals from an earlier turn only —
 matching the intended flow (the user replies "approve" in a later message); the not-found
 error says so. Same availability as `proposeSibling`: foreground top-level agents only —
@@ -380,6 +382,11 @@ send it unchanged as `initialAgent.placement`:
 | A remote machine | `{ "target": "remote", "nodeId": "<the agent's nodeId>" }` |
 | An E2B sandbox | `{ "target": "e2b", "cloudMachineId": "<the agent's entry>" }` — a **new** sandbox from the same [named entry](./nodes.md#named-e2b-entries), never the proposer's own; `cloudMachineId` is omitted when the agent has no recorded entry |
 
+An E2B stamp without `cloudMachineId` follows the rule for an omitted `cloudMachineId` on
+an agent no other agent created: the only entry, else the legacy `"e2b"` entry, else
+`cloud-machine-unavailable` reason `entry-required`. An entry removed after the proposal
+fails admission with `cloud-machine-unavailable` reason `not-configured`.
+
 The stamp is taken once, at propose time; it is not updated when the agent or the
 machine changes later. It is outside `payload.params`, so the create params stay as
 before and a client that does not know the field ignores it and creates a local
@@ -393,7 +400,12 @@ state. It is never `null`.
   or removed machine fails admission with the documented `-32602` data
   (`placement-unavailable` and the [remote machine reasons](./nodes.md#remote-machine-errors)),
   nothing is created and the card stays pending, so the user can pick another place and
-  Apply again with the same idempotency key.
+  Apply again with the same idempotency key. `workspace.create` stores only successful
+  results under the key (a refusal stores nothing), and a replay returns the stored
+  result without comparing params: a re-Apply after a refusal may send another
+  placement, while one after a success or a `launch-failed` replays the first outcome
+  whatever placement it sends. A `launch-failed` resolves the card as described in
+  "Proposal origin" below.
 - **`ws.workspace.applyProposal`** passes the stamp as `initialAgent.placement`, and
   sends none when the proposal has no stamp. The agent cannot override it: `placement`
   is not an allowed option. A pre-side-effect refusal (`placement-unavailable`,
@@ -403,7 +415,8 @@ state. It is never `null`.
   to local. A launch failure after the workspace commits (`-32603` `launch-failed`,
   [placement subset](./nodes.md#placement-subset)) keeps the workspace: the binding
   resolves the proposal `applied` with `detail` `"Created workspace <id>; its first
-  agent failed to start: <cause.code>"` and returns the error to the agent with
+  agent failed to start: <cause.code>"` (not the success detail above; the workspace is
+  recorded in `proposalCreatedWorkspaces` as for any applied create) and returns the error to the agent with
   `workspaceId` and `cause`, so neither the agent nor the card retries into a replay
   of the same error.
 
@@ -826,7 +839,11 @@ logs a warning and the create still succeeds with nothing resolved (an already-r
 proposal keeps its persisted outcome and gets no second notice); any other store error
 during these lookups fails the create with `-32603` before any side effect, so the client
 can retry. A failed create resolves nothing, so the card
-stays pending for Retry. The `workspace:created` event carries the resolved provenance as
+stays pending for Retry. A `launch-failed` (see "Remote initial agent" below) is not a failed
+create: the workspace commits and its result is stored under the key, so the daemon resolves
+the origin `applied` (`detail` `"Created workspace <id>."`, recorded in
+`proposalCreatedWorkspaces`) before it returns the `-32603` error, on the first request and on
+a keyed replay alike. The card turns applied through `agent:updated`. The `workspace:created` event carries the resolved provenance as
 `data.origin` (§6.5). Whenever the request carried a well-formed `origin`, the result adds
 `proposalOrigin: { proposalId, outcome }` — computed per request (an idempotent replay
 reports its own `origin`), never persisted — where `outcome` is the proposal's state after
@@ -836,7 +853,8 @@ when the daemon accepted the origin but the resolution write itself failed, `pro
 is omitted, so the client fallback below retries the resolution — safe, because the card
 already passed the checks above. **Client fallback:** daemons without this field ignore `origin` (unknown
 keys are ignored) and return no `proposalOrigin`, so a client may call `agent.resolveProposal`
-itself after a successful apply **only when the result has no `proposalOrigin`**; when it is
+itself after a successful apply **only when the result has no `proposalOrigin`**, and never
+after an error (`launch-failed` included, which carries no result); when it is
 present the daemon has handled the card, and a client-side resolve after `"notResolved"`
 would mark applied a card the daemon deliberately refused (e.g. a replay naming another
 card, or a non-`workspace-create` card).
