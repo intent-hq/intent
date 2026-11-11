@@ -1652,17 +1652,18 @@ At `creating-sandbox`, the backend makes two resources, with the same name
 
 1. A volume: `POST /projects/{projectId}/volumes`, with
    `spec: { accessMode: "ReadWriteOnce", storageSize: <diskGiB × 1024> }`
-   (megabytes) and one mount, `containerMountPath: "/home/user"`, the image
-   user's home folder. It holds intentd's data folder (`~/.intentd`), the
+   (megabytes) and one mount, `containerMountPath: "/home/user"`, the
+   machine's home folder. It holds intentd's data folder (`~/.intent`), the
    agents' work folders and the provider CLIs' own state (for example
    `~/.claude`). A new volume is empty and Northflank does not copy the
    image's files into it, so it hides whatever the image has under
    `/home/user`. The image therefore installs intentd, tailcat, the provider
    CLIs and every tool outside `/home/user` (for example under `/usr/local`
-   or `/opt`), puts nothing it needs at run time in the home folder, and
-   its start command creates the folders it needs there when they are
-   missing. The image's user is `user` with home `/home/user`, as in the E2B
-   templates.
+   or `/opt`), and puts nothing it needs at run time in the home folder;
+   the backend's start script creates the folders it needs there. The image
+   runs as root, so every command the backend runs there sets
+   `HOME=/home/user` and `IS_SANDBOX=1` (the provider CLIs refuse to run
+   unattended as root outside a declared sandbox).
 2. A deployment service: `POST /projects/{projectId}/services/deployment`,
    with `billing.deploymentPlan` set to the size's plan,
    `deployment.instances: 1`,
