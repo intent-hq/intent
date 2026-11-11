@@ -1001,7 +1001,7 @@ the user's saved "Use on remote machines" choice instead of a computed value.
 `defaultRemoteLaunch`; `defaultRemoteIncompatibility` now lists only Defaults
 that cannot run. The new setting `providers.remoteMachineSignIn` (per base
 provider, missing means on) lets an unmarked Default run with the machine's own
-sign-in ([machine sign-in](./methods/provider-profiles.md#machine-sign-in-on-remote-machines)).
+sign-in (since removed; see [which providers a machine offers](./methods/provider-profiles.md#which-providers-a-machine-offers)).
 The [launch rules](./methods/nodes.md#placement-across-machines) apply to placement,
 sub-agents, `agent.setModel` and failover. `profile-not-remote-compatible` data
 gains `name` and `machineSignIn?`; the new `-32602` `machine-not-signed-in`
@@ -1012,8 +1012,27 @@ authentication. The choices live in a new daemon-owned file that older daemons n
 `create` without the field applies the same rule. No methods or events are added,
 no numeric codes, and no nodeProtocol change (start-failure codes are journaled
 strings), so the surface counts are unchanged and there is no public protocol
-version bump. Clients detect it by the presence of `DefaultConfig.remoteLaunch`
-and of `providers.remoteMachineSignIn` in `settings.list`.
+version bump. Clients detect it by the presence of `DefaultConfig.remoteLaunch`.
+
+**A machine's own sign-in is always used, else a marked profile; no machine sign-in setting (behaviour change, no capability).**
+The prepared `providers.remoteMachineSignIn` setting is removed before it shipped
+in any component, with its refusal and `profile-not-remote-compatible`'s
+`machineSignIn` data. A provider is offered on a remote machine when the machine's
+own sign-in can run it, or when this backend has a remote-compatible configuration
+for it and its CLI is installed there; a provider with neither is not offered for
+that machine. A plain Default that a machine's own sign-in cannot run (signed out there, or
+E2B) is created on the first profile marked for remote machines, in profile order,
+and its transcript gets a `provider_auto_selected` row
+([auto-pick](./methods/provider-profiles.md#remote-auto-pick)); with none it is
+refused with `machine-not-signed-in`. A profile chosen explicitly is never replaced
+([which providers a machine offers](./methods/provider-profiles.md#which-providers-a-machine-offers)).
+An unmarked Default is refused only on E2B, and only when no marked profile can be
+auto-picked. The new transcript metadata type `provider_auto_selected` is additive;
+older clients show its text. `DefaultRemoteLaunch` is `send` or
+`machine-sign-in` (`refused` only for an unreadable environment), and the catalog
+no longer sends `defaultRemoteIncompatibility`. The agent-facing machine list
+hides a provider a machine cannot run. No method, event or error code changes,
+and there is no public protocol version bump.
 
 **Default credential auto-mark (behaviour change, no capability).**
 An `updateDefault` that adds an API key or token marks that Default for remote

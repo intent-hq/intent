@@ -857,25 +857,22 @@ sub-agent:
 
 The agent's provider reference must first pass the **launch rules**, before any
 write, lease or launch, whatever machine was named. "Marked" is the saved
-[remote-compatible](./provider-profiles.md#remote-compatibility) choice, and
-"machine sign-in" is the base provider's entry in
-[`providers.remoteMachineSignIn`](./provider-profiles.md#machine-sign-in-on-remote-machines)
-on this backend.
+[remote-compatible](./provider-profiles.md#remote-compatibility) choice. Which
+providers each machine offers follows
+[the machine's own sign-in, else a remote-compatible profile](./provider-profiles.md#which-providers-a-machine-offers).
 
-| Selected | Marked | Machine sign-in | Result on a remote machine |
-| --- | --- | --- | --- |
-| A profile | Yes | — | Its environment is sent as `profileEnv`. |
-| A profile | No | — | Refused: `profile-not-remote-compatible`, reason `not-marked` (or `account-folder` when it sets one). |
-| The Default | Yes | — | Its overrides are sent. With none, nothing is sent and the machine's own sign-in runs it, as in the next row (but whatever machine sign-in is set to). |
-| The Default | No | On | Nothing is sent. The machine's own sign-in runs it, if the provider is detected and not disabled there. A machine whose sign-in is `unknown` is still tried; a `signed-out` or `auth-failed` one is refused with `machine-not-signed-in`. |
-| The Default | No | Off | Refused: `profile-not-remote-compatible`, reason `not-marked` (or `account-folder`), `machineSignIn: false`. |
-| A provider without profiles (for example Unsloth) | — | — | Allowed. Nothing is sent. The model must be on that machine's own list (`model-unavailable` otherwise). |
-| Anything, on [E2B](#placement-on-e2b) | — | — | Must send a `profileEnv` (`cloud-profile-required` otherwise, as today), and a profile or Default must also be marked. Machine sign-in never applies, because a sandbox has no sign-in. |
+| Selected | Marked | Result on a remote machine |
+| --- | --- | --- |
+| A profile | Yes | Its environment is sent as `profileEnv`. The provider's CLI must be installed there. |
+| A profile | No | Refused: `profile-not-remote-compatible`, reason `not-marked` (or `account-folder` when it sets one). |
+| The Default | Yes | Its overrides are sent. With none, nothing is sent and the machine's own sign-in runs it, as in the next row. |
+| The Default | No | Nothing is sent. The machine's own sign-in runs it, if the provider is detected and not disabled there. A machine whose sign-in is `unknown` is still tried. On a `signed-out` or `auth-failed` one, admission [auto-picks](./provider-profiles.md#remote-auto-pick) the first marked profile of that provider; with none it is refused with `machine-not-signed-in`. |
+| A provider without profiles (for example Unsloth) | — | Allowed. Nothing is sent. The model must be on that machine's own list (`model-unavailable` otherwise). |
+| Anything, on [E2B](#placement-on-e2b) | — | Must send a `profileEnv` (`cloud-profile-required` otherwise, as today), and a profile or Default must also be marked. The machine's own sign-in never applies, because a sandbox has no sign-in. A plain Default that cannot run there [auto-picks](./provider-profiles.md#remote-auto-pick) the first marked profile that sends a set variable. |
 
 A **machine sign-in launch** is a launch of the bare `codex` or `claude-code`
-reference that sends nothing: an unmarked Default while machine sign-in is on, or
-a marked Default with no overrides. Only these launches get
-`machine-not-signed-in`.
+reference that sends nothing: an unmarked Default, or a marked Default with no
+overrides. Only these launches get `machine-not-signed-in`.
 
 The same rules apply to every route that starts or switches a remote agent's
 provider: `agent.create`, `agent.delegate` (single and [batch](#batch-placement)),
@@ -897,14 +894,22 @@ the rules refuse, from the catalog's `remoteCompatible` rows and
    `cli-missing` or `prerequisite-missing`), and that list the requested model
    (or no model was requested);
 2. for a launch without a profile, also skips machines whose provider status is
-   `signed-out` or `auth-failed`; a launch with a selected profile (any launch
-   that sends `profileEnv`) ignores the default account's sign-in status. When a
-   machine sign-in launch has no candidate only because of this step
-   (or the named machine is signed out), it fails with `machine-not-signed-in`
-   instead of `model-unavailable`;
+   `signed-out` or `auth-failed`, **except** for a plain Default that has a
+   profile marked for remote machines to [auto-pick](./provider-profiles.md#remote-auto-pick):
+   it keeps those machines as candidates (step 1 still requires the CLI). A
+   launch with a selected profile (any launch that sends `profileEnv`) ignores
+   the default account's sign-in status. When a machine sign-in launch with
+   nothing to auto-pick has no candidate only because of this step (or the named
+   machine is signed out), it fails with `machine-not-signed-in` instead of
+   `model-unavailable`;
 3. orders those with free capacity by fewest running agents, then most recently
    used;
-4. connects on demand, refreshing a stale report first.
+4. connects on demand, refreshing a stale report first;
+5. **after** the machine is chosen, a plain Default whose chosen machine reports
+   the provider `signed-out` or `auth-failed` runs the auto-picked profile
+   instead, and the agent is created on it. A machine signed in or `unknown`
+   runs the Default on its own sign-in. The order among candidates (step 3) does
+   not depend on sign-in.
 
 So a machine with no default login but a valid selected profile stays a
 candidate, and a profile whose credentials fail does so at launch without
@@ -920,9 +925,9 @@ all of these hold, judged on the agent's machine's cached
 [capabilities report](../node-link.md#capabilities-report) without connecting:
 
 1. the target reference passes the
-   [launch rules](#placement-across-machines): a marked profile, a marked
-   Default, an unmarked Default while machine sign-in is on, or a provider
-   without profiles;
+   [launch rules](#placement-across-machines): a marked profile, a Default
+   (marked, or unmarked on the machine's own sign-in), or a provider without
+   profiles;
 2. the machine's report lists the target base provider (it omits providers
    disabled in the machine's own settings) as usable under the placement
    rules: installed (not `cli-missing` or `prerequisite-missing`), and for a
@@ -1417,9 +1422,10 @@ carries a `profileEnv`:
    `cloudMachineId` that names no entry) or `key-rejected`.
 2. The provider reference is marked
    [remote-compatible](./provider-profiles.md#remote-compatibility), else
-   `profile-not-remote-compatible`. An unmarked Default is refused here even
-   while [machine sign-in](./provider-profiles.md#machine-sign-in-on-remote-machines)
-   is on, with `machineSignIn` in the data, because a sandbox has no sign-in.
+   `profile-not-remote-compatible`. A plain Default that fails this step or the
+   next first [auto-picks](./provider-profiles.md#remote-auto-pick) the first
+   marked profile that sends a set variable; only with none is it refused,
+   because a sandbox has no sign-in of its own.
 3. The launch sends a `profileEnv`, else `cloud-profile-required`. A sandbox
    has no login of its own. A configuration sends one when its `env` has at
    least one `kind: "set"` entry: an API-key profile, an env-only subscription
@@ -1700,7 +1706,6 @@ interface ProfileNotRemoteCompatibleData {
   name: string;                      // the configuration's display name, for example "Work" or "Default"
   reason: "account-folder" | "not-marked" | string; // open enum, as on RemoteIncompatibility
   keys: string[];                    // account-folder: variable names only, never values; not-marked: []
-  machineSignIn?: boolean;           // bare reference only: the base provider's machine sign-in setting
 }
 ```
 
@@ -1712,8 +1717,6 @@ must change first. The messages are:
 | --- | --- |
 | Profile, `not-marked` | "Work isn't marked for remote machines. Turn on Use on remote machines for it in Settings → Providers → Claude Code, or pick a configuration that is marked." |
 | Profile, `account-folder` | "Work uses an account folder (CLAUDE_CONFIG_DIR) that only exists on this backend, so it can't run on another machine; pick a configuration that uses an API key or token and is marked for remote machines." |
-| Default, `not-marked`, machine sign-in off | "Default isn't marked for remote machines, and using the machine's own sign-in is off for Claude Code. In Settings → Providers → Claude Code, turn on either option on the Default row, or pick a profile marked for remote machines." |
-| Default, `account-folder`, machine sign-in off | "Default uses an account folder (CLAUDE_CONFIG_DIR) that only exists on this backend, and using the machine's own sign-in is off for Claude Code. Turn that on in Settings → Providers → Claude Code, or pick a profile marked for remote machines." |
 | Default, `not-marked`, on E2B | "Default isn't marked for remote machines, and E2B has no sign-in of its own; pick a profile with an API key or token that is marked for remote machines." |
 | Default, `account-folder`, on E2B | "Default uses an account folder (CLAUDE_CONFIG_DIR) that only exists on this backend, and E2B has no sign-in of its own; pick a profile with an API key or token that is marked for remote machines." |
 
@@ -1733,6 +1736,13 @@ interface MachineNotSignedInData {
 }
 ```
 
+This is how a provider that a machine does not offer is refused: it is signed
+out there, and this backend has no marked profile of that provider to
+[auto-pick](./provider-profiles.md#remote-auto-pick). With one, admission sends it
+instead and no error is raised. `agent.setModel` to the Default on a signed-out
+machine is still refused, since it does not auto-pick. The
+agent-facing machine list leaves such a provider out for that machine
+([which providers a machine offers](./provider-profiles.md#which-providers-a-machine-offers)).
 Its message reads, for example, "Claude Code isn't signed in on Build box, and
 Default sends no sign-in of its own. Sign in to Claude Code on Build box, or pick
 a profile with an API key or token that is marked for remote machines." A machine whose status is `unknown` is still tried. If that launch fails

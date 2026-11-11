@@ -391,9 +391,13 @@ that is not revoked, once the provider reference is
 2. the provider is installed: `cli-missing` and `prerequisite-missing` are
    skipped for every launch;
 3. without a selected profile, the default account's status is `signed-in` or
-   `unknown` (`signed-out` and `auth-failed` are skipped); with a selected
-   profile (the launch sends `profileEnv`) that status is not consulted, because
-   it describes the machine's own login, not the profile's credentials;
+   `unknown` (`signed-out` and `auth-failed` are skipped), unless a plain
+   Default has a profile marked for remote machines to
+   [auto-pick](./methods/provider-profiles.md#remote-auto-pick): then those machines
+   stay candidates, and once one of them is chosen the backend sends that
+   profile. With a selected profile (the launch sends `profileEnv`) that status
+   is not consulted, because it describes the machine's own login, not the
+   profile's credentials;
 4. the requested model is listed, or no model was requested. The model list
    comes from the machine's installed provider and is used for profile launches
    too; a model the profile's account cannot use fails at launch, not here;
@@ -407,8 +411,11 @@ the local daemon.
 
 **Errors.** A provider reference the [launch rules](./methods/nodes.md#placement-across-machines)
 refuse (not marked for remote machines, or setting an account folder) fails first
-with `profile-not-remote-compatible`; a Default that relies on machine sign-in on
-machines reported signed out fails with `machine-not-signed-in`. When no machine lists the model, admission fails before any launch
+with `profile-not-remote-compatible`; a Default that relies on the machine's own
+sign-in on machines reported signed out fails with `machine-not-signed-in`. The
+machine list given to agents leaves out a provider a machine cannot run: signed
+out there with no remote-compatible profile on this backend, or not installed
+([which providers a machine offers](./methods/provider-profiles.md#which-providers-a-machine-offers)). When no machine lists the model, admission fails before any launch
 with `model-unavailable`, listing each machine's provider status and models
 (at most 50 per machine); a provider switched off in the machine's own settings
 reports status `disabled` rather than `cli-missing` (see
