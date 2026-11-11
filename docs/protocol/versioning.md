@@ -71,7 +71,7 @@ capability-gated, so no version bump): **prompt breakdown and machine model look
 ([prompt breakdown](./methods/agents.md#prompt-breakdown)): the sections of the
 session's stored system prompt and tool description, with owner, size, estimated
 tokens, control hints and hidden skills, or `{ available: false, reason }` for
-sessions before harness 3.10. It is a getSession-only field on the Rust
+sessions whose harness records none (before 3.10, and 3.11). It is a getSession-only field on the Rust
 `AgentSession`, not on `AgentLite` rows. The experimental
 [machine model lookup](./methods/nodes.md#machine-model-lookup) adds the owner-only
 router method `remoteMachines.models`, gated by `remoteMachineModels: 1` (advertised
