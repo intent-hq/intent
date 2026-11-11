@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { PROVIDERS, connectorTraces, isConnectorTool } from './lib/daemon.mjs';
 import { renderMarkdown } from './lib/report.mjs';
-import { checkConnectors, checkIsolation, connectorCalls, connectorReport } from './run.mjs';
+import { cacheable, checkConnectors, checkIsolation, connectorCalls, connectorReport } from './run.mjs';
 import { controlHeld, mockControls } from './tasks.mjs';
 
 const claude = PROVIDERS['claude-code'];
@@ -147,4 +147,21 @@ test('the report records the opt-out and fails loudly when connectors got throug
   assert.match(md, /## claude\.ai connectors: FAILED/);
   assert.match(md, /- current spec-section#1: mcp__claude_ai_Claude_Docs__read/);
   assert.doesNotMatch(renderMarkdown(base), /claude\.ai connectors/);
+});
+
+test('a task-run that saw connectors, offered or called, is never cached', () => {
+  const isolation = { dir: tmp(), spec: claude, connectors: [], scanned: new Map() };
+  const clean = { task: 'spec-section', harness: '3.12', run: 1, pass: true };
+  checkConnectors(isolation, clean);
+  assert.ok(cacheable(clean));
+  session(isolation.dir, 'r/s.jsonl', offered('mcp__claude_ai_Claude_Docs__read'));
+  const offeredOnly = { task: 'spec-section', harness: '3.12', run: 2, pass: true };
+  checkConnectors(isolation, offeredOnly);
+  assert.equal(offeredOnly.connectorCalled, undefined);
+  assert.ok(!cacheable(offeredOnly), 'offered-only evidence must block caching');
+  const calledOnly = { task: 'spec-section', harness: '3.12', run: 3, pass: true, connectorCalled: ['claude_ai_x_y'] };
+  checkConnectors(isolation, calledOnly);
+  assert.ok(!cacheable(calledOnly));
+  assert.ok(!cacheable({ isolationLeaks: ['skills/synced/dev'] }));
+  assert.ok(!cacheable({ error: 'boom' }));
 });

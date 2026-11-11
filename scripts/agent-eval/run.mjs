@@ -265,6 +265,12 @@ export function checkIsolation(isolation, result) {
  */
 export const BASELINE_SCHEMA = 3;
 
+/**
+ * Only a clean result may be reused: a cached one skips the isolation and
+ * connector checks, so a tainted one would read as clean on reuse.
+ */
+export const cacheable = (r) => !r.error && !r.isolationLeaks?.length && !r.connectorTools?.length;
+
 /** A task's cache identity: everything that decides its outcome. */
 export const taskHash = (task) => hash([task.prompt, task.check.toString(), task.setup?.toString() ?? null, task.afterFirstTurn?.toString() ?? null]);
 
@@ -361,7 +367,7 @@ export async function main(argv = process.argv.slice(2)) {
           const r = cached || (await runTask({ arm, task, run, opts, root }));
           if (!cached) checkIsolation(isolation, r);
           writeBack();
-          if (i === 0 && cache && !cached && !r.error && !r.isolationLeaks && !r.connectorCalled) cache.put(arm.harness, task, run, r);
+          if (i === 0 && cache && !cached && cacheable(r)) cache.put(arm.harness, task, run, r);
           results.push(r);
           log(`${r.pass ? 'PASS' : 'FAIL'} ${arm.harness} ${task.id}#${run}${r.cached ? ' (cached)' : ''}: ${r.detail ?? ''}`);
         }
