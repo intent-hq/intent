@@ -4160,9 +4160,8 @@ Only the way the machine is enrolled, reached and resumed differs.
    identity on its volume across a pause and a resume.
 2. **Enrollment.** In place of the frontend relay of the expose flow, the
    backend uses the provider's authenticated command API as the owner channel
-   (E2B's process API, or Northflank's command execution API, where the
-   image's own command starts intentd): it
-   starts `intentd serve` with the tunnel on, then runs `executor.mint` over
+   (E2B's process API, or Northflank's command execution API): it
+   starts `intentd serve` with the tunnel on (the image only idles), then runs `executor.mint` over
    the sandbox's local socket with the backend's `remoteMachines.backendInfo`
    values. The token goes straight into the backend secret store and never
    reaches a frontend, log or event. The backend then adds the machine row
