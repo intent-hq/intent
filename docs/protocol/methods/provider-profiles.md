@@ -105,6 +105,7 @@ select a model again after a downgrade.
 | Data | Location | Exposure |
 | --- | --- | --- |
 | `id`, `name`, `baseProviderId`, timestamps, `backup`, order | Daemon-owned file `<data_dir>/provider-profiles.json` (mode `0600`, next to `config.toml`): `{ "version": 1, "profiles": [{ "id", "baseProvider", "name", "createdAt", "updatedAt", "backup"? }] }` | Only through `providers.profiles.*`. Not a `settings.*` path: `settings.get` / `settings.reset` return `-32602`, and `settings.update` rejects it. |
+| Remote-compatible choices | Daemon-owned file `<data_dir>/provider-remote-compatible.json` (mode `0600`, see Remote-compatible choices below) | Only through `providers.profiles.*` reads and writes |
 | Environment entries | Existing protected `SecretStore`, account `providerProfiles.<profileId>.env`, one JSON document per profile | Only through `providers.profiles.*` reads, masked except the folder-path keys (see [Folder paths on reads](#folder-paths-on-reads)) |
 
 The metadata stays out of `config.toml` because `SettingsFile` denies unknown fields
@@ -136,15 +137,26 @@ redaction applies. Deleting the file removes every profile.
   provider's entries and leaves other base providers' entries where they are.
 - **Backup flag.** `backup` is written only while `true`; an absent member reads as
   `false`. The file `version` stays `1`, so files without the member load unchanged.
-- **Remote-compatible flag.** Each profile entry, and each `defaults` entry, stores
-  `remoteCompatible: boolean` once [migrated](#remote-compatibility). Unlike
-  `backup`, it is written for both values, so a missing member always means "not
-  migrated yet". The file `version` stays `1`.
-- **Downgrade.** An older daemon ignores `backup` and `remoteCompatible`, and keeps
-  the array order. It drops both when it next rewrites the file, after any create,
-  update or delete. After an upgrade the `backup` flags must be set again, and the
-  daemon migrates `remoteCompatible` again from the rule, so an explicit choice that
-  differs from the rule must be made again. An older daemon never fails over.
+- **Remote-compatible choices.** The saved [remote-compatible](#remote-compatibility)
+  choices live in a second daemon-owned file,
+  `<data_dir>/provider-remote-compatible.json` (mode `0600`):
+  `{ "version": 1, "profiles": { "<profileId>": boolean }, "defaults": { "<baseProviderId>": boolean } }`.
+  An older daemon never reads or rewrites it, so the choices survive a downgrade
+  and upgrade. A profile or Default with no entry is not migrated yet. The daemon
+  writes it atomically like the profile file, serialized with the other mutations.
+  A mutation that changes both files writes this one first and restores its previous
+  content if the profile-file write fails. An entry for a profile id with no
+  metadata is inert, and the daemon prunes it on its next write of this file. It
+  holds no secrets. If it is malformed or has an unknown `version`, the daemon leaves
+  it untouched, reads every configuration as `not-marked` (an account folder still
+  reads as `account-folder`), and refuses `remoteCompatible` writes with `-32603`
+  `provider-profiles-unreadable`.
+- **Downgrade.** An older daemon ignores `backup` and keeps the array order. It drops
+  `backup` when it next rewrites the file, after any create, update or delete, so the
+  flags must be set again after an upgrade. It never fails over. While downgraded, it
+  applies its own rule: it sends any configuration without an account folder,
+  including ones the user unmarked. After the upgrade the saved choices apply again;
+  only profiles created while downgraded are migrated.
 - **Reads.** The daemon reads the file at startup and after its own writes. It does
   not watch for external edits; changes made outside the daemon apply after a restart.
   If the file is malformed or has an unknown `version`, the daemon still starts and
@@ -352,15 +364,22 @@ interface ProfileActivation {
     the profile migration rule below to the new `env`, so an older client keeps
     today's behaviour. Clients that know the field always send it.
     `updateDefault` and `update` keep the saved value when it is omitted.
-  - **Migration.** A profile-file entry, or a `defaults` entry, without the stored
-    member keeps today's behaviour: the daemon fills the member at startup from the
-    rule below and rewrites the file once, before it serves any request.
+  - **Migration.** A profile, or a Default of a base provider that advertises
+    `supportsProfiles`, with no entry in the
+    [choices file](#storage) keeps today's behaviour: the daemon adds its entry at
+    startup from the rule below and writes the file once, before it serves any
+    request.
     - A profile is marked unless it sets an account folder. So API key and token
       profiles start marked, Different login profiles (an account folder) start
       unmarked, and Advanced profiles follow the same rule.
     - A Default with at least one saved entry and no account folder starts marked.
       Every other Default starts unmarked and keeps working on remote machines
-      through machine sign-in, which is on by default.
+      through machine sign-in, which is on by default. This includes a Default that
+      sets an account folder: today it is refused, and after migration it runs
+      with the machine's own sign-in and sends nothing, as the
+      [launch rules](./nodes.md#placement-across-machines) say for any unmarked
+      Default. Its folder never leaves the backend. The user can turn machine
+      sign-in off to keep it refused.
     After migration the value changes only through an explicit write, or the
     unmarking above; an `env` change never marks a configuration.
   - [Cloud machines](./nodes.md#placement-on-e2b) need more: a configuration
@@ -824,13 +843,13 @@ type DefaultRemoteLaunch =
   `providers.profiles.*` methods.
 - **Storage.** Both halves belong to the daemon's own data dir, like profiles:
   - The profile file gains an optional
-    `defaults: { "<baseProviderId>": { "name"?, "envId"?, "remoteCompatible"? } }`
-    member. `name` is present only for a renamed Default. `envId` is present only
-    while entries are saved; it is minted like a profile id and is never exposed.
-    The file `version` stays `1`.
-  - Each `defaults` entry also stores `remoteCompatible` once
-    [migrated](#remote-compatibility), so the entry is kept for every base provider
-    that advertises `supportsProfiles`, even with neither `name` nor `envId`.
+    `defaults: { "<baseProviderId>": { "name"?, "envId"? } }` member. `name` is
+    present only for a renamed Default. `envId` is present only while entries are
+    saved; it is minted like a profile id and is never exposed. A base provider with
+    neither is omitted, and the member is omitted when empty. The file `version`
+    stays `1`.
+  - The Default's remote-compatible choice lives in the
+    [choices file](#storage), keyed by base provider id.
   - Environment entries live in the protected `SecretStore` under account
     `providerProfiles.<envId>.env`, in the profile document shape. Because `envId`
     is random and recorded only in this daemon's file, another daemon sharing the
@@ -989,7 +1008,10 @@ which such a daemon ignores. Older clients keep working unchanged:
 - The migration keeps every launch that worked before working, and `create`
   without the field applies the same rule.
 - `update` and `updateDefault` without the field keep the saved choice, except
-  that adding an account folder unmarks the configuration.
+  that adding an account folder unmarks the configuration. Removing the folder does
+  not mark it again, though today that edit makes it compatible; an older client
+  cannot mark it, so the user marks it in a newer client. This is an accepted
+  degradation: marking is consent.
 - `defaultRemoteIncompatibility` lists only Defaults that cannot run, so an older
   picker still offers an unmarked Default that runs through machine sign-in.
 - An older Settings page reads an unmarked Default as `remoteCompatible: false`

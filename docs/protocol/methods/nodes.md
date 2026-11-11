@@ -866,11 +866,16 @@ on this backend.
 | --- | --- | --- | --- |
 | A profile | Yes | — | Its environment is sent as `profileEnv`. |
 | A profile | No | — | Refused: `profile-not-remote-compatible`, reason `not-marked` (or `account-folder` when it sets one). |
-| The Default | Yes | — | Its overrides are sent; with none, nothing is sent. |
+| The Default | Yes | — | Its overrides are sent. With none, nothing is sent and the machine's own sign-in runs it, as in the next row (but whatever machine sign-in is set to). |
 | The Default | No | On | Nothing is sent. The machine's own sign-in runs it, if the provider is detected and not disabled there. A machine whose sign-in is `unknown` is still tried; a `signed-out` or `auth-failed` one is refused with `machine-not-signed-in`. |
 | The Default | No | Off | Refused: `profile-not-remote-compatible`, reason `not-marked` (or `account-folder`), `machineSignIn: false`. |
 | A provider without profiles (for example Unsloth) | — | — | Allowed. Nothing is sent. The model must be on that machine's own list (`model-unavailable` otherwise). |
-| Anything, on [E2B](#placement-on-e2b) | — | — | Must be marked and send a `profileEnv` (`cloud-profile-required` otherwise). Machine sign-in never applies, because a sandbox has no sign-in. |
+| Anything, on [E2B](#placement-on-e2b) | — | — | Must send a `profileEnv` (`cloud-profile-required` otherwise, as today), and a profile or Default must also be marked. Machine sign-in never applies, because a sandbox has no sign-in. |
+
+A **machine sign-in launch** is a launch of the bare `codex` or `claude-code`
+reference that sends nothing: an unmarked Default while machine sign-in is on, or
+a marked Default with no overrides. Only these launches get
+`machine-not-signed-in`.
 
 The same rules apply to every route that starts or switches a remote agent's
 provider: `agent.create`, `agent.delegate` (single and [batch](#batch-placement)),
@@ -894,7 +899,7 @@ the rules refuse, from the catalog's `remoteCompatible` rows and
 2. for a launch without a profile, also skips machines whose provider status is
    `signed-out` or `auth-failed`; a launch with a selected profile (any launch
    that sends `profileEnv`) ignores the default account's sign-in status. When a
-   Default launch that sends nothing has no candidate only because of this step
+   machine sign-in launch has no candidate only because of this step
    (or the named machine is signed out), it fails with `machine-not-signed-in`
    instead of `model-unavailable`;
 3. orders those with free capacity by fewest running agents, then most recently
@@ -940,8 +945,8 @@ surfaces as any remote start failure does.
 Refusals are `-32602` and change nothing:
 
 - `profile-not-remote-compatible` when the launch rules refuse the target;
-- `machine-not-signed-in` when the target sends nothing through machine sign-in
-  and the machine's report says the provider is `signed-out` or `auth-failed`;
+- `machine-not-signed-in` when the target is a
+  [machine sign-in launch](#placement-across-machines) and the machine's report says the provider is `signed-out` or `auth-failed`;
 - `model-unavailable` when the provider is not usable on the agent's machine or
   the model is not listed; `machines` holds only the agent's machine;
 - `placement-unavailable` with reason `machine-unknown` or `machine-revoked`
@@ -1709,12 +1714,12 @@ must change first. The messages are:
 | Profile, `account-folder` | "Work uses an account folder (CLAUDE_CONFIG_DIR) that only exists on this backend, so it can't run on another machine; pick a configuration that uses an API key or token and is marked for remote machines." |
 | Default, `not-marked`, machine sign-in off | "Default isn't marked for remote machines, and using the machine's own sign-in is off for Claude Code. In Settings → Providers → Claude Code, turn on either option on the Default row, or pick a profile marked for remote machines." |
 | Default, `account-folder`, machine sign-in off | "Default uses an account folder (CLAUDE_CONFIG_DIR) that only exists on this backend, and using the machine's own sign-in is off for Claude Code. Turn that on in Settings → Providers → Claude Code, or pick a profile marked for remote machines." |
-| Default, any reason, on E2B | "Default isn't marked for remote machines, and E2B has no sign-in of its own; pick a profile with an API key or token that is marked for remote machines." |
+| Default, `not-marked`, on E2B | "Default isn't marked for remote machines, and E2B has no sign-in of its own; pick a profile with an API key or token that is marked for remote machines." |
+| Default, `account-folder`, on E2B | "Default uses an account folder (CLAUDE_CONFIG_DIR) that only exists on this backend, and E2B has no sign-in of its own; pick a profile with an API key or token that is marked for remote machines." |
 
 `machine-not-signed-in` is `-32602`, raised before any write by placement and by
-`agent.setModel` on a remote agent, when a launch that relies on
-[machine sign-in](./provider-profiles.md#machine-sign-in-on-remote-machines)
-(the Default, unmarked, sending nothing) would run on machines whose cached report
+`agent.setModel` on a remote agent, when a
+[machine sign-in launch](#placement-across-machines) would run on machines whose cached report
 says the provider is `signed-out` or `auth-failed`. It is raised when the named
 machine is signed out, or when sign-in status is the only reason no candidate
 remains:
@@ -1729,9 +1734,8 @@ interface MachineNotSignedInData {
 ```
 
 Its message reads, for example, "Claude Code isn't signed in on Build box, and
-nothing here is marked for remote machines. Sign in to Claude Code on Build box,
-or mark a configuration for remote machines in Settings → Providers → Claude
-Code." A machine whose status is `unknown` is still tried. If that launch fails
+Default sends no sign-in of its own. Sign in to Claude Code on Build box, or pick
+a profile with an API key or token that is marked for remote machines." A machine whose status is `unknown` is still tried. If that launch fails
 on authentication, the agent gets `placementError.code`
 `node-provider-signed-out` ([machine codes](../node-link.md#machine-start-failure-codes)),
 with a detail of the same form, and the machine's report then reads `auth-failed`.

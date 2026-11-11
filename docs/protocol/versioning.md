@@ -1007,7 +1007,7 @@ sub-agents, `agent.setModel` and failover. `profile-not-remote-compatible` data
 gains `name` and `machineSignIn?`; the new `-32602` `machine-not-signed-in`
 refuses a machine-sign-in launch on machines reported signed out, and the new
 machine start-failure code `node-provider-signed-out` reports one that fails on
-authentication. A one-time migration keeps every launch that worked before (see
+authentication. The choices live in a new daemon-owned file that older daemons never touch, and a one-time migration keeps every launch that worked before (see
 [Remote compatibility](./methods/provider-profiles.md#remote-compatibility));
 `create` without the field applies the same rule. No methods or events are added,
 no numeric codes, and no nodeProtocol change (start-failure codes are journaled
