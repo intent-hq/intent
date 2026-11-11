@@ -1689,8 +1689,9 @@ backend speaks the same protocol, as Northflank's published JavaScript client
 
 1. Open `wss://api.northflank.com/v1/command-exec/projects/{projectId}/services/{serviceId}`.
 2. Send the first frame, a JSON text message:
-   `{ "type": "init", "data": { "auth": { "type": "apiToken", "apiToken": <token> }, "context": { "command": [<argv>], "user"?: …, "shell"?: … } } }`.
-   The token goes in this frame, never in the URL.
+   `{ "type": "init", "data": { "auth": { "type": "apiToken", "apiToken": <token> }, "context": { "command": [<argv>], "shell": "none", "user"?: … } } }`.
+   The token goes in this frame, never in the URL. `shell: "none"` runs the
+   argv directly; without it Northflank tries several shells in turn.
 3. Northflank answers `{ "type": "init", "data": { "auth": "successful" } }`;
    any other `auth` value is a failure (`key-rejected` or
    `permission-denied` by its message).
@@ -1699,7 +1700,13 @@ backend speaks the same protocol, as Northflank's published JavaScript client
    An `error` frame (`data.message`) ends the command.
 5. The backend may send `payload` frames (`data`: stdin text) and one
    `{ "type": "stdInEnd" }`. It runs one command per connection, with no shell
-   and no TTY, and closes the socket after `completion`.
+   and no TTY.
+6. Output can still arrive after `completion`. The backend keeps reading
+   `stdOut` and `stdErr` until Northflank closes the stream, and gives up
+   30 s after the last frame that followed `completion`, as the JavaScript
+   client does. Only then is the command's output complete, so the credential
+   that `executor.mint` prints is read from the whole stream. A stream that
+   closes before `completion` is a failed command.
 
 The backend never logs these frames. Because the protocol is not part of
 Northflank's REST reference, the adapter's live test runs a command this way,
