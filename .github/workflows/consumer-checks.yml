@@ -27,7 +27,8 @@
 # monorepo docs at that commit, and every checker tolerates docs that lead the
 # pin. For an addition, land the monorepo docs PR first (the summary table
 # names the file to update; the checks only warn until the component catches
-# up), then start a new run; the later submodule bump then lands green. For a
+# up), then start a new run (consumer-checks-docs-rerun.yml re-runs all jobs
+# on the component PRs the docs PR links); the later submodule bump then lands green. For a
 # removal, land the component PR first (this job warns about the now-extra
 # docs entry; a docs-first removal is rejected as a component extra) and remove
 # the docs entry after the bump. A rename is an addition: document the new name

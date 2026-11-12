@@ -167,7 +167,8 @@ run against the pins in the monorepo `docs-check` job and, through the reusable
 `.github/workflows/consumer-checks.yml`, as `monorepo-consumer-checks` on every intentd and
 cloudlands-fe PR against that PR's head. Docs lead the pin, by direction: for an
 **addition** the monorepo docs PR its table names lands first (the checks only warn until
-the component catches up), then start a new run (or Re-run all jobs); for a **removal**
+the component catches up), and component PRs it links get a fresh run automatically
+(`consumer-checks-docs-rerun.yml`; else Re-run all jobs); for a **removal**
 the component PR lands first (the upstream check warns about the now-extra docs entry; a docs-first
 removal is rejected as a component extra) and the docs entry is removed after the bump. A
 **rename** is an addition: document the new name first, keeping the old entry, rename in

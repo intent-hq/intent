@@ -786,6 +786,22 @@ cron backstop still advances the pins when dispatch is skipped). The private
 `packages/ios` submodule is best-effort — if its tip cannot be read, it is skipped with
 a warning and never fails the run.
 
+### Consumer checks after a protocol docs merge
+
+`consumer-checks-docs-rerun.yml` runs when a push to `main` changes `docs/protocol/**`
+(or by `workflow_dispatch` with a merged PR number and an optional dry run). For each
+merged docs PR in the push it finds the open, same-repository intentd and cloudlands-fe
+PRs that the docs PR names or that cross-reference it, and re-runs **all** jobs of each
+head-commit run whose `monorepo-consumer-checks` failed before the docs merged; GitHub
+resolves `consumer-checks.yml@main` again only for a new run or a full re-run. A run still
+in flight is cancelled first when its checks already failed, or waited for (up to 45
+minutes) while they are running. The job summary lists every decision.
+
+It authenticates with `CONSUMER_CHECKS_RERUN_TOKEN` — a fine-grained PAT with Actions read
+and write plus Pull requests read on `intent-hq/intentd` and `intent-hq/cloudlands-fe`.
+It is fail-soft: without the secret the run warns and ends green, and
+`scripts/consumer-checks-stale-rerun.sh` still explains a stale "Re-run failed jobs".
+
 ## Coordinated Release Ordering
 
 The pipeline is event-chained, with cron retries as backstops: intentd release PR

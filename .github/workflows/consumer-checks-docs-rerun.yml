@@ -1,0 +1,76 @@
+# Start fresh monorepo-consumer-checks on the intentd and cloudlands-fe PRs a
+# merged docs/protocol PR links. Docs lead the pin: a component PR that needs
+# new protocol docs is red until the docs PR merges, and then needs a check run
+# that resolves consumer-checks.yml@main again. "Re-run failed jobs" keeps the
+# monorepo commit of the first attempt and fails the same way (intentd#3289:
+# run 43066761390 attempt 2 reused monorepo 23e1b23e after intent#9108 merged,
+# about 20 extra minutes). The script re-runs ALL jobs of each stale failed
+# run, which GitHub resolves @main for again; see scripts/consumer-checks-docs-rerun.mjs
+# for the linking and decision rules. scripts/consumer-checks-stale-rerun.sh
+# (run by consumer-checks.yml) remains the backstop explanation for a manual
+# rerun of failed jobs.
+#
+# CONSUMER_CHECKS_RERUN_TOKEN is a fine-grained PAT with Actions read and
+# write plus Pull requests read on intent-hq/intentd and intent-hq/cloudlands-fe.
+# It is fail-soft: without it the run warns and ends green. The workflow
+# always checks out main, so the token only ever meets main's script.
+#
+# Manual use: dispatch with a merged monorepo PR number (dry-run to preview).
+name: Restart consumer checks after protocol docs merge
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/protocol/**'
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Merged monorepo PR number whose linked component PRs to restart"
+        required: true
+        type: number
+      dry-run:
+        description: "Only report what would be cancelled or re-run"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+concurrency:
+  group: consumer-checks-docs-rerun-${{ github.sha }}-${{ inputs.pr || 'push' }}
+  cancel-in-progress: false
+
+jobs:
+  runner-route:
+    uses: ./.github/workflows/runner-route.yml
+    permissions:
+      contents: read
+      actions: read
+    secrets:
+      CI_QUEUE_READ_TOKEN: ${{ secrets.CI_QUEUE_READ_TOKEN }}
+
+  restart:
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
+    # Waits up to WAIT_MINUTES for component runs still checking old docs.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          submodules: false
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node scripts/consumer-checks-docs-rerun.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RERUN_TOKEN: ${{ secrets.CONSUMER_CHECKS_RERUN_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          WAIT_MINUTES: '45'
