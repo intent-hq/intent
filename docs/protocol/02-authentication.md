@@ -108,16 +108,17 @@ owner can mint it.
 connect without copying the owner token. It adds two pieces to admission.
 
 - **`/local-pair` is a second unauthenticated path**, beside `/invite`. Its
-  upgrade requires `server.wsApi.enabled`, a loopback TCP peer (`127.0.0.0/8`,
-  `::1` or IPv4-mapped loopback) and an absent or loopback `Origin`; anything
-  else is `403`. It resolves no credential and serves exactly one method,
+  upgrade requires `server.wsApi.enabled`, the built-in tunnel not running, a
+  loopback TCP peer (`127.0.0.0/8`, `::1` or IPv4-mapped loopback) and an absent
+  or loopback `Origin`; anything else is `403`. It resolves no credential and serves exactly one method,
   `pairing.redeemLocalCode`; every other method is `-32001`. With no active code
   it grants nothing.
 - **Local pairing credentials** are a separate credential kind minted by a
   successful redemption: 32 random bytes, hex-encoded, returned once, stored
   as its SHA-256. On `/ws` the gate looks it up after the owner token and
-  principal credentials and admits it only from a loopback peer, bound to the
-  primary principal. It is `401` from any other peer and on `/tunnel`,
+  principal credentials and admits it only from a loopback peer while the
+  built-in tunnel is not running, bound to the primary principal. It is `401`
+  from any other peer, while the tunnel runs, and on `/tunnel`,
   `/invite`, `/local-pair` and `/node/*`. As a TCP connection it cannot call
   local-only methods, so it can never read or rotate the owner token.
   `server.rotateToken` does not affect it. `pairing.revokeLocalCredential` closes
@@ -126,6 +127,17 @@ connect without copying the owner token. It adds two pieces to admission.
 
 Creating codes and listing or revoking these credentials is local-only owner
 administration, like `pairing.getInfo`.
+
+While Intent's built-in remote-access tunnel (`server.tunnel.*`) is running,
+local code pairing is blocked, because the tunnel delivers remote traffic from a
+loopback peer: `pairing.createLocalCode` is `-32603 { code: "tunnel-active" }`,
+starting the tunnel cancels the active code (`cancelReason: "tunnel-active"`) and
+closes live local-pairing-credential connections with **1008**, without revoking
+the credentials. Forwarding by other tools (SSH port forwards, `tailscale serve`,
+other local proxies) also arrives from loopback and cannot be told apart, so the
+code (5 tries, 10 minutes) and the 64-hex-character credential are the real
+protection; loopback-only admission is defence in depth. See
+[§5.58](./methods/local-code-pairing.md#while-the-built-in-tunnel-is-running).
 
 ### Protected bootstrap admission (prepared)
 

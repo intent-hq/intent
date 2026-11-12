@@ -89,6 +89,9 @@ never survives a daemon restart.
   never logged, persisted, put in an event or returned again.
 - **One at a time.** Creating a code while another is active cancels the earlier
   one (reason `replaced`) before the new one becomes active.
+- **Tunnel.** No code can be created while the built-in tunnel is running, and
+  starting the tunnel cancels the active code (reason `tunnel-active`); see
+  [While the built-in tunnel is running](#while-the-built-in-tunnel-is-running).
 - **Comparison.** Redemption normalizes the input, computes its HMAC and compares
   it in constant time.
 - **Wrong tries.** Each well-formed wrong code counts one try. The fifth wrong try
@@ -122,7 +125,7 @@ administration methods are local-only, and the fifth is not served on `/ws`.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| pairing.createLocalCode *(fast path, local-only)* | — | `{ code, localCode: LocalPairingCode }` — `code` is the plaintext code in display form (`"KTP-82M"`), returned only here; `localCode.expiresAt` is its expiry. Cancels any active code first. No TCP listener is `-32603 { code: "listener-down" }` and no code is created |
+| pairing.createLocalCode *(fast path, local-only)* | — | `{ code, localCode: LocalPairingCode }` — `code` is the plaintext code in display form (`"KTP-82M"`), returned only here; `localCode.expiresAt` is its expiry. Cancels any active code first. No TCP listener is `-32603 { code: "listener-down" }`; a running built-in tunnel is `-32603 { code: "tunnel-active" }`; in both cases no code is created |
 | pairing.cancelLocalCode *(fast path, local-only)* | codeId? | `{ cancelled: boolean }` — cancels the active code, or only that code when `codeId` is given; `false` when there is no matching active code |
 | pairing.redeemLocalCode *(fast path, `/local-pair` only)* | code (req), appName (req) | `LocalPairingGrant` below — spends the code and mints one local pairing credential |
 | pairing.listLocalCredentials *(fast path, local-only)* | — | `{ credentials: LocalPairingCredential[] }` — unrevoked credentials ordered by `createdAt`, tie-break `credentialId`; never includes a token or hash |
@@ -141,7 +144,7 @@ interface LocalPairingCode {
   createdAt: string;         // RFC 3339
   expiresAt: string;         // RFC 3339, createdAt + 10 minutes
   attemptsRemaining: number; // 5 at creation, 0 when locked
-  cancelReason?: "user" | "replaced";   // present only when state is "cancelled"
+  cancelReason?: "user" | "replaced" | "tunnel-active"; // present only when state is "cancelled"
   credentialId?: string;     // present only when state is "redeemed"
   appName?: string;          // present only when state is "redeemed"
 }
@@ -182,14 +185,16 @@ requester's first contact, before it holds any credential.
 Upgrade admission, in order:
 
 1. `server.wsApi.enabled` must be on; otherwise there is no listener.
-2. The TCP peer address must be loopback (`127.0.0.0/8`, `::1`, or an
+2. The built-in tunnel must not be running; while it runs every `/local-pair`
+   upgrade is `403`, the same refusal as a non-loopback peer.
+3. The TCP peer address must be loopback (`127.0.0.0/8`, `::1`, or an
    IPv4-mapped `::ffff:127.0.0.0/104`). Any other peer is `403` at upgrade,
    whatever the bind address.
-3. The `Origin` header must be absent or a loopback origin (`http(s)://localhost`,
+4. The `Origin` header must be absent or a loopback origin (`http(s)://localhost`,
    `127.0.0.1` or `[::1]`, any port). `Origin: null`, `file://`, the host's own
    hostname and every other origin are `403`. This is stricter than the §2.2
    allow-list because only a native process should redeem.
-4. No credential is resolved. An `Authorization` header or `?token=` is ignored
+5. No credential is resolved. An `Authorization` header or `?token=` is ignored
    and grants nothing.
 
 On an admitted connection:
@@ -220,8 +225,9 @@ per successful redemption; pairing the same requester again mints another.
   daemon restarts until revoked.
 - **Admission.** The `/ws` upgrade gate looks the bearer token up among unrevoked
   local pairing credentials after the owner token and principal credentials. It is
-  accepted only when the TCP peer address is loopback; from any other peer it is
-  `401`. It is `401` on `/tunnel`, `/invite`, `/local-pair` and `/node/*`.
+  accepted only when the TCP peer address is loopback and the built-in tunnel is
+  not running; otherwise it is `401`, like an unknown token. It is `401` on
+  `/tunnel`, `/invite`, `/local-pair` and `/node/*`.
 - **Authority.** The connection is bound to the **primary principal** with owner
   authority, so the requester sees the host as its owner would remotely.
   Because it is a TCP connection, every local-only method is `-32001`, so it cannot
@@ -239,6 +245,36 @@ per successful redemption; pairing the same requester again mints another.
   the token with `401` on replay. Admission re-checks revocation so a connection
   in the middle of its upgrade cannot survive a revoke.
 
+### While the built-in tunnel is running
+
+Intent's built-in remote-access tunnel (the tailcat sidecar, `server.tunnel.*`,
+[§5.12](./settings.md)) forwards remote traffic to the WSS listener, so it arrives
+from a loopback peer. Local code pairing is therefore **blocked while that tunnel
+is running**: from the moment the daemon starts the sidecar (at boot, through
+`settings.update` or `intentd pair`) until the sidecar has stopped, including any
+restart backoff after an unexpected exit.
+
+| Surface | While the tunnel is running | When the tunnel starts |
+| --- | --- | --- |
+| `pairing.createLocalCode` | `-32603 { code: "tunnel-active" }`; no code is created | — |
+| Active code | — | Cancelled with `cancelReason: "tunnel-active"` and a `pairing:localCode-changed` event; a later redemption is `local-code-expired` |
+| `/local-pair` upgrade | `403`, the same as a non-loopback peer | Open `/local-pair` connections are closed |
+| Local pairing credential on `/ws` | `401`, refused like an unknown token | Live connections it admitted are closed with close code **1008** (`tunnel active`) after draining in-flight responses |
+
+Credentials are **not revoked**: they stay listed, and they are admitted again
+once the tunnel has stopped. The requester treats the `401` like any unreachable
+saved machine and retries; it does not discard the credential. Listing, revoking
+and cancelling stay available while the tunnel runs.
+
+**Limitation.** Loopback-only admission cannot tell a local process from traffic
+that other tools forward to the listener: SSH port forwards, `tailscale serve`,
+other local proxies or reverse tunnels also arrive from a loopback peer. The
+daemon can detect only its own tunnel. The real protection is the code itself for
+redemption (6 characters, locked after 5 wrong tries, 10-minute expiry, one
+active code, created only by the person at the host) and the 64-hex-character
+credential for admission. The loopback rule and the tunnel block are defence in
+depth.
+
 ### Events
 
 Both events are delivered **only to local-transport (UDS / named pipe)
@@ -249,7 +285,7 @@ a plaintext code, a code hash or a token. Both are daemon-global and carry no
 
 | Event | When | `data` |
 | --- | --- | --- |
-| `pairing:localCode-changed` | A code is created, a wrong try is counted, or it is redeemed, expires, is cancelled or is locked | `{ localCode: LocalPairingCode }` — the full current state |
+| `pairing:localCode-changed` | A code is created, a wrong try is counted, or it is redeemed, expires, is cancelled (including by a tunnel start) or is locked | `{ localCode: LocalPairingCode }` — the full current state |
 | `pairing:localCredentials-changed` | A credential is minted or revoked, or its `connected` value changes | `{ credential: LocalPairingCredential }`, or `{ credentialId, revoked: true }` after revocation |
 
 The host's code panel shows **Connected** when it sees `state: "redeemed"` for its
@@ -336,6 +372,7 @@ records whose `pid` is not running. It never deletes a live daemon's record.
 | -32001 | — | any | A local-only method over TCP/WSS, `pairing.redeemLocalCode` outside `/local-pair`, or another method on `/local-pair` |
 | -32003 | `{ code: "local-pairing-credential" }` | `pairing.getSelfInfo` | Called on a connection admitted with a local pairing credential |
 | -32603 | `{ code: "listener-down" }` | `pairing.createLocalCode` | The host has no TCP listener; turn on connections first |
+| -32603 | `{ code: "tunnel-active" }` | `pairing.createLocalCode` | The host's built-in remote-access tunnel is running; turn it off first |
 | -32602 | `{ code: "not-found" }` | `pairing.revokeLocalCredential` | Unknown `credentialId` |
 
 The order of checks in `pairing.redeemLocalCode` is: endpoint and peer, then
@@ -362,5 +399,9 @@ checks.
 | Revoke while connected | Connection closed with 1008; replay `401` |
 | `server.rotateToken` | Local pairing credentials keep working |
 | Daemon restart with an active code | Code gone; credentials kept |
+| `pairing.createLocalCode` with the tunnel running | `tunnel-active`; no code |
+| Tunnel starts with an active code | Code `cancelled` with `cancelReason: "tunnel-active"` |
+| `/local-pair` with the tunnel running | `403` at upgrade |
+| Tunnel starts with a credential connected | Connection closed with 1008; `401` while the tunnel runs; admitted again after it stops; credential still listed |
 | Clean exit | Discovery record deleted |
 | Crash | Record left; readers skip it because `pid` is not running |

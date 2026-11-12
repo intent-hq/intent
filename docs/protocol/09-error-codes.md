@@ -133,7 +133,11 @@ and does not count as a wrong try.
 | -32003 | `{ code: "local-pairing-credential" }` | `pairing.getSelfInfo` on a connection admitted with a local pairing credential, which is never re-exported as a pairing link |
 
 `pairing.createLocalCode` with no TCP listener reuses the pairing
-`-32603 { code: "listener-down" }`, and `pairing.revokeLocalCredential` with an
+`-32603 { code: "listener-down" }`; while Intent's built-in remote-access tunnel
+is running it is `-32603 { code: "tunnel-active" }` (turn the tunnel off first).
+Starting the tunnel also refuses local pairing credentials with HTTP `401` and
+`/local-pair` upgrades with `403` until it stops ([§5.58](./methods/local-code-pairing.md#while-the-built-in-tunnel-is-running)).
+`pairing.revokeLocalCredential` with an
 unknown ID reuses `-32602 { code: "not-found" }`.
 
 ### Shared-host typed refusals *(10.9)*
