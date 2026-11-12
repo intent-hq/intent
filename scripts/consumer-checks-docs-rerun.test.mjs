@@ -105,8 +105,8 @@ const docsRoutes = (body, timeline = []) => ({
   'GET /repos/intent-hq/intent/pulls/9108': docsPr(body),
   'GET /repos/intent-hq/intent/pulls/9108/files?per_page=100': [{ filename: 'docs/protocol/methods/agent.md' }],
   'GET /repos/intent-hq/intent/issues/9108/timeline?per_page=100': timeline,
-  ['GET /repos/intent-hq/intent/compare/' + OLD + '...' + MERGE]: { status: 'ahead' },
-  ['GET /repos/intent-hq/intent/compare/' + NEW + '...' + MERGE]: { status: 'behind' },
+  ['GET /repos/intent-hq/intent/compare/' + OLD + '...' + MERGE + '?per_page=1']: { status: 'ahead' },
+  ['GET /repos/intent-hq/intent/compare/' + NEW + '...' + MERGE + '?per_page=1']: { status: 'behind' },
 });
 
 function run(fake, env = {}) {
@@ -233,6 +233,27 @@ test('API errors are reported per run, the rest still run, and the job ends red'
   assert.match(summary, /intentd#3300 \| error \| HTTP 502/);
   // The 409 on cancel is a finished run: the next poll re-runs it.
   assert.match(summary, /cloudlands-fe#4458 run 5 \| re-ran all jobs/);
+});
+
+test('a transient error while polling is retried, not dropped', async () => {
+  const fake = fakeGitHub({
+    ...docsRoutes('intentd#3289'),
+    'GET /repos/intent-hq/intentd/pulls/3289': openPr('intent-hq/intentd'),
+    [runsPath('intent-hq/intentd')]: { workflow_runs: [{ id: 2, workflow_id: 1, created_at: BEFORE }] },
+    'GET /repos/intent-hq/intentd/actions/runs/2': { id: 2, status: 'completed', ...resolved(OLD) },
+    'GET /repos/intent-hq/intentd/actions/runs/2/jobs?filter=latest&per_page=100': { jobs: [consumer('completed', 'failure')] },
+    'POST /repos/intent-hq/intentd/actions/runs/2/rerun': null,
+  });
+  const inner = fake.fetchImpl;
+  let failures = 1;
+  fake.fetchImpl = async (url, init) => {
+    if (url.endsWith('/intentd/actions/runs/2') && failures-- > 0) return new Response('bad gateway', { status: 502 });
+    return inner(url, init);
+  };
+  const { code, sleeps } = await run(fake);
+  assert.equal(code, 0);
+  assert.equal(sleeps.length, 1);
+  assert.deepEqual(fake.posts(), ['POST /repos/intent-hq/intentd/actions/runs/2/rerun']);
 });
 
 test('cancels an in-flight run whose checks failed, then re-runs it once it stops', async () => {

@@ -34,8 +34,9 @@
 // commit. Timestamps cannot decide this: intentd#3289's stale attempt 2
 // started 34 s AFTER intent#9108 merged. An in-flight stale run whose checks
 // already failed is cancelled first; one still running them is waited for.
-// Per-run API errors are reported and the rest still run; any error makes
-// the job red after the summary is written.
+// Server errors and rate limits during polling are retried until the
+// deadline; other per-run API errors are reported and the rest still run.
+// Any error makes the job red after the summary (a missing token stays green).
 
 import { appendFileSync, readFileSync } from 'node:fs';
 import process from 'node:process';
@@ -218,7 +219,7 @@ async function staleness(gh, run, merges, cache) {
     const key = sha + '...' + merge.sha;
     if (!cache.has(key)) {
       // "ahead"/"diverged": the merge commit is not an ancestor of `sha`.
-      const { status } = await gh.get(MONOREPO, '/compare/' + key);
+      const { status } = await gh.get(MONOREPO, '/compare/' + key + '?per_page=1');
       cache.set(key, status === 'ahead' || status === 'diverged');
     }
     if (cache.get(key)) return true;
@@ -226,6 +227,9 @@ async function staleness(gh, run, merges, cache) {
   return false;
 }
 
+// Server errors and rate limits are retried at the next poll.
+const transient = (error) => !error.status || error.status >= 500 || error.status === 429 ||
+  (error.status === 403 && /rate limit/i.test(error.message));
 const describe = (error) => (error.status ? 'HTTP ' + error.status + ': ' : '') + error.message.split('\n')[0].slice(0, 160);
 
 export async function restart(gh, targets, options) {
@@ -269,6 +273,7 @@ export async function restart(gh, targets, options) {
         const run = await gh.get(item.repo, '/actions/runs/' + item.runId);
         const jobs = await gh.list(item.repo, '/actions/runs/' + item.runId + '/jobs?filter=latest&per_page=100', 'jobs');
         const stale = await staleness(gh, run, item.merges, cache);
+        item.lastError = null;
         const { action, reason, quiet } = decide({ run, jobs, stale });
         const url = run.html_url;
         if (action === 'skip') {
@@ -293,13 +298,23 @@ export async function restart(gh, targets, options) {
           next.push(item);
         }
       } catch (error) {
-        results.push({ label: item.label, outcome: 'error', reason: describe(error) });
+        if (!transient(error)) {
+          results.push({ label: item.label, outcome: 'error', reason: describe(error) });
+          continue;
+        }
+        log(item.label + ': retrying after ' + describe(error));
+        item.lastError = describe(error);
+        next.push(item);
       }
     }
     if (next.length === 0) break;
     if (now() >= deadline) {
       for (const item of next) {
-        results.push({ label: item.label, outcome: 'gave up', reason: 'still in flight after ' + Math.round(waitMs / 60_000) + ' minutes; start a new run or use "Re-run all jobs"' });
+        if (item.lastError) {
+          results.push({ label: item.label, outcome: 'error', reason: item.lastError + ' (still failing at the deadline)' });
+        } else {
+          results.push({ label: item.label, outcome: 'gave up', reason: 'still in flight after ' + Math.round(waitMs / 60_000) + ' minutes; start a new run or use "Re-run all jobs"' });
+        }
       }
       break;
     }

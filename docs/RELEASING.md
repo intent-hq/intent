@@ -802,8 +802,10 @@ It authenticates with `CONSUMER_CHECKS_RERUN_TOKEN` — a fine-grained PAT with 
 and write plus Pull requests read on `intent-hq/intentd` and `intent-hq/cloudlands-fe`,
 stored only as a secret of the `consumer-checks-rerun` environment (deployment branches:
 `main`), never as a repository secret, so a dispatch from another branch cannot read it.
-It is fail-soft: without the secret the run warns and ends green, and
-`scripts/consumer-checks-stale-rerun.sh` still explains a stale "Re-run failed jobs".
+Without the secret the run warns and ends green; with it, server errors and rate limits
+are retried while waiting, and any other API error is listed in the summary and turns the
+run red after the remaining PRs are handled. `scripts/consumer-checks-stale-rerun.sh` still
+explains a stale "Re-run failed jobs".
 
 ## Coordinated Release Ordering
 
