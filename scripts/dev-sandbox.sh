@@ -9,6 +9,13 @@
 # gets the scripted e2e ACP agent (MOCK_AGENT_SCRIPT_PATH) and a separate
 # config file (mockAgentConfig) whose model.defaultProvider is "mock".
 #
+# MOCK_AGENT_BEHAVIOR (or a MOCK_AGENT_BEHAVIOR_FILE holding the same JSON)
+# scripts each reply; the format is in the header of
+# packages/cloudlands-fe/e2e/mock-acp-agent.js. Ready-made behaviours:
+#   tool-approval prompt (every message shows an approval card; the reply follows the answer;
+#   INTENTD_PERMISSION_POLICY=interactive because the daemon otherwise approves it unasked):
+#   INTENTD_PERMISSION_POLICY=interactive MOCK_AGENT=1 MOCK_AGENT_BEHAVIOR='{"clientCalls":[{"method":"session/request_permission","params":{"sessionId":"mock-session-1","toolCall":{"toolCallId":"tc-1","title":"Run npm test","kind":"execute","rawInput":{"command":"npm test"}},"options":[{"optionId":"allow","name":"Allow","kind":"allow_once"},{"optionId":"reject","name":"Reject","kind":"reject_once"}]}}],"response":"Permission answered."}' make dev-sandbox-stack
+#
 # Test-only hook: SANDBOX_TEST_FORK_HOLD=<path> pauses the script between each
 # child fork and its pid capture for as long as <path> exists, so a test can
 # deliver a signal inside that window deterministically. Unset in normal use.
@@ -709,7 +716,7 @@ elif [[ "$mode" == stack ]]; then
       daemon_env+=('MOCK_AGENT_BEHAVIOR={"response":"Scripted reply from the sandbox mock agent (MOCK_AGENT=1)."}')
     fi
     echo "[dev-sandbox-stack] Mock agent: $mock_agent_script is the default provider (config $mock_agent_config)."
-    echo "[dev-sandbox-stack] Mock agent: set MOCK_AGENT_BEHAVIOR or MOCK_AGENT_BEHAVIOR_FILE to change its reply (see the script header)."
+    echo "[dev-sandbox-stack] Mock agent: set MOCK_AGENT_BEHAVIOR or MOCK_AGENT_BEHAVIOR_FILE to change its reply or ask for tool approval (see the header of scripts/dev-sandbox.sh)."
   fi
   daemon_args=(serve)
   if [[ ${SANDBOX_TCP:-0} == 1 ]]; then
