@@ -109,6 +109,8 @@ adds a ninth, `remoteMachines.models`, gated by `remoteMachineModels: 1`; catalo
 [Node invites](./methods/nodes.md#node-invites-and-claim) add two more:
 `executor.invite.create` on the machine and `remoteMachines.claim` on the
 backend, gated by `remoteMachineClaim: 1`.
+The [ordered machine list](./methods/nodes.md#ordered-machine-list) adds two more,
+`remoteMachines.order` and `remoteMachines.setOrder`, gated by `machineOrder: 1`.
 [Link traffic capture](./methods/nodes.md#link-traffic-capture) adds three
 owner-only router methods, `remoteLinkTraffic.*`, gated by
 `remoteLinkTraffic: 1`.
@@ -125,18 +127,18 @@ The [Agent Plugins contract (§5.57)](./methods/plugins.md) adds five
 administrator-only router methods that install, update, remove, enable and list
 app-wide plugins; `agentPlugins: 1` gates support.
 
-The documented surface reserves **504 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The documented surface reserves **506 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
 
-- **Router methods:** 445 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 447 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 59 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 0; use canonical Git read names
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 7 notifications: `events.lost` ([loss contract](./event-stream-recovery.md)), `events.event` (§6.3) and the socket-private `workspace.repositoryContext.retired`, `workspace.repositorySelection.retired`, `accept-changes.retired`, `sourceControl.read.retired`, `sourceControl.read.invalidated` controls (§6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 499 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 506 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 499 dispatchable names + 7 notifications. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 506 dispatchable names + 7 notifications. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.58) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
@@ -148,7 +150,7 @@ methods and four socket-private control notifications. Their individual hello
 capabilities gate support; catalog entries do not grant permission or establish
 which desktop release contains the feature. All existing methods remain present.
 
-### Router methods by namespace (445 total)
+### Router methods by namespace (447 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -187,7 +189,7 @@ which desktop release contains the feature. All existing methods remain present.
 | principal | 3 | list, me, revokeSelf — `me` is the principal this connection was bound to at admission (`{ id, login: string \| null, displayName: string \| null, avatarUrl: string \| null, isAdministrator, identity? }` — the profile fields are always present, `null` until a forge identity is cached; `identity?` is the v10.8 provider-neutral triple `{ provider, host, externalUserId }`, omitted while unlinked; §5.46; v10.3, [intent-hq/intentd#1869](https://github.com/intent-hq/intentd/pull/1869), no params, daemon-global — no `workspaceId`). Fails closed (`-32603`) when no caller is bound. `list` ([intent-hq/intentd#2023](https://github.com/intent-hq/intentd/pull/2023); §5.48) is the administrator-only roster of credentialed guests `{ principals: [{ principalId, login: string \| null, displayName: string \| null, avatarUrl: string \| null, githubUserId: integer \| null, identity? }] }` the direct member add draws from (the four profile keys always present, `null` when uncached — the `me` convention; `identity?` omitted while unlinked). `revokeSelf` (shipped in intentd b518d31; §5.48) revokes the caller's **own** credentials and drops its collaborator memberships (each publishing the `removedPrincipalId` `workspace:updated`, §6.5); self-directed only (no target parameter), the administrator is refused in the service layer |
 | providers | 7 | catalog, profiles.create, profiles.delete, profiles.list, profiles.reorder, profiles.update, profiles.updateDefault — `catalog` is the static provider registry served over the wire (§5.38; v2.6, daemon-global result; optional routing-only `workspaceId`); `profiles.*` manage named Codex/Claude Code profiles and the Default configuration's name and environment overrides (§5.54; prepared, administrator-only) |
 | remoteLinkTraffic | 3 | snapshot, start, stop — executor-link traffic capture (§5.50), owner-only, daemon-global |
-| remoteMachines | 7 | add, backendInfo, claim, list, models, refresh, remove — daemon-to-daemon exposed machines (§5.50), owner-only, daemon-global; `models` is experimental and gated by `remoteMachineModels: 1`; `claim` is gated by `remoteMachineClaim: 1` |
+| remoteMachines | 9 | add, backendInfo, claim, list, models, order, refresh, remove, setOrder — daemon-to-daemon exposed machines (§5.50), owner-only, daemon-global; `models` is experimental and gated by `remoteMachineModels: 1`; `claim` is gated by `remoteMachineClaim: 1`; `order` (owner and members) and `setOrder` (owner) are the [ordered machine list](./methods/nodes.md#ordered-machine-list), gated by `machineOrder: 1` |
 | repo | 3 | list, remove, warmCache — opportunistic background repo-cache refresh for one GitHub repo (§5.11; v6.10, daemon-global — no `workspaceId`) |
 | repoConfig | 4 | ensureDir, get, has, save |
 | rules | 3 | get, list, update |
@@ -604,7 +606,7 @@ Returns the structured QR pairing payload so local clients (the `intentd pair` C
 - `uri` is the plaintext payload encoded in the QR code: `intent://pair?v=1&host=<ip[,ip...]>&port=<p>&fp=<sha256>&token=<t>[&mode=node][&tc=<addr>]` (query values percent-encoded where needed; `host=` may be **empty** — the hostless form, see the `hosts` bullet). The component fields (`hosts`, `port`, `fingerprint`, `token`, `version`, `daemonMode`, and — when the tunnel is up — `tcAddress`) are provided so clients can render their own payloads.
 - `hosts` is the **dialable pairing host set** — bind-aware and **never containing loopback** ([intent-hq/intentd#1656](https://github.com/intent-hq/intentd/pull/1656), [intent-hq/intentd#1672](https://github.com/intent-hq/intentd/pull/1672)): a listener bound to specific addresses advertises exactly those, an unspecified bind (`0.0.0.0` / `::`) enumerates the machine's local addresses (virtual/container interfaces skipped; `::` adds non-link-local IPv6 — link-local needs a zone index, ULA included; its listener is dual-stack), and loopback (`127.0.0.1` / `::1`) is filtered out even when explicitly bound: pairing hosts feed remote devices, and loopback is not dialable from another device. With a loopback-only bind and the tunnel **up**, `hosts` is **empty** and the payload pairs **hostless** — the `host=` URI param is empty and the `tc=` route alone carries the connection. TLS fingerprint and bearer token come from the same sources as `intentd pair` and `server.pairingInfo`, so all pairing surfaces stay consistent.
 - `tcAddress` (additive, [intent-hq/intentd#1623](https://github.com/intent-hq/intentd/pull/1623)) is the tailcat tunnel's stable `tc…` address (`server.tunnel.*`, §5.12). Present only while the tunnel sidecar is running; **omitted** — never `null` — when the tunnel is disabled or down; detect by presence. When present it is also appended to `uri` as the **final** `tc=` query param (percent-encoded); when absent the URI carries no `tc=` param. The param is additive: clients that predate it tolerate the unknown query param, so the URI stays parseable everywhere.
-- `daemonMode` (additive, docs first) is `"regular"` or `"node"`, the running mode ([reported daemon mode](./methods/nodes.md#reported-daemon-mode)); older daemons omit it. In node mode `uri` also carries the hint `mode=node` before any `tc=` param; a regular daemon's `uri` has no `mode` param, and a link without one means a full daemon. The hint is not authoritative: a client trusts the mode the daemon reports after connecting. Parsers ignore unknown query params, so older clients read the link unchanged.
+- `daemonMode` (additive, docs first) is `"regular"`, `"node"` or `"orchestrator"`, the running mode ([reported daemon mode](./methods/nodes.md#reported-daemon-mode)); older daemons omit it. In node mode `uri` also carries the hint `mode=node` before any `tc=` param; a regular or orchestrator daemon's `uri` has no `mode` param, and a link without one means a daemon that can be the current backend. The hint is not authoritative: a client trusts the mode the daemon reports after connecting. Parsers ignore unknown query params, so older clients read the link unchanged.
 - **Local-only:** the payload embeds the long-lived bearer token, so remote (TCP/WSS) callers are rejected with `-32001` regardless of locality flags. Call it over UDS.
 - Errors (`-32603`) when pairing is impossible, instead of minting a payload no other device can connect through:
   - **Listener down** — the TCP (WSS) listener is not running, so there is no port to embed. Carries the machine-readable discriminator `error.data = { "code": "listener-down" }` on the otherwise-unchanged `-32603` envelope ([intent-hq/intentd#1065](https://github.com/intent-hq/intentd/pull/1065); monorepo#1822) — clients (e.g. the `intentd pair` auto-enable flow) match `error.data.code` first and keep the message-prose match only as a fallback for older daemons that predate the discriminator.

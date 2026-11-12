@@ -358,6 +358,46 @@ as `text`. No streaming, no events, no persistence on either route.
 { "jsonrpc":"2.0","id":84,"result":{ "text":"fix-login-flow" } }
 ```
 
+#### Quick actions on an orchestrator
+
+*(Additive, docs first.)* An [orchestrator](./nodes.md#orchestrator-mode) never
+spawns a provider. It runs `agent.completeOnce` (including auto-commit messages
+and the background executor) and `agent.enhancePrompt` on a machine, over the
+executor link's [`oneShot` frame](../node-link.md#quick-actions-on-the-machine-nodeprotocol-18).
+Params, results and the provider and model resolution are unchanged: the
+orchestrator resolves the provider, model and the selected profile's
+environment exactly as above, and sends the effort candidates for the machine
+to resolve.
+
+1. **Which machine.** The first exposed machine in the
+   [ordered machine list](./nodes.md#ordered-machine-list) that is connected
+   (or connects on demand), negotiated nodeProtocol 18 or later, and reports
+   the provider installed with a sign-in or a profile to send. With a
+   `workspaceId`, a running (not paused) sandbox of that workspace is a
+   candidate too, at its entry's rank; without one, only exposed machines are.
+   A cloud machine is never started or resumed for a quick action. (Workspace
+   homes, documented separately, put the workspace's home first.)
+2. **No machine.** When no machine qualifies, the method returns
+   `{ available: false, reason }`, the existing gate shape (rows below).
+   Auto-commit then uses its deterministic subject.
+3. **One machine.** The orchestrator never tries a second machine. Backup
+   failover across profiles still applies, on the same machine: each attempt is
+   one `oneShot` there, one at a time, all within the method's one `timeoutMs`.
+4. **No local fallback.** Nothing runs on the orchestrator, whatever the
+   result. Replies map to results as the
+   [link contract](../node-link.md#quick-actions-on-the-machine-nodeprotocol-18) lists.
+
+| Condition (orchestrator only) | `reason` |
+| --- | --- |
+| The ordered list has no machine | `no machine can run quick actions; add one under Settings → Machines` |
+| No listed machine is online | `no machine for quick actions is online` |
+| Every online machine runs an older Intent | `update Intent on <machine> to run quick actions there` |
+| The chosen machine answered `unavailable`, or its link dropped | the machine's message, naming it |
+
+These reasons are temporary: clients that hide an affordance on
+`available: false` ask again on the next use instead of hiding it for the
+session.
+
 ### 5.34 Skills — `skill.list`
 
 The backend discovers skills from eight roots, with later roots taking precedence:

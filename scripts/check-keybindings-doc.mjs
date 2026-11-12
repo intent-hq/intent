@@ -2,6 +2,7 @@
 
 // Check that the chords docs/fe/KEYBINDINGS.md documents for configurable
 // shortcuts match cloudlands-fe's shortcut table (SHORTCUT_DEFAULTS in
+// src/shared/keyboard-shortcut-bindings.ts, or the legacy inline renderer
 // src/lib/utils/shortcut-bindings.ts). cloudlands-fe#4205 moved column focus
 // to Mod+Alt+Left/Right; the doc kept an older chord and nothing compared the
 // two.
@@ -37,6 +38,7 @@ import { describeCheckout, formatBanner, formatOffPinWarning } from './submodule
 
 export const FE_DIR = 'packages/cloudlands-fe';
 export const BINDINGS_FILE = 'src/lib/utils/shortcut-bindings.ts';
+export const SHARED_BINDINGS_FILE = 'src/shared/keyboard-shortcut-bindings.ts';
 export const DOCS_FILE = 'docs/fe/KEYBINDINGS.md';
 const CHECK = 'check-keybindings-doc';
 const SCRIPT = `scripts/${CHECK}.mjs`;
@@ -105,7 +107,9 @@ export function canonicalChord(text) {
 
 /** `Map<id, binding>` from SHORTCUT_DEFAULTS, or throws naming what changed. */
 export function parseBindings(source, file = `${FE_DIR}/${BINDINGS_FILE}`) {
-  const block = source.match(/^export const SHORTCUT_DEFAULTS = \{\n([\s\S]*?)^\} as const;$/m);
+  const blocks = [...source.matchAll(/^export const SHORTCUT_DEFAULTS = \{\n([\s\S]*?)^\} as const;$/gm)];
+  if (blocks.length > 1) throw new Error(`${file}: multiple SHORTCUT_DEFAULTS tables; update ${CHECK}`);
+  const [block] = blocks;
   if (!block) throw new Error(`${file}: \`export const SHORTCUT_DEFAULTS = { ... } as const;\` not found; update ${CHECK}`);
   const bindings = new Map();
   for (const line of block[1].split('\n')) {
@@ -117,6 +121,29 @@ export function parseBindings(source, file = `${FE_DIR}/${BINDINGS_FILE}`) {
   }
   if (!bindings.size) throw new Error(`${file}: SHORTCUT_DEFAULTS is empty; update ${CHECK}`);
   return bindings;
+}
+
+// Follow only the known compatibility entry point, never arbitrary imports or
+// executable TypeScript. Requiring the whole shim rejects competing exports and
+// extra statements; the canonical target still uses the strict literal parser.
+const TRIVIA = String.raw`(?:\s|//[^\n]*(?:\n|$)|/\*[\s\S]*?\*/)*`;
+const SHARED_REEXPORT = new RegExp(
+  `^${TRIVIA}export \\* from (['"])\\$shared/keyboard-shortcut-bindings\\1;${TRIVIA}$`,
+);
+
+export function readBindings(read, feDir = FE_DIR) {
+  const file = path.join(feDir, BINDINGS_FILE);
+  const source = read(file, 'initialize the submodule (make ensure-fe-submodule) or ');
+  if (SHARED_REEXPORT.test(source)) {
+    const shared = path.join(feDir, SHARED_BINDINGS_FILE);
+    return { bindings: parseBindings(read(shared, ''), shared), file: shared };
+  }
+  // A legacy table may coexist with unrelated helper exports, but not another
+  // registry source. Do not silently fall back from an unsupported re-export.
+  if (/^\s*export\s+(?:\*|\{[^}]*\bSHORTCUT_DEFAULTS\b[^}]*\})\s*(?:from\b|\bas\b)/m.test(source)) {
+    throw new Error(`${file}: unsupported shortcut registry re-export; update ${CHECK}`);
+  }
+  return { bindings: parseBindings(source, file), file };
 }
 
 const cells = (line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map((cell) => cell.trim());
@@ -222,8 +249,8 @@ export function run(root, { feDir = FE_DIR, docsFile = DOCS_FILE, pending = PEND
   if (banner) log(banner);
   const offPin = formatOffPinWarning(ref);
   if (offPin) warn(offPin);
-  const files = { bindings: path.join(feDir, BINDINGS_FILE), docs: docsFile };
-  const bindings = parseBindings(read(files.bindings, 'initialize the submodule (make ensure-fe-submodule) or '), files.bindings);
+  const { bindings, file } = readBindings(read, feDir);
+  const files = { bindings: file, docs: docsFile };
   const rows = parseDocRows(read(docsFile, ''), docsFile);
   return compare({ bindings, rows, pending, files });
 }
@@ -247,7 +274,7 @@ function main() {
   }
   const n = result.checked;
   const pending = result.pending ? ` (${result.pending} pending a cloudlands-fe change)` : '';
-  console.log(`${CHECK}: ${n} documented shortcut${n === 1 ? '' : 's'} match${n === 1 ? 'es' : ''} ${BINDINGS_FILE}${pending}`);
+  console.log(`${CHECK}: ${n} documented shortcut${n === 1 ? '' : 's'} match${n === 1 ? 'es' : ''} the shortcut registry${pending}`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

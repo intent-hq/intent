@@ -36,6 +36,31 @@ Support is detected by exact integer `sessionImport: 1` on `client.hello`
 `-32601` for both methods, and clients hide the import option. No store migration.
 The documented surface is **499 / 445 / 54** (dispatchable / router / fast path).
 
+Also within 18.0 (additive methods, capability, mode value and link version;
+capability-gated, so no version bump): **ordered machine list and orchestrator
+mode**. The owner-and-member router method `remoteMachines.order` and the
+owner-only `remoteMachines.setOrder` keep one user-ordered list of the places a
+backend can run agents ("This computer", exposed machines, cloud entries); a
+placement without a machine walks it top-down, `target: "remote"` uses its order,
+and agent-facing machine lists follow it, numbered
+([ordered machine list](./methods/nodes.md#ordered-machine-list)). Support is
+detected by exact integer `machineOrder: 1`; `remoteMachine:changed` adds an
+`{ order }` variant and `remoteMachines.models` rows add `kind`, `rank` and cloud
+rows. `daemon.mode` and the reported `daemonMode` add the value `"orchestrator"`
+(`intentd serve --orchestrator`): a daemon that runs no provider process itself
+and refuses local work with `-32003` `orchestrator-mode`
+([orchestrator mode](./methods/nodes.md#orchestrator-mode)). The new mode value
+is not behind a capability: clients treat an unknown `daemonMode` as unknown,
+so an older app shows an orchestrator as a full daemon, still offers "This
+machine", and gets the `orchestrator-mode` refusal when it is chosen. That is
+the accepted fallback. The `placement-unavailable` reason
+`no-agent-machine` and the `-32602` `order-stale` code are new. **nodeProtocol 18**
+adds the `oneShot` / `oneShotReply` frames that run an orchestrator's quick
+actions on a machine ([link contract](./node-link.md#quick-actions-on-the-machine-nodeprotocol-18));
+daemons offer `{ min: 7, max: 18 }`. No store migration beyond the new order
+table, whose first rows keep "This computer" first. The documented surface is
+**501 / 447 / 54** (dispatchable / router / fast path).
+
 **Version 17.0 — CoW isolation setting retirement (breaking).**
 Copy-on-write is now used only to hydrate checkouts from the repo cache.
 `workspace.create` from a local repository always provisions a linked worktree

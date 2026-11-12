@@ -232,6 +232,14 @@ from an `intent://node` link. It is advertised only together with
 `remoteMachines: 1`. Clients accept `intent://node` links only when it is exactly
 `1`; it grants no caller authority.
 
+**Machine order (additive, docs first).** Exact integer
+`server.capabilities.machineOrder: 1` means the backend keeps the
+[ordered machine list](./nodes.md#ordered-machine-list): it implements
+`remoteMachines.order` and `remoteMachines.setOrder`, walks the list for placements
+without a machine, and lists machines to agents in that order. It is advertised only
+together with `remoteMachines: 1`. Clients show the combined, reorderable list only
+when it is exactly `1`; it grants no caller authority.
+
 **Workspace discussions (additive extension).**
 Exactly integer `server.capabilities.discussionConversations: 1` advertises the
 [§5.55 contract](./multiplayer.md#555-workspace-discussions): conversation and
@@ -306,10 +314,11 @@ subscribe to discussion events, and private discussions remain human-only.
   surface version from [Protocol Version & Compatibility](../versioning.md)), and
   `capabilities` (feature-detection flags, e.g. `{ "liveState": true }` for the snapshot+delta
   channels of §6.9).
-- **`server.daemonMode`** (additive, docs first). `"regular"` or `"node"`: the mode of the
-  running daemon ([reported daemon mode](./nodes.md#reported-daemon-mode)). Older daemons omit
-  it; absence means unknown, so clients fall back to the `node-mode` refusal probe described
-  there. It grants no caller authority.
+- **`server.daemonMode`** (additive, docs first). `"regular"`, `"node"` or `"orchestrator"`:
+  the mode of the running daemon ([reported daemon mode](./nodes.md#reported-daemon-mode)).
+  Older daemons omit it; absence means unknown, so clients fall back to the `node-mode`
+  refusal probe described there. An unknown value is treated as unknown, not as regular.
+  It grants no caller authority.
 - **`protocolVersion`.** The top-level `protocolVersion` is an explicit copy of
   `server.protocolVersion` so clients can version-check without digging into the `server` block
   (see [Protocol Version & Compatibility](../versioning.md)).
