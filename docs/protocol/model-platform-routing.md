@@ -403,7 +403,9 @@ that is not revoked, once the provider reference is
    too; a model the profile's account cannot use fails at launch, not here;
 5. free capacity under the machine's shared count and memory limits.
 
-Candidates are ordered by fewest running agents, then most recently used. The
+Candidates are ordered by their rank in the
+[ordered machine list](./methods/nodes.md#ordered-machine-list) (a backend
+without `machineOrder: 1`: fewest running agents, then most recently used). The
 backend connects on demand and refreshes a report older than 1 hour before
 deciding. `node-configuration-ambiguous` does not apply: several machines are
 an ordinary candidate set. An explicit remote placement never falls back to
@@ -435,6 +437,18 @@ budget; anything cut is summarized with a count and a pointer to
 at each help request and tool-list refresh, includes `observedAt`, and never
 exposes routes, fingerprints, credentials or other backends.
 
+**In the user's order (`machineOrder: 1`).** Every agent-facing machine list
+(the system prompt, the `ws.agent.create` / `ws.agent.delegate` tool
+descriptions, `ws.help("agent")` and `ws.agent.machineModels`) follows the
+[ordered machine list](./methods/nodes.md#ordered-machine-list), not name or
+insertion order. Rows are numbered from 1, cloud entries are rows too (name,
+`cloudMachineId`, the providers their sandboxes install), and "This computer"
+is not listed. One line above the list says: "Listed in the user's order of
+preference. When several can run what you need, use the first; pick a later one
+only when the task needs it (platform, model, capacity)." The caps stay 8 rows
+and the fixed text budget; whichever binds first, the rows cut are the
+lowest-ranked.
+
 **Harness 3.10 and later (experimental).** For sessions stamped with harness 3.10
 or later, the system prompt and tool descriptions list each exposed machine by
 stable identity only: name, `nodeId` and platform. They carry no state, last-seen
@@ -445,7 +459,10 @@ tell the agent to confirm the machine, provider and model with
 [`remoteMachines.models`](./methods/nodes.md#machine-model-lookup), before it
 places a remote agent. The identity list keeps the cap of 8 machines, in name
 order; machines that do not fit are summarized as a count with a pointer to
-`ws.agent.machineModels`. The full placement how-to moves to `ws.help("agent")`,
+`ws.agent.machineModels`. With `machineOrder: 1` the identity list follows the
+user's order instead, numbered, with cloud entries as rows (name and
+`cloudMachineId`) and the preference line above; it changes only when a row is
+added, removed, renamed or reordered. The full placement how-to moves to `ws.help("agent")`,
 with a one-line pointer left in the prompt. In these sessions `ws.help("agent")`
 shows the same identity-only list and the how-to, but no state, sign-in status or
 models: live facts come only from `ws.agent.machineModels`. `model-unavailable`

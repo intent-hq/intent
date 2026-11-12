@@ -781,7 +781,10 @@ The [daemon-to-daemon remote machines contract (§5.50)](./methods/nodes.md#daem
 defines `remoteMachine:changed` on the backend: `{ machine: RemoteMachine }`
 on add, state changes and new capability reports, or `{ machineId, removed: true }`
 after removal. It is delivered to owner connections only, never to members or
-guests, and never carries the executor token.
+guests, and never carries the executor token. With `machineOrder: 1` it also
+carries `{ order: MachineOrderRow[] }` after each change of the
+[ordered machine list](./methods/nodes.md#ordered-machine-list); this variant is
+delivered to owner and member connections, never to guests.
 
 [Cloud machines](./methods/nodes.md#cloud-machines-e2b) define
 `cloudMachine:changed` on the backend: `{ provider: CloudMachineProvider }` or

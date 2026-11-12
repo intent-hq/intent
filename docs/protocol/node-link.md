@@ -1892,7 +1892,7 @@ Revoking a credential closes its live `/node/*` connections with `1008`
 `hello.protocol` is a range instead of one number:
 
 ```ts
-interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 through 17
+interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 through 18
 ```
 
 The machine picks the highest version in both ranges and returns it as
@@ -2018,6 +2018,14 @@ rewrite, so they need a new version, not an optional field. A daemon that implem
 both sides, so protocol 7 to 16 peers still bind. On a link below 17 the backend
 sends no `forgeFetch` and a sub-agent starts as before.
 
+**nodeProtocol 18** is protocol 17 plus [quick actions on the machine](#quick-actions-on-the-machine-nodeprotocol-18):
+the `oneShot` and `oneShotReply` frames. They are new frame types, which an
+older peer rejects as `node-link-protocol`, and they start a provider process
+outside any agent, so they need a new version. A daemon that implements it
+offers `{ min: 7, max: 18 }` on both sides, so protocol 7 to 17 peers still
+bind. On a link below 18 the backend sends no `oneShot`, and a quick action
+that would run there answers `{ available: false, reason }`.
+
 ### Frames
 
 Each WebSocket binary message on `/node/link` is one JSON frame of at most
@@ -2059,6 +2067,8 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `forgeTokenReply` | machine → backend | control | Protocol 15 or later: `requestId`, `outcome`, `error?`; never a value |
 | `checkoutRead` | backend → machine | script | Protocol 16 or later: `requestId`, `agentId`, `path`, `transferId?`, `offset`, `length`; see [checkout files](#checkout-files-nodeprotocol-16) |
 | `checkoutReadReply` | machine → backend | script | Protocol 16 or later: `requestId`, `agentId`, `outcome`, `piece?`, `error?` |
+| `oneShot` | backend → machine | rpc | Protocol 18 or later: `requestId`, `operation`, `input`, `profileEnv?`, `timeoutMs`; see [quick actions on the machine](#quick-actions-on-the-machine-nodeprotocol-18) |
+| `oneShotReply` | machine → backend | rpc | Protocol 18 or later: `requestId`, `outcome`, `text?`, `error?` |
 
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
 Heartbeats run every 15 s and a link silent for 45 s is dead. The backend
@@ -2078,6 +2088,7 @@ constant with a golden test: `hello`, `heartbeat` / `heartbeatReply`, `launch`,
 `secretPut`, `secretForget` and `secretList` (protocol 14 or later),
 `forgeToken` (protocol 15 or later),
 `checkoutRead` (protocol 16 or later),
+`oneShot` (protocol 18 or later),
 and git sessions on `/node/git` for agents on that credential's binding. Any
 other frame is `node-link-protocol`.
 `stopAck` travels machine → backend, so it is not in that list; the backend
@@ -2088,7 +2099,8 @@ accepts it only on a protocol 7 or later link. Likewise the backend accepts
 `pushWipReply` only on a protocol 13 or later link,
 `secretReply` only on a protocol 14 or later link,
 `forgeTokenReply` only on a protocol 15 or later link,
-and `checkoutReadReply` only on a protocol 16 or later link.
+`checkoutReadReply` only on a protocol 16 or later link,
+and `oneShotReply` only on a protocol 18 or later link.
 
 ### Stop acknowledgement (nodeProtocol 7)
 
@@ -3781,6 +3793,70 @@ Reply error codes on `/node/git` CLOSE:
 | Code | Meaning |
 | --- | --- |
 | `node-git-push-refused` | A push on a forge remote; sub-agents hand work back through their agent refs |
+
+### Quick actions on the machine (nodeProtocol 18)
+
+An [orchestrator](./methods/nodes.md#orchestrator-mode) never runs a provider
+itself, so it runs its one-shot quick actions (`agent.completeOnce` and
+`agent.enhancePrompt`, [§5.31–5.32](./methods/agent-aux.md#quick-actions-on-an-orchestrator))
+on a machine with one `oneShot` request. The machine runs **its own** existing
+one-shot route for the provider and answers with one `oneShotReply`. No agent,
+session, lease, checkout or journal record is created on either side.
+
+```ts
+interface OneShotFrame {
+  type: "oneShot";
+  requestId: string;                       // UUID, echoed in the reply
+  operation: "complete" | "enhance";
+  input: OneShotCompleteInput | OneShotEnhanceInput;
+  profileEnv?: ProfileEnvOverlay;          // resolved on the backend, as for launch
+  timeoutMs: number;                       // the method's timeout, at most 120000
+}
+
+interface OneShotCompleteInput {          // operation "complete"
+  providerId: string;                      // the base provider id, for example "claude-code"
+  prompt: string;
+  systemPrompt?: string;
+  model?: string;
+  reasoningEffort?: string;
+}
+
+interface OneShotEnhanceInput {           // operation "enhance" (auggie only)
+  prompt: string;
+  mode: "enhance" | "layout";
+  model?: string;
+}
+
+interface OneShotReplyFrame {
+  type: "oneShotReply";
+  requestId: string;
+  outcome: "ok" | "unavailable" | "failed";
+  text?: string;                           // "ok": the cleaned reply (for "enhance": the extracted payload)
+  error?: { code: string; message: string }; // "unavailable" or "failed"
+}
+```
+
+1. **Closed payloads.** `OneShotFrame.input` and `ProfileEnvOverlay` reject
+   unknown or mistyped members (`node-link-protocol`).
+2. **What runs.** `complete` runs the machine's ACP one-shot route for
+   `claude-code`, `codex` or `pi`, or `auggie --print` for `auggie`; `enhance`
+   runs `auggie --print`. The run is the same as the machine's own
+   `agent.completeOnce` / `agent.enhancePrompt`: no MCP servers, permissions
+   auto-denied, no `cwd`, reaped on timeout, cancel or link loss. The
+   `profileEnv` overlay applies as for a [launch](#provider-credentials-profile-environment);
+   an overlay that sets an account folder is never sent.
+3. **Capacity.** A one-shot counts against the machine's
+   `agents.maxConcurrentAdapters`, not its agent cap. Over that cap the
+   machine answers `unavailable` with code `no-capacity` at once; it never
+   queues.
+4. **Replies.** `unavailable` means the machine cannot run the operation
+   (provider disabled or not installed, no capacity, its own gate closed); the
+   backend answers the method with `{ available: false, reason }` using
+   `error.message`. `failed` means the run started and failed (timeout,
+   adapter exit, authentication); the backend answers the method with the
+   same error it would raise for a local failure.
+5. **Lost link.** When the link drops before the reply, the backend fails the
+   request with `node-link-unavailable` and does not retry on another machine.
 
 ### Saved scripts (nodeProtocol 8)
 

@@ -358,6 +358,33 @@ as `text`. No streaming, no events, no persistence on either route.
 { "jsonrpc":"2.0","id":84,"result":{ "text":"fix-login-flow" } }
 ```
 
+#### Quick actions on an orchestrator
+
+*(Additive, docs first.)* An [orchestrator](./nodes.md#orchestrator-mode) never
+spawns a provider. It runs `agent.completeOnce` (including auto-commit messages
+and the background executor) and `agent.enhancePrompt` on a machine, over the
+executor link's [`oneShot` frame](../node-link.md#quick-actions-on-the-machine-nodeprotocol-18).
+Params, results and the provider and model resolution are unchanged: the
+orchestrator resolves the provider, model, effort and the selected profile's
+environment exactly as above, then sends them.
+
+1. **Which machine.** The first exposed machine in the
+   [ordered machine list](./nodes.md#ordered-machine-list) that is connected
+   (or connects on demand), negotiated nodeProtocol 18 or later, and reports
+   the provider installed with a sign-in or a profile to send. A cloud machine
+   is never started or resumed for a quick action; a running sandbox of the
+   call's workspace is a candidate, ranked by its entry.
+2. **No machine.** When no machine qualifies (none online, all below
+   nodeProtocol 18, an empty list), the method returns
+   `{ available: false, reason }`, the existing gate shape, with a reason that
+   names the cause. Auto-commit then uses its deterministic subject.
+3. **One try.** The orchestrator does not try a second machine when the chosen
+   one fails. A machine reply of `unavailable` maps to
+   `{ available: false, reason }`; `failed` maps to the error the local route
+   raises. Backup failover across profiles still applies, on the same machine.
+4. **No local fallback.** Nothing runs on the orchestrator, whatever the
+   result.
+
 ### 5.34 Skills — `skill.list`
 
 The backend discovers skills from eight roots, with later roots taking precedence:
