@@ -3926,10 +3926,12 @@ that contract.
 create and at every move, also when a move lands on the same machine. Every
 home frame names `workspaceId` and `homeId`; the machine keeps one home
 checkout per `homeId`, in its own directory (`<work base>/homes/<homeId>`).
-A frame for a `homeId` the machine does not hold, or one that is not in the
-bound hello's `leaseHomes`, is refused with `node-home-unknown` (a reply frame
-with that error, or `ptyExited` for `ptyOpen`). The machine checks this itself;
-it does not rely on the backend.
+A home frame other than `homeOpen` for a `homeId` the machine does not hold,
+or that is not in the bound hello's `leaseHomes`, is refused with
+`node-home-unknown` (a reply frame with that error, or `ptyExited` for
+`ptyOpen`). The machine checks this itself; it does not rely on the backend.
+`homeOpen` is authorized by the executor credential, as a `launch` is: it adds
+its `homeId` to the link's lease until the next bind.
 
 ```ts
 interface LinkHello {
@@ -3939,7 +3941,8 @@ interface LinkHello {
 ```
 
 `leaseHomes` names the homes the backend expects on this machine: the current
-home of each workspace whose home is here, and every home with a pending
+home of each workspace whose home is here, the destination of a move in
+progress (persisted with the move), and every home with a pending
 [home final stop](#home-final-stop) here. The bind-time sweep keeps exactly
 those home checkouts; a backend that sends no `leaseHomes` (an older one)
 gets no home checkout swept.
@@ -4120,6 +4123,7 @@ type HomeMethod =
   | "git.branchStatus" | "git.checkMergeConflicts" | "git.getBranches"
   | "git.stage" | "git.unstage" | "git.stageHunk" | "git.unstageHunk" | "git.discard"
   | "git.agentCommit" | "git.createBranch" | "git.checkoutBranch" | "git.renameBranch"
+  | "git.pull" | "git.fetch"
   | "file-tracking.getChanges" | "file-tracking.getAgentLocks" | "file-tracking.loadCommits"
   | "file-tracking.stage" | "file-tracking.unstage"
   | "search.inFiles" | "search.fileNames" | "search.codebase"
@@ -4138,9 +4142,13 @@ interface HomeCallReplyFrame {
    the wire method of that name does on a regular daemon, against the home
    checkout; the orchestrator returns the result unchanged. Results carry
    paths relative to the home checkout, never the machine's absolute paths.
-2. **Not routed.** On an orchestrator, `git.push`, `git.pull`, `git.fetch`,
-   `git.clone`, `git.getConfig`, `git.getRemoteUrl` and `git.removeLockFile`
-   run on the orchestrator's hub (after a synchronous `homePush` for `push`);
+2. **Not routed.** `git.pull` and `git.fetch` for the workspace run on the home
+   as home calls too (with the machine's
+   [forge token](#forge-token-on-the-machine-nodeprotocol-15)), since a pull
+   rewrites the working tree; the hub mirror then follows `home/head`. On an
+   orchestrator, `git.push`, `git.clone`, `git.getConfig`, `git.getRemoteUrl`
+   and `git.removeLockFile` run on the orchestrator's hub (after a synchronous
+   `homePush` for `push`);
    the `file.attachmentUpload.*` methods store the upload on the
    orchestrator, and `file.placeAttachment` then sends it to the home in
    pieces of at most 4 MiB.
