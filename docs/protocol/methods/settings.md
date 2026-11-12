@@ -770,11 +770,14 @@ executor credential for it.
 - `remoteAgents.permission` (enum `allowAll` | `autoByRisk` | `denyAll`, default
   `allowAll`). Machine side: how provider permission prompts of remote agents are
   answered, since no client is attached. Applies in regular and node mode.
-- `daemon.mode` (enum `regular` | `node`, default `regular`). `node` starts the
-  daemon with its own orchestration off and the node-mode method list.
+- `daemon.mode` (enum `regular` | `node` | `orchestrator`, default `regular`).
+  `node` starts the daemon with its own orchestration off and the node-mode
+  method list. `orchestrator` starts it with orchestration on and local agent
+  execution off ([orchestrator mode](./nodes.md#orchestrator-mode)).
   Changeable only over the local UDS seat (WSS updates fail `-32003`); takes
-  effect at the next daemon start. `intentd serve --node` selects node mode for
-  that process without changing the setting.
+  effect at the next daemon start. `intentd serve --node` and
+  `intentd serve --orchestrator` select that mode for the process without
+  changing the setting.
 
 The former switches `remoteAgents.enabled` and `experimental.remoteAgents` are
 **retired**: they have no catalog entry, so `settings.get` and `settings.update`

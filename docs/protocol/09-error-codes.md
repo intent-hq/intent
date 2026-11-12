@@ -194,6 +194,15 @@ a method outside the node-mode list. The message-prefixed
 returned by `agent.setModel`; it remains only as a remote start failure when
 the identity changed outside `agent.setModel` or quota failover. No new numeric error is introduced.
 
+The [ordered machine list](./methods/nodes.md#ordered-machine-list) and
+[orchestrator mode](./methods/nodes.md#orchestrator-mode) add `data.code` values on
+existing numeric codes: `-32602` `order-stale` from `remoteMachines.setOrder`
+(data `{ order }`, the current list), the `placement-unavailable` reason
+`no-agent-machine` (an orchestrator whose list is empty), and `-32003`
+`orchestrator-mode` (a local placement, a local agent start, a test prompt, a
+session import or a local model server on an orchestrator). No new numeric error
+is introduced.
+
 [Node invites](./methods/nodes.md#claim-errors) add `data.code` values on existing
 numeric codes. `-32602` from `remoteMachines.claim`: `invalid-node-link`,
 `node-invite-invalid`, `node-invite-expired` (data `expiresAt`),

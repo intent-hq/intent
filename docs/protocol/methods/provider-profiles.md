@@ -972,6 +972,40 @@ a reconnect. A failover switch changes no profile and emits no
 `providers:profiles-changed`. A delete that prunes a `model.providerDefaults` key also emits
 `settings:changed`, with its own settings revision.
 
+#### Profiles on an orchestrator
+
+*(Additive, docs first.)* On an [orchestrator](./nodes.md#orchestrator-mode)
+providers are only enabled or disabled, plus profiles. The orchestrator never
+runs a provider CLI, so it never checks one:
+
+- **No install or sign-in check.** `host.providerDiscovery` returns
+  `{ providers: [] }`. `host.providerAuthStatus` returns `authenticated: null`
+  (*configured*) for every provider and, with `includeProfiles: true`, every
+  profile, with no `identity`; `force` changes nothing. No CLI detection,
+  sign-in, version, quota or model probe runs.
+- **Catalog.** `providers.catalog` rows are unchanged except
+  `supportsTestPrompt: false` on every row. `models.list` returns
+  `{ models: [], source: "static" }` with no `warning`; model pickers read the
+  machines' reports (`remoteMachines.models`).
+- **No Test button.** `host.providerTestPrompt` is refused with `-32003`
+  `data.code: "orchestrator-mode"` and spawns nothing. Clients hide the profile
+  **Test** button on an orchestrator.
+- **Remote compatibility is implied.** Every profile, and every Default with
+  overrides, counts as remote-compatible without the mark; reason
+  `not-marked` never fires. A configuration that sets an account folder
+  (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`) stays refused with reason
+  `account-folder`. `ProviderProfile` and `DefaultConfig` reads keep the stored
+  `remoteCompatible` (so switching back to `regular` restores it); the catalog's
+  `profiles[].remoteCompatible` and `defaultRemoteLaunch` report the effective
+  value. Clients hide the "Use on remote machines" control.
+- **Editing.** Profiles and Default overrides are created, edited, ordered and
+  selected as on any backend. A selected profile's environment is sent to the
+  machine as `profileEnv` at launch.
+- **Where status shows.** Whether a provider runs is decided by each machine at
+  placement and launch, from its own [capabilities report](../node-link.md#capabilities-report).
+  The app shows that state only on the machine's row in Settings → Machines,
+  never as the orchestrator's provider status.
+
 #### Remote execution nodes
 
 An agent placed on a remote machine over the daemon-to-daemon executor link runs
