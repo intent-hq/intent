@@ -630,9 +630,16 @@ python3 - "$script" "$mock_agent" <<'PY' || fail "the documented tool-approval b
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 script, agent = sys.argv[1:]
+# A live agent that never writes would block readline forever; fail instead
+# (raising, so the finally below still kills the agent).
+def timed_out(signum, frame):
+    raise TimeoutError("the scripted agent did not answer within 30s")
+signal.signal(signal.SIGALRM, timed_out)
+signal.alarm(30)
 documented = re.findall(r"^#   INTENTD_PERMISSION_POLICY=interactive MOCK_AGENT=1 MOCK_AGENT_BEHAVIOR='(.*)' make dev-sandbox-stack$",
                         open(script, encoding="utf-8").read(), re.M)
 assert len(documented) == 1, documented
