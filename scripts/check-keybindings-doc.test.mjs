@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
-  BINDINGS_FILE, DOCS_FILE, FE_DIR,
-  canonicalChord, compare, parseBindings, parseDocRows, run,
+  BINDINGS_FILE, SHARED_BINDINGS_FILE, DOCS_FILE, FE_DIR,
+  canonicalChord, compare, parseBindings, parseDocRows, readBindings, run,
 } from './check-keybindings-doc.mjs';
 
 const script = fileURLToPath(new URL('./check-keybindings-doc.mjs', import.meta.url));
@@ -77,6 +77,46 @@ test('parseBindings reads SHORTCUT_DEFAULTS and fails closed on another shape', 
   assert.throws(() => parseBindings('export const OTHER = {};'), /SHORTCUT_DEFAULTS = \{/);
   assert.throws(() => parseBindings(bindingsTs({ 'a.b': 'mod+k' }, '  ...EXTRA,\n')), /not a `'id': 'binding',` line/);
   assert.throws(() => parseBindings(bindingsTs({ 'a.b': 'mod+k' }, "  'a.b': 'mod+j',\n")), /more than once/);
+});
+
+test('readBindings follows only the canonical shared shim and preserves legacy tables', () => {
+  const legacy = path.join(FE_DIR, BINDINGS_FILE);
+  const shared = path.join(FE_DIR, SHARED_BINDINGS_FILE);
+  const shim = "// Renderer compatibility entry point.\nexport * from '$shared/keyboard-shortcut-bindings';\n";
+  const table = bindingsTs({ 'dock.focus': 'ctrl+shift+d', 'panel.create-column-right': 'mod+\\' });
+  const files = new Map([[legacy, shim], [shared, table]]);
+  const read = (file) => {
+    assert.ok(files.has(file), `missing ${file}`);
+    return files.get(file);
+  };
+  const canonical = readBindings(read);
+  assert.equal(canonical.file, shared);
+  assert.deepEqual([...canonical.bindings], [['dock.focus', 'ctrl+shift+d'], ['panel.create-column-right', 'mod+\\']]);
+  files.set(legacy, table);
+  assert.deepEqual(readBindings(read), { bindings: canonical.bindings, file: legacy });
+
+  for (const unsupported of [
+    "export * from '../../outside';\n",
+    "export { SHORTCUT_DEFAULTS } from '$shared/other';\n",
+    `${shim}throw new Error('must never execute');\n`,
+    `${shim}${table}`,
+    `${table}${shim}`,
+  ]) {
+    files.set(legacy, unsupported);
+    assert.throws(() => readBindings(read), /unsupported shortcut registry re-export/);
+  }
+  files.set(legacy, shim);
+  files.delete(shared);
+  assert.throws(() => readBindings(read), (error) => error.message === `missing ${shared}`);
+  for (const malformed of [
+    'export const OTHER = {};',
+    `${table}${table}`,
+    bindingsTs({ 'dock.focus': 'ctrl+shift+d' }, '  ...EXTRA,\n'),
+    bindingsTs({ 'dock.focus': 'ctrl+shift+d' }, "  'dock.focus': 'ctrl+shift+r',\n"),
+  ]) {
+    files.set(shared, malformed);
+    assert.throws(() => readBindings(read), /SHORTCUT_DEFAULTS/);
+  }
 });
 
 test('parseDocRows reads tagged rows and rejects malformed tags', () => {
@@ -167,4 +207,31 @@ test('the CLI reads a checkout and exits non-zero on a stale row', (t) => {
   const stale = spawnSync(process.execPath, [script, '--root', root], { encoding: 'utf8' });
   assert.equal(stale.status, 1);
   assert.match(stale.stderr, /documented as `Mod\+Alt\+→` but .*`mod\+alt\+n`/);
+});
+
+test('the CLI checks shared registry docs and refuses missing IDs or mismatched chords', (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'check-keybindings-shared-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const write = (file, text) => {
+    mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    writeFileSync(path.join(root, file), text);
+  };
+  write(path.join(FE_DIR, BINDINGS_FILE), "export * from '$shared/keyboard-shortcut-bindings';\n");
+  write(path.join(FE_DIR, SHARED_BINDINGS_FILE), bindingsTs({ 'dock.focus': 'ctrl+shift+d', 'dock.capture': 'ctrl+shift+s' }));
+  const focus = '| `Ctrl+Shift+D` | Open dock | Global | `dock.focus` |';
+  const capture = '| `Ctrl+Shift+S` | Screenshot | Global | `dock.capture` |';
+  const cli = () => spawnSync(process.execPath, [script, '--root', root], { encoding: 'utf8' });
+  write(DOCS_FILE, docMd([focus, capture]));
+  const ok = cli();
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /2 documented shortcuts match/);
+  write(DOCS_FILE, docMd([focus]));
+  const missing = cli();
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /dock\.capture .*has no row/);
+  write(DOCS_FILE, docMd([focus.replace('Ctrl+Shift+D', 'Ctrl+Shift+R'), capture]));
+  const mismatch = cli();
+  assert.equal(mismatch.status, 1);
+  assert.match(mismatch.stderr, /dock\.focus is documented as/);
+  assert.ok(mismatch.stderr.includes(`${path.join(FE_DIR, SHARED_BINDINGS_FILE)} binds it`), mismatch.stderr);
 });
