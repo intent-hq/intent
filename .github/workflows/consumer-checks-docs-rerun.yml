@@ -6,14 +6,18 @@
 # run 43066761390 attempt 2 reused monorepo 23e1b23e after intent#9108 merged,
 # about 20 extra minutes). The script re-runs ALL jobs of each stale failed
 # run, which GitHub resolves @main for again; see scripts/consumer-checks-docs-rerun.mjs
-# for the linking and decision rules. scripts/consumer-checks-stale-rerun.sh
+# for the linking and decision rules (staleness is the run's resolved
+# consumer-checks.yml commit, not a timestamp). scripts/consumer-checks-stale-rerun.sh
 # (run by consumer-checks.yml) remains the backstop explanation for a manual
 # rerun of failed jobs.
 #
 # CONSUMER_CHECKS_RERUN_TOKEN is a fine-grained PAT with Actions read and
 # write plus Pull requests read on intent-hq/intentd and intent-hq/cloudlands-fe.
-# It is fail-soft: without it the run warns and ends green. The workflow
-# always checks out main, so the token only ever meets main's script.
+# It is fail-soft: without it the run warns and ends green. Store it ONLY as
+# a secret of the `consumer-checks-rerun` environment, whose deployment
+# branches are limited to main: this YAML comes from the triggering ref, so a
+# repository secret would reach a workflow_dispatch of any pushed branch that
+# edits it, whereas GitHub refuses the environment to every other ref.
 #
 # Manual use: dispatch with a merged monorepo PR number (dry-run to preview).
 name: Restart consumer checks after protocol docs merge
@@ -55,6 +59,8 @@ jobs:
 
   restart:
     needs: [runner-route]
+    if: github.ref == 'refs/heads/main'
+    environment: consumer-checks-rerun
     runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     # Waits up to WAIT_MINUTES for component runs still checking old docs.
     timeout-minutes: 60

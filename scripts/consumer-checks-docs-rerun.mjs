@@ -26,12 +26,16 @@
 //   POLL_SECONDS    poll interval while waiting (default 60).
 //
 // A linked PR is an open, same-repository intentd or cloudlands-fe PR that
-// the docs PR's title or body names (URL, owner/repo#N or repo#N), or that
-// cross-references the docs PR. For each, the latest run per workflow on its
-// head commit that has monorepo-consumer-checks jobs is restarted only when
-// it started before the docs merged and those jobs failed; an in-flight run
-// whose checks already failed is cancelled first, and one still running them
-// is waited for.
+// the docs PR's title or body names (URL, intent-hq/repo#N or repo#N), or
+// that cross-references the docs PR. For each, the latest run per workflow on
+// its head commit is restarted only when its monorepo-consumer-checks failed
+// against a stale monorepo: the consumer-checks.yml commit the run's latest
+// attempt resolved (run.referenced_workflows) does not contain the docs merge
+// commit. Timestamps cannot decide this: intentd#3289's stale attempt 2
+// started 34 s AFTER intent#9108 merged. An in-flight stale run whose checks
+// already failed is cancelled first; one still running them is waited for.
+// Per-run API errors are reported and the rest still run; any error makes
+// the job red after the summary is written.
 
 import { appendFileSync, readFileSync } from 'node:fs';
 import process from 'node:process';
@@ -42,7 +46,10 @@ export const COMPONENTS = ['intent-hq/intentd', 'intent-hq/cloudlands-fe'];
 export const PROTOCOL_DOCS = 'docs/protocol/';
 export const CONSUMER_JOB = 'monorepo-consumer-checks';
 
-const REFERENCE = /(?:https:\/\/github\.com\/|\b)(?:intent-hq\/)?(intentd|cloudlands-fe)(?:\/pull\/|#)(\d+)\b/g;
+// A URL or bare reference; the lookbehind rejects other owners (fork/intentd#5,
+// github.com/fork/intentd/pull/5) and words such as myintentd#5.
+const REFERENCE = /(?:(?:https?:\/\/)?(?:www\.)?github\.com\/intent-hq\/|(?<![\w.\/-])(?:intent-hq\/)?)(intentd|cloudlands-fe)(?:\/pull\/|#)(\d+)\b/g;
+const CONSUMER_WORKFLOW = MONOREPO + '/.github/workflows/consumer-checks.yml@';
 
 // Component PR references in free text, deduplicated, in order of appearance.
 export function linkedPullRequests(text) {
@@ -70,12 +77,24 @@ export function consumerChecksState(jobs) {
   return 'passed';
 }
 
-// What to do with one run, given its latest-attempt jobs and the docs merge time.
-export function decide({ run, jobs, mergedAt }) {
+// The monorepo commit the run's latest attempt resolved consumer-checks.yml to.
+export function consumerChecksSha(run) {
+  return (run.referenced_workflows ?? []).find((ref) => ref.path?.startsWith(CONSUMER_WORKFLOW))?.sha ?? null;
+}
+
+// What to do with one run, given its latest-attempt jobs and whether its
+// consumer-checks.yml commit lacks the docs merge (`stale`).
+export function decide({ run, jobs, stale }) {
   const state = consumerChecksState(jobs);
-  if (state === 'none') return { action: 'skip', reason: 'no monorepo-consumer-checks job' };
-  const started = Date.parse(run.run_started_at ?? run.created_at);
-  if (started >= Date.parse(mergedAt)) return { action: 'skip', reason: 'attempt started after the docs merged' };
+  const calls = state !== 'none' || consumerChecksSha(run) !== null;
+  if (!calls) return { action: 'skip', reason: 'no monorepo-consumer-checks job', quiet: true };
+  if (!stale) return { action: 'skip', reason: 'already checks a monorepo commit with the docs' };
+  // Nested reusable-workflow jobs can be listed late on a queued run.
+  if (state === 'none') {
+    return run.status === 'completed'
+      ? { action: 'skip', reason: 'monorepo-consumer-checks did not run' }
+      : { action: 'wait', reason: 'monorepo-consumer-checks not started yet against the old docs' };
+  }
   if (state === 'passed') return { action: 'skip', reason: 'monorepo-consumer-checks passed' };
   if (state === 'cancelled') return { action: 'skip', reason: 'monorepo-consumer-checks were cancelled' };
   if (state === 'pending') return { action: 'wait', reason: 'monorepo-consumer-checks still running against the old docs' };
@@ -134,9 +153,11 @@ export async function docsPullRequests(gh, { eventName, event, prNumber }) {
     numbers = [Number(prNumber)];
   } else if (eventName === 'push') {
     if (!event.before || /^0+$/.test(event.before)) return [];
+    // compare lists at most 250 commits; merge-queue pushes are far smaller.
     const compare = await gh.get(MONOREPO, '/compare/' + event.before + '...' + event.after);
     numbers = [];
     for (const commit of compare.commits ?? []) {
+      // A squash merge commit belongs to one PR, so the first page suffices.
       const pulls = await gh.get(MONOREPO, '/commits/' + commit.sha + '/pulls');
       numbers.push(...pulls.filter((pr) => pr.merged_at && pr.base?.ref === 'main').map((pr) => pr.number));
     }
@@ -185,32 +206,58 @@ async function candidateRuns(gh, repo, headSha) {
   return [...latest.values()];
 }
 
+// Whether `sha` lacks every docs merge commit; unknown SHAs fall back to the
+// attempt start time (a run started before a merge cannot contain it).
+async function staleness(gh, run, merges, cache) {
+  const sha = consumerChecksSha(run);
+  if (!sha) {
+    const started = Date.parse(run.run_started_at ?? run.created_at);
+    return merges.some((merge) => started < Date.parse(merge.at));
+  }
+  for (const merge of merges) {
+    const key = sha + '...' + merge.sha;
+    if (!cache.has(key)) {
+      // "ahead"/"diverged": the merge commit is not an ancestor of `sha`.
+      const { status } = await gh.get(MONOREPO, '/compare/' + key);
+      cache.set(key, status === 'ahead' || status === 'diverged');
+    }
+    if (cache.get(key)) return true;
+  }
+  return false;
+}
+
+const describe = (error) => (error.status ? 'HTTP ' + error.status + ': ' : '') + error.message.split('\n')[0].slice(0, 160);
+
 export async function restart(gh, targets, options) {
   const { dryRun = false, sleep, now = () => Date.now(), waitMs = 45 * 60_000, pollMs = 60_000, log = console.log } = options;
   const results = [];
   const work = [];
+  const cache = new Map();
   for (const target of targets) {
     const label = target.repo + '#' + target.number;
-    let pr;
     try {
-      pr = await gh.get(target.repo, '/pulls/' + target.number);
+      let pr;
+      try {
+        pr = await gh.get(target.repo, '/pulls/' + target.number);
+      } catch (error) {
+        if (error.status !== 404) throw error;
+        results.push({ label, outcome: 'skipped', reason: 'not a pull request' });
+        continue;
+      }
+      if (pr.state !== 'open') {
+        results.push({ label, outcome: 'skipped', reason: 'PR is ' + (pr.merged_at ? 'merged' : pr.state) });
+        continue;
+      }
+      if (pr.head?.repo?.full_name !== target.repo) {
+        results.push({ label, outcome: 'skipped', reason: 'fork PR (consumer checks do not run)' });
+        continue;
+      }
+      const runs = await candidateRuns(gh, target.repo, pr.head.sha);
+      results.push({ label, outcome: 'checked', reason: runs.length + ' pull_request run(s) on ' + pr.head.sha.slice(0, 7) });
+      for (const run of runs) work.push({ ...target, label: label + ' run ' + run.id, runId: run.id });
     } catch (error) {
-      if (error.status !== 404) throw error;
-      results.push({ label, outcome: 'skipped', reason: 'not a pull request' });
-      continue;
+      results.push({ label, outcome: 'error', reason: describe(error) });
     }
-    if (pr.state !== 'open') {
-      results.push({ label, outcome: 'skipped', reason: 'PR is ' + (pr.merged_at ? 'merged' : pr.state) });
-      continue;
-    }
-    if (pr.head?.repo?.full_name !== target.repo) {
-      results.push({ label, outcome: 'skipped', reason: 'fork PR (consumer checks do not run)' });
-      continue;
-    }
-    const runs = await candidateRuns(gh, target.repo, pr.head.sha);
-    if (runs.length === 0) results.push({ label, outcome: 'skipped', reason: 'no pull_request run on ' + pr.head.sha.slice(0, 7) });
-    if (runs.length > 0) results.push({ label, outcome: 'checked', reason: runs.length + ' run(s) on ' + pr.head.sha.slice(0, 7) });
-    for (const run of runs) work.push({ ...target, label: label + ' run ' + run.id, runId: run.id });
   }
 
   const deadline = now() + waitMs;
@@ -218,26 +265,35 @@ export async function restart(gh, targets, options) {
   while (pending.length > 0) {
     const next = [];
     for (const item of pending) {
-      const run = await gh.get(item.repo, '/actions/runs/' + item.runId);
-      const jobs = await gh.list(item.repo, '/actions/runs/' + item.runId + '/jobs?filter=latest&per_page=100', 'jobs');
-      const { action, reason } = decide({ run, jobs, mergedAt: item.mergedAt });
-      if (action === 'skip') {
-        if (consumerChecksState(jobs) !== 'none') results.push({ label: item.label, outcome: 'skipped', reason });
-      } else if (action === 'rerun') {
-        if (!dryRun) await gh.post(item.repo, '/actions/runs/' + item.runId + '/rerun');
-        results.push({ label: item.label, outcome: dryRun ? 'would re-run' : 're-ran all jobs', reason, url: run.html_url });
-      } else if (action === 'cancel' && dryRun) {
-        results.push({ label: item.label, outcome: 'would cancel and re-run', reason, url: run.html_url });
-      } else {
-        if (action === 'cancel' && !item.cancelled) {
-          await gh.post(item.repo, '/actions/runs/' + item.runId + '/cancel');
-          log(item.label + ': ' + reason);
-          item.cancelled = true;
-        } else if (action === 'wait' && dryRun) {
-          results.push({ label: item.label, outcome: 'would wait', reason, url: run.html_url });
-          continue;
+      try {
+        const run = await gh.get(item.repo, '/actions/runs/' + item.runId);
+        const jobs = await gh.list(item.repo, '/actions/runs/' + item.runId + '/jobs?filter=latest&per_page=100', 'jobs');
+        const stale = await staleness(gh, run, item.merges, cache);
+        const { action, reason, quiet } = decide({ run, jobs, stale });
+        const url = run.html_url;
+        if (action === 'skip') {
+          if (!quiet) results.push({ label: item.label, outcome: 'skipped', reason, url });
+        } else if (dryRun) {
+          const outcome = { rerun: 'would re-run', cancel: 'would cancel and re-run', wait: 'would wait' }[action];
+          results.push({ label: item.label, outcome, reason, url });
+        } else if (action === 'rerun') {
+          await gh.post(item.repo, '/actions/runs/' + item.runId + '/rerun');
+          results.push({ label: item.label, outcome: 're-ran all jobs', reason, url });
+        } else {
+          if (action === 'cancel' && !item.cancelled) {
+            try {
+              await gh.post(item.repo, '/actions/runs/' + item.runId + '/cancel');
+            } catch (error) {
+              // 409: the run finished meanwhile; the next poll sees it completed.
+              if (error.status !== 409) throw error;
+            }
+            log(item.label + ': ' + reason);
+            item.cancelled = true;
+          }
+          next.push(item);
         }
-        next.push(item);
+      } catch (error) {
+        results.push({ label: item.label, outcome: 'error', reason: describe(error) });
       }
     }
     if (next.length === 0) break;
@@ -283,10 +339,10 @@ export async function main(env = process.env, { fetchImpl, sleep = (ms) => new P
   const docsPrs = await docsPullRequests(gh, { eventName: env.GITHUB_EVENT_NAME, event, prNumber: env.PR_NUMBER });
   const targets = new Map();
   for (const pr of docsPrs) {
+    const merge = { sha: pr.merge_commit_sha, at: pr.merged_at };
     for (const link of await linkedTargets(gh, pr)) {
       const key = link.repo + '#' + link.number;
-      const mergedAt = targets.has(key) && targets.get(key).mergedAt > pr.merged_at ? targets.get(key).mergedAt : pr.merged_at;
-      targets.set(key, { ...link, mergedAt });
+      targets.set(key, { ...link, merges: [...(targets.get(key)?.merges ?? []), merge] });
     }
   }
   const results = await restart(gh, [...targets.values()], {
@@ -302,7 +358,9 @@ export async function main(env = process.env, { fetchImpl, sleep = (ms) => new P
   for (const result of results.filter((r) => r.outcome === 'gave up')) {
     console.log('::warning::' + result.label + ': ' + result.reason);
   }
-  return 0;
+  const errors = results.filter((r) => r.outcome === 'error');
+  for (const result of errors) console.log('::error::' + result.label + ': ' + result.reason);
+  return errors.length > 0 ? 1 : 0;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
