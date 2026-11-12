@@ -121,6 +121,13 @@ backend sees the unknown close code as a route failure and keeps retrying, as
 before. An older orchestrator still binds; its report lists no providers.
 The surface counts are unchanged.
 
+Also within 18.0 (additive methods and setting; prepared, off by default, so no
+version bump): **push relay linking**. The router methods `push.createLink`,
+`push.revokeLink` and `push.status` link a phone to the push relay for iOS Live
+Activities and alerts ([§5.58](./methods/push.md)). The `push.relayEnabled` setting
+(default `false`) turns the publisher and `push.createLink` on. Older daemons answer
+`-32601`. No store migration. The documented surface is **505 / 451 / 54**.
+
 **Version 17.0 — CoW isolation setting retirement (breaking).**
 Copy-on-write is now used only to hydrate checkouts from the repo cache.
 `workspace.create` from a local repository always provisions a linked worktree
