@@ -457,13 +457,24 @@ arguments one to one onto the params:
 
 | Method | Params | Result |
 | --- | --- | --- |
-| remoteMachines.models | nodeId?, provider?, model? (each a non-empty string, exact match) | `{ machines: MachineModels[] }`; reads the cached reports only (no connect, no refresh); an unknown `nodeId` fails `-32602` `machine-unknown` |
+| remoteMachines.models | nodeId?, provider?, model? (each a non-empty string, exact match) | `{ machines: MachineModelsRow[] }` (only `MachineModels` without `machineOrder: 1`); reads the cached reports only (no connect, no refresh); an unknown `nodeId` fails `-32602` `machine-unknown` |
 
 ```ts
+type MachineModelsRow = MachineModels | CloudEntryModels;
+
+interface CloudEntryModels {        // machineOrder: 1 only
+  kind: "cloud";
+  cloudMachineId: string;
+  rank: number;
+  name: string;
+  state: "connected" | "unreachable";
+  runningAgents: number;
+  providers: { id: string; status: "unknown"; models: []; modelsStale: true }[];
+}
+
 interface MachineModels {
-  nodeId: string;                   // RemoteMachine.id; absent on cloud rows
-  kind?: "machine" | "cloud";       // machineOrder: 1 only
-  cloudMachineId?: string;          // cloud rows only
+  nodeId: string;                   // RemoteMachine.id
+  kind?: "machine";                 // machineOrder: 1 only
   rank?: number;                    // machineOrder: 1 only
   name: string;
   platform?: { os: "linux" | "macos"; arch: "x86_64" | "aarch64" };
@@ -485,16 +496,18 @@ interface MachineModels {
    [Cloud machines](#cloud-machines-e2b) are left out, as they are from
    `remoteMachines.list`. A machine with no report yet has `providers: []`.
    With [`machineOrder: 1`](#ordered-machine-list) the rows follow the
-   ordered list instead, and each row adds `rank` (1 = most preferred, the
-   row's position in the list; "This computer" counts but is not a row). Each
-   cloud entry is then a row too, with `kind: "cloud"`, `cloudMachineId` and
-   `name`, no `nodeId`, `state: "connected"` when the entry is `ready` (else
-   `"unreachable"`), `runningAgents` (its live sandboxes' agents), and one
-   provider per `agentProviders` id with `status: "unknown"`, `models: []` and
+   ordered list instead, and each row adds `rank`: its number in the
+   agent-facing list, from 1, counting machine and cloud rows only ("This
+   computer" is neither listed nor counted), so `rank` matches the numbers in
+   the prompt. Each cloud entry is then a row too (`CloudEntryModels`), with
+   `state: "connected"` when the entry is `ready` (else `"unreachable"`),
+   `runningAgents` (its live sandboxes' agents), and one provider per
+   `agentProviders` id with `status: "unknown"`, `models: []` and
    `modelsStale: true`, because a sandbox reports its models only after it
-   starts. Machine rows add `kind: "machine"`. The `nodeId` and `model`
-   filters drop cloud rows; `provider` keeps a cloud row whose
-   `agentProviders` include it.
+   starts. Machine rows add `kind: "machine"`. The `nodeId` filter drops cloud
+   rows, and so does `model`, on purpose: no cloud entry can promise a model
+   before its sandbox starts, although the walk may still start one there.
+   `provider` keeps a cloud row whose `agentProviders` include it.
 2. **Filters.** `nodeId` keeps that machine only. `provider` keeps that
    provider's entry only and drops machines that do not report it. `model` keeps
    the providers whose `models` contain it and drops machines with none; a kept
@@ -738,8 +751,13 @@ A batch `agent.delegate` (`tasks: [...]`) takes a `placement` for the whole
 batch, and an object entry `{ taskNoteId, ..., placement? }` takes one for that
 task alone. An entry's placement replaces the batch's as a whole object (members
 are never merged); a bare task id, or an entry without one, uses the batch's.
-A task with no placement from either follows the single-delegation rule: local,
-or the parent's machine for a [sub-agent of a remote agent](#sub-agents-of-remote-agents).
+A task with no placement from either follows the single-delegation rule: the
+parent's machine for a [sub-agent of a remote agent](#sub-agents-of-remote-agents),
+local for a sub-agent of a local agent, else the
+[ordered machine list](#ordered-machine-list). A call with `isolation` keeps its
+unplaced tasks on "This computer" (no walk); on an
+[orchestrator](#orchestrator-mode) such a call is refused with `-32003`
+`orchestrator-mode`.
 
 Every placement in the call is checked before any task starts, so a malformed
 placement (in the batch or in any entry), or a task that would run remotely
@@ -771,7 +789,9 @@ failure returns the normal error (`profile-not-remote-compatible`,
 the same `code` and `data`) before any write; the backend never falls back to
 another machine or to the backend. Only the message changes: it adds that the
 sub-agent defaults to the parent's machine (by name) and that
-`placement: { target: "local" }` runs it on the backend instead.
+`placement: { target: "local" }` runs it on the backend instead (on an
+[orchestrator](#orchestrator-mode), which runs nothing itself, the second
+part is left out).
 
 This covers every child of a remote agent's batch `agent.delegate`
 (`tasks: [...]`) that gets no placement from the batch or from its entry. To
@@ -981,17 +1001,24 @@ type MachineOrderKey =
 - **Who.** *Owner* and *members* as for [`cloudMachines.list`](#cloud-machine-methods).
   Others get `-32003`. Agents read the list through their prompt, tool
   descriptions and `ws.agent.machineModels` (below), never through these methods.
-- **Default and upkeep.** The backend keeps the list in its store, so it
-  survives restarts and every client and agent sees the same order. A new
-  exposed machine or entry is appended at the end; a removed machine or entry
-  leaves the list, and the others keep their relative order. On a backend
-  that first advertises `machineOrder: 1`, the list starts as "This computer"
-  (regular mode), then the exposed machines in `addedAt` order, then the
-  entries in creation order, so nothing changes until the user reorders. A
-  revoked or unreachable machine keeps its row until it is removed.
+- **Default and upkeep.** The backend saves only the user's order; the list is
+  derived from it and the live rows, so it survives restarts and every client
+  and agent sees the same order. A row the saved order does not name yet is
+  appended at the end ("This computer" first, then machines in `addedAt`
+  order, then entries in creation order); a removed machine or entry leaves the
+  list, and the others keep their relative order. A backend that never saved
+  an order lists "This computer", the machines, then the entries, so nothing
+  changes until the user reorders. A saved order without "This computer" (one
+  saved while the daemon ran as an orchestrator) gets it back first. A revoked
+  or unreachable machine keeps its row until it is removed.
 - **Event.** `remoteMachine:changed` carries `{ order: MachineOrderRow[] }`
-  after each change of the list (reorder, add, remove, rename). This variant is
-  delivered to owner connections and to member connections.
+  after each change of the list: `setOrder`, an exposed machine added or
+  removed, a cloud entry created, renamed or removed. For an add or remove the
+  `{ machine }` / `{ machineId, removed: true }` (or `cloudMachine:changed`)
+  event comes first, then the `{ order }` one. Like the other variants it goes
+  to owner connections only; a member reads `remoteMachines.order` again when
+  it needs the list. Clients ignore a `remoteMachine:changed` payload with
+  neither `machine` nor `machineId`, as older clients already do.
 - **Routing.** Both methods are daemon-global, take no `workspaceId` and are
   [excluded from workspace routing](../workspace-routing.md#excluded-methods-and-variants).
   `remoteMachines.list` and `cloudMachines.list` rows are unchanged; clients
@@ -1004,34 +1031,42 @@ every create route (`agent.create`, single and [batch](#batch-placement)
 
 1. an explicit `placement`;
 2. the parent's place: a sub-agent of a [remote agent](#sub-agents-of-remote-agents)
-   inherits its parent's machine as today, and a sub-agent of a **local**
-   agent created with no placement runs locally, so a reorder never splits a
+   inherits its parent's machine as today, and a sub-agent that a **local**
+   agent creates with no placement runs locally, so a reorder never splits a
    local agent tree across machines;
 3. the ordered list: the backend **walks it top-down** and uses the first row
    that can run the agent now.
 
 The walk is **synchronous**: it decides only on what admission can know at
-create time, and the first row that passes admission ends it.
+create time, and the first row that passes admission ends it. Each machine or
+cloud row is admitted exactly as an explicit placement on it would be
+(`{ target: "remote", nodeId }` or `{ target: "cloud", cloudMachineId }`),
+with the full [launch rules](#placement-across-machines), including
+remote compatibility and the profile [auto-pick](./provider-profiles.md#remote-auto-pick).
 
 | Row | Passes admission when |
 | --- | --- |
 | "This computer" | The provider is enabled on this backend. It is never skipped for capacity (there is no local create-time capacity refusal). |
-| Exposed machine | Steps 1, 2, 4 and the capacity check of [placement across machines](#placement-across-machines): platform, provider installed, sign-in or a profile, model listed, free capacity, reachable. |
-| Cloud entry | The entry is configured with a key, the provider is in its `agentProviders`, and the launch sends a `profileEnv` that sets a variable (the [cloud launch rule](#placement-across-machines)). The model is not checked: the sandbox reports it only after it starts. |
+| Exposed machine | Placement on that `nodeId` passes: platform, provider installed, sign-in or a profile, model listed, free capacity, reachable. |
+| Cloud entry | Placement on that `cloudMachineId` passes: the entry is configured with a key, the provider is in its `agentProviders`, and the launch rules for a cloud machine pass (a marked profile or Default that sends a set variable, or one the auto-pick finds). The model is not checked: the sandbox reports it only after it starts. |
 
 A cloud row means "start a new sandbox for this agent" exactly as
 `placement: { target: "cloud", cloudMachineId }`; the entry's position is the
 user's cost control. A later asynchronous start failure (a sandbox quota, a
 missing template, `node-checkout-failed` …) is reported on the agent as today
-(`placementError`) and is **not** retried on another row. When no row passes,
-admission fails before any write with the error of the last row kind it
-tried, as without the list (`model-unavailable`, `machine-not-signed-in`,
-`cloud-profile-required`, `placement-unavailable` …), with each machine's
-reason in `machines[]`. A list with no row at all (an
-[orchestrator](#orchestrator-mode) with nothing added) fails with `-32602`
-`placement-unavailable` reason `no-agent-machine` and the message "Add a
-machine under Settings → Machines; agents on this backend only run on other
-machines."
+(`placementError`) and is **not** retried on another row.
+
+**When no row passes.** Admission fails before any write with the refusal of
+the **most preferred row that refused**, unchanged (`model-unavailable`,
+`machine-not-signed-in`, `cloud-profile-required`, `profile-not-remote-compatible`,
+`placement-unavailable` …, with that error's own `machines[]` when it has
+one). "This computer" with the provider disabled is passed over and adds no
+refusal; when nothing else passes or refuses, the create goes on locally and
+fails as a local create with a disabled provider does today. A list with no
+row at all (an [orchestrator](#orchestrator-mode) with nothing added) fails
+with `-32602` `placement-unavailable` reason `no-agent-machine` and the message
+"Add a machine under Settings → Machines; agents on this backend only run on
+other machines."
 
 **Explicit remote placement.** `target: "remote"` without `nodeId` uses the
 list order among its candidates (exposed machines only: "This computer" and
@@ -1041,8 +1076,9 @@ regular backend too.
 
 **Shown to models in order.** The agent-facing machine lists (system prompt,
 tool descriptions, `ws.help("agent")` and `remoteMachines.models` /
-`ws.agent.machineModels`) follow the list order, numbered, and include cloud
-entries ([model-platform routing](../model-platform-routing.md#exposed-machines)).
+`ws.agent.machineModels`) follow the list order, numbered from 1, and include
+cloud entries; "This computer" is not listed and not counted
+([model-platform routing](../model-platform-routing.md#exposed-machines)).
 
 ##### Switching a remote agent's model
 
@@ -1923,7 +1959,8 @@ agent runs on an exposed machine or a cloud machine, chosen from the
 [node mode](#node-mode). The setting follows the same rules as node mode: owner
 only, changeable only over the local UDS seat, applied at the next start;
 `--node` and `--orchestrator` together are a startup error. Switching back to
-`regular` restores today's behaviour with no data migration.
+`regular` restores today's behaviour with no data migration. A flag wins over
+the setting for that process, as `--node` does today.
 
 An orchestrator advertises `remoteMachines: 1` and `machineOrder: 1`. Its
 ordered list has no "This computer" row.
@@ -1936,7 +1973,9 @@ machines here. They are raised before any write.
 | --- | --- |
 | `placement: { target: "local" }`, or any placement that runs on the backend (including a sub-agent of a remote agent that asks for the backend), on every create route | Refused |
 | A create route with no placement | Walks the ordered list; an empty list fails `placement-unavailable` reason `no-agent-machine` |
-| Starting, resuming or prompting an agent that was created locally before the switch (`agent.sendMessage`, `agent.retry`, `agent.editAndRegenerate`, `agent.resolveInterrupted`, `agent.wakeOrCreate`'s wake branch, queued delivery, failover, `serve --resume-all`) | Refused; the agent stays listed and nothing is deleted |
+| Starting, resuming or prompting an agent that was created locally before the switch (`agent.sendMessage`, `agent.retry`, `agent.editAndRegenerate`, `agent.setModel`, `agent.resolveInterrupted`, `agent.wakeOrCreate`'s wake branch, queued delivery, failover, `serve --resume-all`) | Refused; the agent stays listed and nothing is deleted |
+| A batch `agent.delegate` with `isolation` and an unplaced task | Refused (isolation keeps a task on this daemon) |
+| `executor.mint`, `executor.invite.create` (being exposed to another backend as a machine) | Refused. A credential minted before the switch still binds, but its capabilities report lists no providers and every `launch` fails with `orchestrator-mode`, so placement never picks it |
 | `host.providerTestPrompt` | Refused ([provider profiles](./provider-profiles.md#profiles-on-an-orchestrator)) |
 | `agent.importableSessions.list`, `agent.importSession`, and starting a local model server (Unsloth) | Refused |
 | `agent.completeOnce`, `agent.enhancePrompt` | Run on a machine ([quick actions on a machine](./agent-aux.md#quick-actions-on-an-orchestrator)) |

@@ -2019,7 +2019,7 @@ both sides, so protocol 7 to 16 peers still bind. On a link below 17 the backend
 sends no `forgeFetch` and a sub-agent starts as before.
 
 **nodeProtocol 18** is protocol 17 plus [quick actions on the machine](#quick-actions-on-the-machine-nodeprotocol-18):
-the `oneShot` and `oneShotReply` frames. They are new frame types, which an
+the `oneShot`, `oneShotCancel` and `oneShotReply` frames. They are new frame types, which an
 older peer rejects as `node-link-protocol`, and they start a provider process
 outside any agent, so they need a new version. A daemon that implements it
 offers `{ min: 7, max: 18 }` on both sides, so protocol 7 to 17 peers still
@@ -2068,6 +2068,7 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `checkoutRead` | backend → machine | script | Protocol 16 or later: `requestId`, `agentId`, `path`, `transferId?`, `offset`, `length`; see [checkout files](#checkout-files-nodeprotocol-16) |
 | `checkoutReadReply` | machine → backend | script | Protocol 16 or later: `requestId`, `agentId`, `outcome`, `piece?`, `error?` |
 | `oneShot` | backend → machine | rpc | Protocol 18 or later: `requestId`, `operation`, `input`, `profileEnv?`, `timeoutMs`; see [quick actions on the machine](#quick-actions-on-the-machine-nodeprotocol-18) |
+| `oneShotCancel` | backend → machine | rpc | Protocol 18 or later: `requestId` |
 | `oneShotReply` | machine → backend | rpc | Protocol 18 or later: `requestId`, `outcome`, `text?`, `error?` |
 
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
@@ -2088,7 +2089,7 @@ constant with a golden test: `hello`, `heartbeat` / `heartbeatReply`, `launch`,
 `secretPut`, `secretForget` and `secretList` (protocol 14 or later),
 `forgeToken` (protocol 15 or later),
 `checkoutRead` (protocol 16 or later),
-`oneShot` (protocol 18 or later),
+`oneShot` and `oneShotCancel` (protocol 18 or later),
 and git sessions on `/node/git` for agents on that credential's binding. Any
 other frame is `node-link-protocol`.
 `stopAck` travels machine → backend, so it is not in that list; the backend
@@ -3810,7 +3811,7 @@ interface OneShotFrame {
   operation: "complete" | "enhance";
   input: OneShotCompleteInput | OneShotEnhanceInput;
   profileEnv?: ProfileEnvOverlay;          // resolved on the backend, as for launch
-  timeoutMs: number;                       // the method's timeout, at most 120000
+  timeoutMs: number;                       // what is left of the method's timeout, at most 120000
 }
 
 interface OneShotCompleteInput {          // operation "complete"
@@ -3818,7 +3819,12 @@ interface OneShotCompleteInput {          // operation "complete"
   prompt: string;
   systemPrompt?: string;
   model?: string;
-  reasoningEffort?: string;
+  effort?: EffortCandidates;
+}
+
+interface EffortCandidates {
+  requested?: string;                      // the request's own reasoningEffort
+  saved: string[];                         // the saved quick-action values, in fallback order
 }
 
 interface OneShotEnhanceInput {           // operation "enhance" (auggie only)
@@ -3827,36 +3833,59 @@ interface OneShotEnhanceInput {           // operation "enhance" (auggie only)
   model?: string;
 }
 
+interface OneShotCancelFrame {
+  type: "oneShotCancel";
+  requestId: string;
+}
+
 interface OneShotReplyFrame {
   type: "oneShotReply";
   requestId: string;
-  outcome: "ok" | "unavailable" | "failed";
+  outcome: "ok" | "unavailable" | "failed" | "cancelled";
   text?: string;                           // "ok": the cleaned reply (for "enhance": the extracted payload)
   error?: { code: string; message: string }; // "unavailable" or "failed"
 }
 ```
 
-1. **Closed payloads.** `OneShotFrame.input` and `ProfileEnvOverlay` reject
-   unknown or mistyped members (`node-link-protocol`).
+1. **Closed payloads.** `OneShotFrame.input`, `EffortCandidates` and
+   `ProfileEnvOverlay` reject unknown or mistyped members
+   (`node-link-protocol`).
 2. **What runs.** `complete` runs the machine's ACP one-shot route for
    `claude-code`, `codex` or `pi`, or `auggie --print` for `auggie`; `enhance`
    runs `auggie --print`. The run is the same as the machine's own
    `agent.completeOnce` / `agent.enhancePrompt`: no MCP servers, permissions
-   auto-denied, no `cwd`, reaped on timeout, cancel or link loss. The
-   `profileEnv` overlay applies as for a [launch](#provider-credentials-profile-environment);
+   auto-denied, no `cwd`, reaped on `timeoutMs`, `oneShotCancel` or link loss.
+   The `profileEnv` overlay applies as for a [launch](#provider-credentials-profile-environment);
    an overlay that sets an account folder is never sent.
-3. **Capacity.** A one-shot counts against the machine's
-   `agents.maxConcurrentAdapters`, not its agent cap. Over that cap the
-   machine answers `unavailable` with code `no-capacity` at once; it never
-   queues.
-4. **Replies.** `unavailable` means the machine cannot run the operation
-   (provider disabled or not installed, no capacity, its own gate closed); the
-   backend answers the method with `{ available: false, reason }` using
-   `error.message`. `failed` means the run started and failed (timeout,
-   adapter exit, authentication); the backend answers the method with the
-   same error it would raise for a local failure.
-5. **Lost link.** When the link drops before the reply, the backend fails the
-   request with `node-link-unavailable` and does not retry on another machine.
+3. **Effort.** The machine resolves effort against its own live model, with the
+   §5.32 rules: `requested` must be supported (else `failed` with code
+   `effort-unsupported`); each `saved` value is tried in order and an
+   unsupported one is skipped; with none left, the provider's default applies.
+4. **Cancel.** `oneShotCancel` (backend → machine) ends the run; the machine
+   answers `cancelled`. The backend sends it when the method's caller goes
+   away or its own timer fires first. A cancel for an unknown or finished
+   `requestId` is ignored.
+5. **Capacity.** A one-shot counts against the machine's
+   `agents.maxConcurrentAdapters`, not its agent cap. Over that cap the machine
+   answers `unavailable` with code `no-capacity` at once and never queues. This
+   differs on purpose from the local route, which waits up to `timeoutMs` and
+   then raises `adapter-busy`: a quick action from an orchestrator degrades at
+   once instead of holding a slot on another computer.
+6. **Replies.** The backend maps each reply to the method's result:
+
+   | Reply | `error.code` | Method result |
+   | --- | --- | --- |
+   | `ok` | — | `{ text }` (`agent.enhancePrompt`: `{ enhanced, original, mode }`) |
+   | `unavailable` | `provider-disabled`, `cli-missing`, `no-capacity`, `gate-closed` | `{ available: false, reason }`, `reason` = `error.message` |
+   | `failed` | `timeout` | `-32603`, `data` `"<providerId>: timed out after <n>ms"`, as the local route |
+   | `failed` | `adapter-failed`, `auth-required`, `quota` | `-32603`, `data` `"<providerId>: <message>"`, as the local route |
+   | `failed` | `effort-unsupported` | `-32602`, as the local route for an unsupported explicit effort |
+   | `cancelled` | — | Nothing: the caller is gone |
+
+7. **Lost link.** When the link drops before the reply, the backend answers
+   `{ available: false, reason }` naming the machine, and does not retry on
+   another machine. A quick action is never an error because a machine went
+   away.
 
 ### Saved scripts (nodeProtocol 8)
 
