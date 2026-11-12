@@ -620,6 +620,58 @@ if [[ ${DEV_SANDBOX_TEST_STARTUP_ONLY:-0} == 1 ]]; then
   exit 0
 fi
 
+# The tool-approval behaviour documented in the dev-sandbox.sh header makes the
+# real sandbox agent send session/request_permission to its daemon (played
+# here by Python) and finish the turn once the daemon answers.
+mock_agent="$repo_root/packages/cloudlands-fe/e2e/mock-acp-agent.js"
+[[ -f "$mock_agent" ]] || fail "the permission-prompt test needs the cloudlands-fe submodule ($mock_agent)"
+command -v node >/dev/null 2>&1 || fail "the permission-prompt test needs node on PATH"
+python3 - "$script" "$mock_agent" <<'PY' || fail "the documented tool-approval behaviour did not reach the daemon"
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+script, agent = sys.argv[1:]
+# A live agent that never writes would block readline forever; fail instead
+# (raising, so the finally below still kills the agent).
+def timed_out(signum, frame):
+    raise TimeoutError("the scripted agent did not answer within 30s")
+signal.signal(signal.SIGALRM, timed_out)
+signal.alarm(30)
+documented = re.findall(r"^#   INTENTD_PERMISSION_POLICY=interactive MOCK_AGENT=1 MOCK_AGENT_BEHAVIOR='(.*)' make dev-sandbox-stack$",
+                        open(script, encoding="utf-8").read(), re.M)
+assert len(documented) == 1, documented
+env = dict(os.environ, MOCK_AGENT_BEHAVIOR=documented[0], MOCK_AGENT_DELAY_MS="0")
+proc = subprocess.Popen(["node", agent], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL, env=env, text=True)
+try:
+    def send(message):
+        proc.stdin.write(json.dumps(message) + "\n")
+        proc.stdin.flush()
+    send({"jsonrpc": "2.0", "id": "prompt-1", "method": "session/prompt",
+          "params": {"sessionId": "mock-session-1", "prompt": [{"type": "text", "text": "hi"}]}})
+    request = json.loads(proc.stdout.readline())
+    assert request["method"] == "session/request_permission", request
+    params = request["params"]
+    assert params["sessionId"] == "mock-session-1" and params["toolCall"]["toolCallId"], params
+    assert {option["kind"] for option in params["options"]} == {"allow_once", "reject_once"}, params
+    send({"jsonrpc": "2.0", "id": request["id"],
+          "result": {"outcome": {"outcome": "selected", "optionId": params["options"][0]["optionId"]}}})
+    reply = ""
+    while True:
+        message = json.loads(proc.stdout.readline())
+        if message.get("id") == "prompt-1":
+            break
+        reply += message["params"]["update"]["content"]["text"]
+    assert message["result"] == {"stopReason": "end_turn"}, message
+    assert reply == "Permission answered.", reply
+finally:
+    proc.kill()
+    proc.wait()
+PY
+
 busy_port=$(free_port)
 busy_ready="$temp_dir/busy-ready"
 python3 - "$busy_port" "$busy_ready" <<'PY' &
