@@ -61,6 +61,20 @@ daemons offer `{ min: 7, max: 18 }`. No store migration beyond the new order
 table, whose first rows keep "This computer" first. The documented surface is
 **501 / 447 / 54** (dispatchable / router / fast path).
 
+Also within 18.0 (additive method, capability, row field and link version;
+capability-gated, so no version bump): **workspace homes**. On an orchestrator
+each workspace has a home machine that holds its home checkout; terminals, home
+script runs, the setup script, file and git views and the app's `host.exec`
+run there ([workspace homes](./methods/nodes.md#workspace-homes)). Support is
+detected by exact integer `workspaceHomes: 1`. Workspace rows add `home`
+(`workspace:updated { changes: { home } }`), the owner-and-manager router
+method `workspace.setHome` moves it, and `home-unavailable`,
+`home-reply-too-large` and `home-target-unavailable` are new error codes.
+**nodeProtocol 19** adds the workspace checkout owner, the terminal channel,
+home calls, home backups and the home final stop
+([link contract](./node-link.md#workspace-homes-nodeprotocol-19)); daemons offer
+`{ min: 7, max: 19 }`. The documented surface is **502 / 448 / 54**.
+
 **Version 17.0 — CoW isolation setting retirement (breaking).**
 Copy-on-write is now used only to hydrate checkouts from the repo cache.
 `workspace.create` from a local repository always provisions a linked worktree

@@ -1892,7 +1892,7 @@ Revoking a credential closes its live `/node/*` connections with `1008`
 `hello.protocol` is a range instead of one number:
 
 ```ts
-interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 through 18
+interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 through 19
 ```
 
 The machine picks the highest version in both ranges and returns it as
@@ -2026,6 +2026,19 @@ offers `{ min: 7, max: 18 }` on both sides, so protocol 7 to 17 peers still
 bind. On a link below 18 the backend sends no `oneShot`, and a quick action
 that would run there answers `{ available: false, reason }`.
 
+**nodeProtocol 19** is protocol 18 plus [workspace homes](#workspace-homes-nodeprotocol-19):
+the workspace checkout owner (`homeOpen`, `homeOpenReply`, `homeStop`,
+`homeStopAck`, `homePush`, `homePushReply`, `hello.leaseHomes`, and journal
+records with a `homeId` instead of an `agentId`, including `homePushed`), the
+terminal channel (`ptyOpen`, `ptyInput`, `ptyResize`, `ptyKill`, `ptyAck`,
+`ptyOutput`, `ptyExited`), home calls (`homeCall`, `homeCallReply`,
+`homeCallCancel`), `launch.checkoutOf` naming a home, and script and setup
+frames that name a home instead of an agent. They give a
+machine a checkout no agent owns and route the user's files and terminals
+there, so they need a new version. A daemon that implements it offers
+`{ min: 7, max: 19 }` on both sides. A machine on a lower link cannot be a
+home (`machine-update-required`).
+
 ### Frames
 
 Each WebSocket binary message on `/node/link` is one JSON frame of at most
@@ -2070,6 +2083,16 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `oneShot` | backend → machine | rpc | Protocol 18 or later: `requestId`, `operation`, `input`, `profileEnv?`, `timeoutMs`; see [quick actions on the machine](#quick-actions-on-the-machine-nodeprotocol-18) |
 | `oneShotCancel` | backend → machine | rpc | Protocol 18 or later: `requestId` |
 | `oneShotReply` | machine → backend | rpc | Protocol 18 or later: `requestId`, `outcome`, `text?`, `error?` |
+| `homeOpen` | backend → machine | control | Protocol 19 or later: see [the workspace checkout](#the-workspace-checkout) |
+| `homeOpenReply` | machine → backend | control | Protocol 19 or later: `requestId`, `workspaceId`, `outcome`, `error?` |
+| `homeStop` | backend → machine | control | Protocol 19 or later: see [home final stop](#home-final-stop) |
+| `homeStopAck` | machine → backend | control | Protocol 19 or later: `stopId`, `workspaceId`, `outcome`, `orphaned?` |
+| `homePush` | backend → machine | control | Protocol 19 or later: `requestId`, `workspaceId`; see [home backup](#home-backup) |
+| `homePushReply` | machine → backend | control | Protocol 19 or later: `requestId`, `workspaceId`, `outcome`, `head?`, `error?` |
+| `ptyOpen` / `ptyInput` / `ptyResize` / `ptyKill` / `ptyAck` | backend → machine | control | Protocol 19 or later: see [terminals on the home](#terminals-on-the-home) |
+| `ptyOutput` / `ptyExited` | machine → backend | script | Protocol 19 or later |
+| `homeCall` / `homeCallCancel` | backend → machine | rpc | Protocol 19 or later: see [files and git on the home](#files-and-git-on-the-home) |
+| `homeCallReply` | machine → backend | rpc | Protocol 19 or later: `requestId`, `outcome`, `result?`, `error?` |
 
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
 Heartbeats run every 15 s and a link silent for 45 s is dead. The backend
@@ -2090,6 +2113,8 @@ constant with a golden test: `hello`, `heartbeat` / `heartbeatReply`, `launch`,
 `forgeToken` (protocol 15 or later),
 `checkoutRead` (protocol 16 or later),
 `oneShot` and `oneShotCancel` (protocol 18 or later),
+`homeOpen`, `homeStop`, `homePush`, `ptyOpen`, `ptyInput`, `ptyResize`,
+`ptyKill`, `ptyAck`, `homeCall` and `homeCallCancel` (protocol 19 or later),
 and git sessions on `/node/git` for agents on that credential's binding. Any
 other frame is `node-link-protocol`.
 `stopAck` travels machine → backend, so it is not in that list; the backend
@@ -2101,7 +2126,10 @@ accepts it only on a protocol 7 or later link. Likewise the backend accepts
 `secretReply` only on a protocol 14 or later link,
 `forgeTokenReply` only on a protocol 15 or later link,
 `checkoutReadReply` only on a protocol 16 or later link,
-and `oneShotReply` only on a protocol 18 or later link.
+`oneShotReply` only on a protocol 18 or later link,
+and `homeOpenReply`, `homeStopAck`, `homePushReply`, `ptyOutput`, `ptyExited`,
+`homeCallReply` and the `homePushed` journal body only on a protocol 19 or
+later link.
 
 ### Stop acknowledgement (nodeProtocol 7)
 
@@ -3887,6 +3915,306 @@ interface OneShotReplyFrame {
    another machine. A quick action is never an error because a machine went
    away.
 
+### Workspace homes (nodeProtocol 19)
+
+An [orchestrator](./methods/nodes.md#orchestrator-mode) keeps each
+workspace's files, terminals and scripts on the workspace's
+[home](./methods/nodes.md#workspace-homes). This section is the link side of
+that contract.
+
+**Home generation.** Every home has a `homeId` (a UUID), new at workspace
+create and at every move, also when a move lands on the same machine. Every
+home frame names `workspaceId` and `homeId`; the machine keeps one home
+checkout per `homeId`, in its own directory (`<work base>/homes/<homeId>`).
+A home frame other than `homeOpen` for a `homeId` the machine does not hold,
+or that is not in the bound hello's `leaseHomes`, is refused with
+`node-home-unknown` (a reply frame with that error, or `ptyExited` for
+`ptyOpen`). The machine checks this itself; it does not rely on the backend.
+`homeOpen` is authorized by the executor credential, as a `launch` is: it adds
+its `homeId` to the link's lease until the next bind.
+
+```ts
+interface LinkHello {
+  // ...as above
+  leaseHomes?: { workspaceId: string; homeId: string }[]; // protocol 19
+}
+```
+
+`leaseHomes` names the homes the backend expects on this machine: the current
+home of each workspace whose home is here, the destination of a move in
+progress (persisted with the move), and every home with a pending
+[home final stop](#home-final-stop) here. The bind-time sweep keeps exactly
+those home checkouts; a backend that sends no `leaseHomes` (an older one)
+gets no home checkout swept.
+
+#### The workspace checkout
+
+```ts
+interface HomeOpenFrame {          // backend → machine; closed
+  type: "homeOpen";
+  requestId: string;
+  workspaceId: string;
+  homeId: string;
+  baseCommit: string;              // as LaunchCommand.baseCommit
+  repoKey: string;                 // as LaunchCommand.repoKey
+  checkout: PreparedCheckout;      // submodule pins and the setup script, as for a launch
+  restore?: { head: string; wip?: string }; // a move or a rebuilt cloud home: the home refs to restore
+}
+interface HomeOpenReplyFrame {     // machine → backend; closed
+  type: "homeOpenReply";
+  requestId: string;
+  workspaceId: string;
+  homeId: string;
+  outcome: "ready" | "failed";
+  error?: string;                  // "failed": node-checkout-failed, node-home-unsupported or node-home-unknown, then text
+}
+```
+
+1. **Owner.** The checkout belongs to the workspace, not to an agent: it is
+   the machine's *workspace checkout owner* for `homeId`. No agent stop or
+   final stop removes it; only a `homeStop` or the sweep (above) does.
+2. **Open.** `homeOpen` fetches and makes the checkout as a
+   [launch's checkout](#checkout-on-the-machine) does. With `restore` it then
+   applies `head` and `wip` with the
+   [relaunch-without-a-checkout](#relaunch-without-a-checkout) rules; work that
+   does not apply is pinned at `home/unapplied/<sha>`. It answers
+   `homeOpenReply` once the checkout exists, at most **5 minutes** after the
+   frame, then runs `checkout.setup`: `setupOutput` and the `setupStarted` /
+   `setupFinished` journal records carry `workspaceId` and `homeId` instead of
+   an agent. A `homeOpen` for a `homeId` it already holds answers `ready` at
+   once and runs nothing again.
+3. **Opt-out.** A machine whose `remoteAgents.allowHomes` is off answers
+   `failed` with `node-home-unsupported`, and reports `homes: false` in its
+   [capabilities](#capabilities-report).
+4. **Sharing agents.** At protocol 19 `LaunchCommand.checkoutOf` is
+   `string | { workspaceId: string; homeId: string }`. With the object the
+   agent works in that home checkout, as a [shared checkout](#shared-checkout)
+   works in an agent's. A launch that arrives while the home's setup runs
+   waits for `setupFinished`; for a home the machine does not hold it ends with
+   `node-checkout-failed`. A sharing agent's pushes go to `home/*`, after each
+   of its turns, one push of the checkout at a time.
+5. **`/node/git` binding.** The home's session may read `head` and `wip` of
+   every agent of its own workspace, and write `home/head` and `home/wip` only
+   while its `homeId` is the workspace's current home. Any other ref is
+   `node-git-push-refused`, or not advertised. `home/orphaned/*` is written
+   only by a [home final stop](#home-final-stop); `home/rewritten/*` only by
+   the backend.
+
+#### Journal records of a home
+
+At protocol 19 `JournalRecord.agentId` is optional: a record carries exactly
+one of `agentId` or `homeId` (with its `workspaceId`). A record with `homeId`
+is ingested for that home; one for a home the backend no longer holds is
+acknowledged and dropped.
+
+```ts
+// JournalRecord.body, protocol 19
+  | { kind: "homePushed"; head?: string; wip?: string; rewritten?: string }
+```
+
+`homePushed` reports each push the machine made of the home checkout: the new
+`head` and `wip` commits, and `rewritten`, the old `home/head` tip that a
+non-fast-forward push replaced. `setupStarted` and `setupFinished` records of
+a home carry `homeId`.
+
+#### Home backup
+
+```ts
+interface HomePushFrame      { type: "homePush"; requestId: string; workspaceId: string; homeId: string }
+interface HomePushReplyFrame {
+  type: "homePushReply"; requestId: string; workspaceId: string; homeId: string;
+  outcome: "pushed" | "failed";
+  head?: string;                   // the pushed home/head commit
+  wip?: string;                    // the pushed home/wip commit
+  error?: string;
+}
+```
+
+1. **Watch.** The machine watches the home checkout's `HEAD` and refs and
+   pushes `home/head` about 2 s after a commit; `home/wip` after a sharing
+   agent's turn, after a home call that writes (debounced), before an idle
+   pause, and at least every 5 minutes while it changes. Each push journals
+   `homePushed`. The watcher stops when the home gets its `homeStop`.
+2. **Rewrites.** A non-fast-forward `home/head` push is accepted only together
+   with the pin: the backend creates `home/rewritten/<old sha>` in the same
+   ref update, and refuses the push when it cannot.
+3. **Synchronous push.** `homePush` asks for a push of both refs now; the
+   machine answers once, within **60 s**. The backend sends it before every
+   hub operation and before a move, and fails that operation with
+   `home-unavailable` on `failed`, a timeout or no link.
+
+#### Terminals on the home
+
+```ts
+interface PtyOpenFrame {           // backend → machine, control lane
+  type: "ptyOpen";
+  terminalId: string;              // the orchestrator's terminal id
+  workspaceId: string;
+  homeId: string;
+  mode: "terminal" | "exec";       // exec: host.execStream, pipes instead of a PTY
+  cwd?: string;                    // relative to the home checkout
+  command?: string;                // exec mode, or a terminal's start command
+  env?: { key: string; value: string }[];
+  cols?: number; rows?: number;    // terminal mode
+}
+interface PtyInputFrame  { type: "ptyInput";  terminalId: string; data: string }   // control lane; base64
+interface PtyResizeFrame { type: "ptyResize"; terminalId: string; cols: number; rows: number } // control lane
+interface PtyKillFrame   { type: "ptyKill";   terminalId: string }                 // control lane
+interface PtyAckFrame    { type: "ptyAck";    terminalId: string; seq: number }    // control lane, backend → machine
+interface PtyOutputFrame { type: "ptyOutput"; terminalId: string; seq: number; data: string; stream?: "stdout" | "stderr" } // script lane; base64
+interface PtyExitedFrame { type: "ptyExited"; terminalId: string; exitCode?: number; error?: string } // script lane
+```
+
+1. **One process per terminal.** `ptyOpen` starts the user's shell (or
+   `command`) in the home checkout, under the machine user, with the
+   machine's own environment plus `env`. `ptyExited` ends it; a `ptyOpen`
+   that cannot start answers `ptyExited` with `error`.
+2. **Every byte, in order.** `ptyOutput` numbers each frame from 0 per
+   terminal; the backend acknowledges the highest contiguous `seq` it has with
+   `ptyAck`. The machine keeps unacknowledged output, up to **4 MiB** per
+   terminal, and resends it in order after a bind; the backend drops a `seq`
+   it already has. When a terminal's unacknowledged output would pass 4 MiB,
+   the machine stops reading the PTY until acks arrive, so the program
+   blocks instead of losing output. The orchestrator therefore holds every
+   byte, and its buffer, replay offsets (`startOffset` / `endOffset`, §5.13),
+   `getBuffer`, `readOutput`, reattach and a second client's view are served
+   without the machine.
+3. **Input first.** `ptyInput`, `ptyResize`, `ptyKill` and `ptyAck` travel on
+   the control lane, ahead of any output, so typing works while output floods.
+4. **Lost link.** The machine keeps the processes running for 60 s (the
+   link-loss grace) and resends after the next bind; after the grace it ends
+   them. A bind with a different `headSession` (the orchestrator restarted)
+   ends every home terminal of that backend at once; the orchestrator marks
+   the terminals exited.
+5. **Not reported.** `terminal.list`'s `isExecutingCommand`,
+   `foregroundProcess` and `lastProcess` come from the orchestrator's own
+   process inspection, so a home terminal's row omits them.
+6. **Busy.** An open terminal counts as busy for a cloud home's idle pause.
+
+#### Home runs and setup
+
+At protocol 19 the script frames (`scriptStart`, `scriptStop`,
+`scriptStarted`, `scriptOutput`, `scriptExited`) carry exactly one of
+`agentId` or the pair `workspaceId` + `homeId`. With the pair the run is the
+workspace's **home run**, in the home checkout; everything else is as for
+[saved scripts](#saved-scripts-nodeprotocol-8), including what a lost link
+does to a run. `autoStart` scripts start when a `homeOpen` makes a new
+checkout (at create, after a move and on a rebuilt cloud home), not when it
+answers `ready` for a checkout that exists.
+
+#### Files and git on the home
+
+```ts
+interface HomeCallFrame {          // backend → machine, rpc lane
+  type: "homeCall";
+  requestId: string;
+  workspaceId: string;
+  homeId: string;
+  method: HomeMethod;
+  params: object;                  // the wire method's own params
+  timeoutMs: number;
+}
+type HomeMethod =
+  | "file.list" | "file.tree" | "file.read" | "file.readChunk" | "file.stat" | "file.exists"
+  | "file.write" | "file.mkdir" | "file.rename" | "file.delete"
+  | "file.getAttachmentInfo" | "file.placeAttachment"
+  | "git.status" | "git.changes" | "git.diffs" | "git.numstat" | "git.commits"
+  | "git.commitDetails" | "git.showFile" | "git.showFileChunk" | "git.branchDiff"
+  | "git.branchStatus" | "git.checkMergeConflicts" | "git.getBranches"
+  | "git.stage" | "git.unstage" | "git.stageHunk" | "git.unstageHunk" | "git.discard"
+  | "git.agentCommit" | "git.createBranch" | "git.checkoutBranch" | "git.renameBranch"
+  | "git.pull" | "git.fetch"
+  | "file-tracking.getChanges" | "file-tracking.getAgentLocks" | "file-tracking.loadCommits"
+  | "file-tracking.stage" | "file-tracking.unstage"
+  | "search.inFiles" | "search.fileNames" | "search.codebase"
+  | "host.exec";
+interface HomeCallCancelFrame { type: "homeCallCancel"; requestId: string }
+interface HomeCallReplyFrame {
+  type: "homeCallReply";
+  requestId: string;
+  outcome: "ok" | "err";
+  result?: unknown;                // the wire method's result
+  error?: { code: number; message: string; data?: unknown };
+}
+```
+
+1. **Same contract, other place.** The machine answers each listed method as
+   the wire method of that name does on a regular daemon, against the home
+   checkout; the orchestrator returns the result unchanged. Results carry
+   paths relative to the home checkout, never the machine's absolute paths.
+2. **Not routed.** `git.pull` and `git.fetch` for the workspace run on the home
+   as home calls too (with the machine's
+   [forge token](#forge-token-on-the-machine-nodeprotocol-15)), since a pull
+   rewrites the working tree; the hub mirror then follows `home/head`. On an
+   orchestrator, `git.push`, `git.clone`, `git.getConfig`, `git.getRemoteUrl`
+   and `git.removeLockFile` run on the orchestrator's hub (after a synchronous
+   `homePush` for `push`);
+   the `file.attachmentUpload.*` methods store the upload on the
+   orchestrator, and `file.placeAttachment` then sends it to the home in
+   pieces of at most 4 MiB.
+3. **Paths.** Every path is resolved as [checkout files](#checkout-files-nodeprotocol-16)
+   resolves one: relative, canonicalised, refused when it resolves outside the
+   home checkout (also through a symlink), and refused with a `.git`
+   component at any depth. An absolute path a client sends (today's
+   `terminal.create` `cwd`, for example) is accepted when it is under the
+   orchestrator's worktree path, and mapped to the same relative path in the
+   home checkout; any other absolute path is `-32602`.
+4. **Bounded.** A reply fits one frame. Methods that page do so as on the wire
+   (`file.readChunk`, `git.showFileChunk`); a result over the frame limit is
+   `-32603` `home-reply-too-large`. `host.exec` keeps its own timeout and
+   output caps; `host.execStream` is an exec-mode `ptyOpen` instead.
+5. **Writes push.** File writes, renames, deletes, stage and discard calls
+   schedule a debounced `home/wip` push. `git.agentCommit` pushes `home/head`
+   before it replies. When the commit landed but that push failed, the call
+   still succeeds, with `backupPending: true` in its result, so a client never
+   retries a commit that exists.
+6. **Cancel and loss.** `homeCallCancel` ends a call. A lost link fails it with
+   `home-unavailable`; for `git.agentCommit` that error has `retryable: false`,
+   because the commit may have landed.
+
+#### Home final stop
+
+```ts
+interface HomeStopFrame {          // backend → machine, durable like a final stop
+  type: "homeStop";
+  stopId: string;
+  workspaceId: string;
+  homeId: string;
+  reason: "retired" | "moved";
+  orphanedAt?: string;             // "moved": the timestamp of the orphan refs
+}
+interface HomeStopAckFrame {
+  type: "homeStopAck";
+  stopId: string;
+  workspaceId: string;
+  homeId: string;
+  outcome: "removed" | "failed";
+  orphaned?: { head: string; wip?: string }; // "moved": what it pushed
+}
+```
+
+1. **Durable record.** The backend keeps one row per pending home stop
+   (`workspaceId`, `homeId`, `nodeId`, `stopId`, `reason`, `orphanedAt`,
+   `recordedAt`), written in the same transaction that archives or deletes the
+   workspace or switches its home. It sends the stop after every bind until it
+   gets the ack, then deletes the row. A home stop has no time bound; the row
+   goes only with its ack, or when the machine is removed from the backend
+   (`remoteMachines.remove`), which is then the user's choice to drop that
+   checkout.
+2. **Retired.** The machine stops the home's terminals and runs, stops the
+   agents sharing the checkout (as an [owner's final stop](#shared-checkout)
+   does), pushes `home/head` and `home/wip` once more (authorized by the
+   record, also after the workspace was archived; skipped when the workspace
+   was deleted), removes the checkout and acks.
+3. **Moved.** The machine stops the home's terminals and runs and the sharing
+   agents, then pushes its leftover checkout once to
+   `refs/intent/ws/<workspaceId>/home/orphaned/<orphanedAt>/{head,wip}`
+   (create-only; the record is the only authority for it), removes the
+   checkout after that push and acks with what it pushed. It never pushes
+   `home/head` or `home/wip` for that `homeId` again.
+4. **Sweep.** The bind-time sweep never removes a checkout whose `homeId` is in
+   `leaseHomes`, which includes every pending home stop.
+
 ### Saved scripts (nodeProtocol 8)
 
 A remote agent's `ws.script.*` calls are [forwarded](#workspace-api-on-the-machine)
@@ -4119,6 +4447,7 @@ interface GitIdentity { // closed body: a new member needs a nodeProtocol
 interface MachineCapabilities {
   platform: { os: "linux" | "macos"; arch: "x86_64" | "aarch64" };
   intentdVersion: string;
+  homes?: boolean;               // protocol 19: false when remoteAgents.allowHomes is off; absent means true
   capacity: {
     runningAgents: number;       // all agents counted against the machine's cap, local and remote
     agentCap: number;            // effective agents.maxConcurrent
