@@ -1010,9 +1010,13 @@ agents can branch on it:
 > **Workspace homes.** On an orchestrator with `workspaceHomes: 1`, a workspace's
 > terminals run on its [home](./nodes.md#workspace-homes) instead of the daemon host,
 > over the executor link's [terminal channel](../node-link.md#terminals-on-the-home).
-> The methods, buffers, attach and ownership rules below are unchanged; a detached
-> home fails `terminal.create` / `write` / `resize` with `home-unavailable`. The same
-> holds for the `file.*` methods of this section, which act on the home checkout.
+> The methods, buffers and attach rules below are unchanged; `create`, `write`,
+> `resize` and `kill` are open to the workspace owner and managers only there, a
+> detached or moving home fails them with `home-unavailable`, and a home terminal's
+> `terminal.list` row omits `isExecutingCommand`, `foregroundProcess` and
+> `lastProcess`. The `file.*` methods listed among the
+> [home calls](../node-link.md#files-and-git-on-the-home) act on the home checkout;
+> `file.attachmentUpload.*` still stores the upload on the orchestrator.
 
 > Alongside the read-only methods (`terminal.list` — the v4.0 `{ terminals, daemonBootId }`
 > envelope — and `terminal.readOutput`, §5.9), the

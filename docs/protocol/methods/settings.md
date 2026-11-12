@@ -767,6 +767,12 @@ whenever it implements them outside node mode, the frontend offers them behind
 its Labs flag, and a machine serves a backend only once its owner mints an
 executor credential for it.
 
+- `remoteAgents.allowHomes` (boolean, default `true`). Machine side: whether
+  this machine may hold [workspace homes](./nodes.md#workspace-homes) for the
+  backends it is exposed to (their terminals, scripts and files run here
+  under this account). Off: the capabilities report says `homes: false` and
+  `homeOpen` is refused with `node-home-unsupported`. Applies in regular and
+  node mode.
 - `remoteAgents.permission` (enum `allowAll` | `autoByRisk` | `denyAll`, default
   `allowAll`). Machine side: how provider permission prompts of remote agents are
   answered, since no client is attached. Applies in regular and node mode.

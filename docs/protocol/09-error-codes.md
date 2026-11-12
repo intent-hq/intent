@@ -206,10 +206,13 @@ is introduced.
 [Workspace homes](./methods/nodes.md#workspace-homes) add `-32603`
 `home-unavailable` (data `{ nodeId?, cloudMachineId?, name, lastBackupAt?,
 retryable: true }`: the workspace's home is detached or its link dropped
-mid-call), `-32603` `home-reply-too-large`, and `-32602`
-`home-target-unavailable` (`workspace.setHome` to an agent with no live machine).
-On the executor link, `node-home-unknown` refuses a home frame for a workspace
-whose home the machine does not hold.
+mid-call), `-32603` `home-reply-too-large`, and `-32602` `home-target-unavailable` (a
+`workspace.setHome` target that cannot be a home), `home-moving` (a move is
+already running) and `homes-unsupported` (a backend without `workspaceHomes`).
+On the executor link, `node-home-unknown` refuses a home frame for a `homeId`
+the machine does not hold or that is not in `leaseHomes`, and
+`node-home-unsupported` a `homeOpen` on a machine with
+`remoteAgents.allowHomes` off.
 
 [Node invites](./methods/nodes.md#claim-errors) add `data.code` values on existing
 numeric codes. `-32602` from `remoteMachines.claim`: `invalid-node-link`,
