@@ -125,20 +125,20 @@ The [Agent Plugins contract (§5.57)](./methods/plugins.md) adds five
 administrator-only router methods that install, update, remove, enable and list
 app-wide plugins; `agentPlugins: 1` gates support.
 
-The documented surface reserves **502 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The documented surface reserves **505 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
 
-- **Router methods:** 448 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 451 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 54 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 0; use canonical Git read names
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 7 notifications: `events.lost` ([loss contract](./event-stream-recovery.md)), `events.event` (§6.3) and the socket-private `workspace.repositoryContext.retired`, `workspace.repositorySelection.retired`, `accept-changes.retired`, `sourceControl.read.retired`, `sourceControl.read.invalidated` controls (§6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 502 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 505 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 502 dispatchable names + 7 notifications. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 505 dispatchable names + 7 notifications. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.57) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.58) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
 **GitLab repository additions:** the [repository context and selection
 contracts](methods/workspace.md#repository-context), [native review and commit
@@ -148,7 +148,7 @@ methods and four socket-private control notifications. Their individual hello
 capabilities gate support; catalog entries do not grant permission or establish
 which desktop release contains the feature. All existing methods remain present.
 
-### Router methods by namespace (448 total)
+### Router methods by namespace (451 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -186,6 +186,7 @@ which desktop release contains the feature. All existing methods remain present.
 | primitive | 4 | addAgentAction, addCli, addPatch, addReference |
 | principal | 3 | list, me, revokeSelf — `me` is the principal this connection was bound to at admission (`{ id, login: string \| null, displayName: string \| null, avatarUrl: string \| null, isAdministrator, identity? }` — the profile fields are always present, `null` until a forge identity is cached; `identity?` is the v10.8 provider-neutral triple `{ provider, host, externalUserId }`, omitted while unlinked; §5.46; v10.3, [intent-hq/intentd#1869](https://github.com/intent-hq/intentd/pull/1869), no params, daemon-global — no `workspaceId`). Fails closed (`-32603`) when no caller is bound. `list` ([intent-hq/intentd#2023](https://github.com/intent-hq/intentd/pull/2023); §5.48) is the administrator-only roster of credentialed guests `{ principals: [{ principalId, login: string \| null, displayName: string \| null, avatarUrl: string \| null, githubUserId: integer \| null, identity? }] }` the direct member add draws from (the four profile keys always present, `null` when uncached — the `me` convention; `identity?` omitted while unlinked). `revokeSelf` (shipped in intentd b518d31; §5.48) revokes the caller's **own** credentials and drops its collaborator memberships (each publishing the `removedPrincipalId` `workspace:updated`, §6.5); self-directed only (no target parameter), the administrator is refused in the service layer |
 | providers | 7 | catalog, profiles.create, profiles.delete, profiles.list, profiles.reorder, profiles.update, profiles.updateDefault — `catalog` is the static provider registry served over the wire (§5.38; v2.6, daemon-global result; optional routing-only `workspaceId`); `profiles.*` manage named Codex/Claude Code profiles and the Default configuration's name and environment overrides (§5.54; prepared, administrator-only) |
+| push | 3 | createLink, revokeLink, status — push relay linking for iOS Live Activities and alerts (§5.58, prepared; no params, the caller's own link; owner and host members). `createLink` is `-32602` while `push.relayEnabled` is off |
 | remoteLinkTraffic | 3 | snapshot, start, stop — executor-link traffic capture (§5.50), owner-only, daemon-global |
 | remoteMachines | 9 | add, backendInfo, claim, list, models, order, refresh, remove, setOrder — daemon-to-daemon exposed machines (§5.50), owner-only, daemon-global; `models` is experimental and gated by `remoteMachineModels: 1`; `claim` is gated by `remoteMachineClaim: 1`; `order` (owner and members) and `setOrder` (owner) are the [ordered machine list](./methods/nodes.md#ordered-machine-list), gated by `machineOrder: 1` |
 | repo | 3 | list, remove, warmCache — opportunistic background repo-cache refresh for one GitHub repo (§5.11; v6.10, daemon-global — no `workspaceId`) |
@@ -952,4 +953,4 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 
 ### §5.x subsection index
 
-The per-namespace subsections (§5.1–§5.57) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).
+The per-namespace subsections (§5.1–§5.58) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).
