@@ -58,6 +58,16 @@ only when this capability is present; older daemons omit it. This is a server su
 flag, independent of the model's `agentFeatures.peerAgents` gate, and does not grant
 caller authority: workspace lifecycle permissions still apply.
 
+**Local code pairing (prepared).** `server.capabilities.localCodePairing: 1`,
+also returned by `system.capabilities`, advertises the complete
+[§5.58 local code pairing contract](./local-code-pairing.md): the four local-only
+administration methods, `pairing.redeemLocalCode` on the loopback-only
+`/local-pair` endpoint, local pairing credentials, the two `pairing:*` events and
+the discovery record. The host UI shows its code panel only for exact integer `1`
+from its own daemon; a requester lists only discovery records carrying the same
+flag. Missing, malformed or unknown values mean unsupported. It is support
+discovery, not caller authority.
+
 **PR workspace lookup.** `server.capabilities.prWorkspaceLookup: 1`
 advertises [§5.1 `workspace.findByPullRequest`](./workspace.md#pull-request-workspace-lookup)
 and the PR-to-workspace link recording behind it. Clients offer the

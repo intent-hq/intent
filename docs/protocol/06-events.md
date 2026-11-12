@@ -775,6 +775,18 @@ new stream-end/interruption reason. `workspace:updated.data.changes` adds
 future additions, not emitted by the pinned daemon. The `sandbox:cow:*` events were
 removed with per-agent CoW sandboxes in protocol 16.
 
+#### Local code pairing events (prepared, not implemented)
+
+The [local code pairing contract (§5.58)](./methods/local-code-pairing.md#events)
+defines `pairing:localCode-changed` (`{ localCode: LocalPairingCode }` on create,
+each counted wrong try, redemption, expiry, cancellation and lock) and
+`pairing:localCredentials-changed` (`{ credential: LocalPairingCredential }` on
+mint and `connected` changes, or `{ credentialId, revoked: true }` after
+revocation). Both are daemon-global and delivered only to local-transport
+(UDS / named pipe) connections, never to TCP/WSS connections. Neither carries a
+plaintext code, a code hash or a token. These are future additions, not emitted by
+the pinned daemon.
+
 #### Remote machine events
 
 The [daemon-to-daemon remote machines contract (§5.50)](./methods/nodes.md#daemon-to-daemon-remote-machines)

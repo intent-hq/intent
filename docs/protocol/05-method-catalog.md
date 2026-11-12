@@ -22,6 +22,10 @@ changes omitted purpose for new commands to `oneOff`, retaining stored upsert an
 legacy hydration defaults. It changes no catalog names or counts;
 `scriptLifecycle: 1` alone does not distinguish defaults.
 
+The prepared [local code pairing contract (§5.58)](./methods/local-code-pairing.md)
+reserves five fast-path `pairing.*` methods ahead of implementation;
+`localCodePairing: 1` gates support, not catalog presence.
+
 The [worker observation contract (§5.5b)](./methods/agent-workers.md)
 adds a list, a subscription and a provider-mediated stop; `agentWorkers: 1` gates support.
 
@@ -121,10 +125,10 @@ The [Agent Plugins contract (§5.57)](./methods/plugins.md) adds five
 administrator-only router methods that install, update, remove, enable and list
 app-wide plugins; `agentPlugins: 1` gates support.
 
-The documented surface reserves **499 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The documented surface reserves **504 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
 
 - **Router methods:** 445 methods dispatched via the main router (`router::dispatch`)
-- **Fast-path methods:** 54 methods intercepted before the router for performance or per-connection state
+- **Fast-path methods:** 59 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 0; use canonical Git read names
 
 Additionally, the protocol includes:
@@ -134,7 +138,7 @@ Additionally, the protocol includes:
 
 **Total:** 499 dispatchable names + 7 notifications. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.57) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.58) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
 **GitLab repository additions:** the [repository context and selection
 contracts](methods/workspace.md#repository-context), [native review and commit
@@ -206,11 +210,11 @@ which desktop release contains the feature. All existing methods remain present.
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9 and the `browser.*` tab-registry methods are in §5.45.
 
-### Fast-path methods (54 total)
+### Fast-path methods (59 total)
 
-The following 54 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task. The retired `invite.redeem` is not dispatchable at the current pin; `/invite` serves only inspect, accept, challenge and prove.
+The following 59 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task. The retired `invite.redeem` is not dispatchable at the current pin; `/invite` serves only inspect, accept, challenge and prove.
 
-agent.workers.subscribe, browser.closeTab, browser.exec, browser.listTabs, browser.navigateTab, browser.removeTab, browser.syncTabs, browser.upsertTab, client.hello, drafts.clear, drafts.get, drafts.set, events.fence, events.subscribe, events.unsubscribe, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.invite.create, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.prepareProviderAdapters, host.providerAuthStatus, host.providerDiscovery, host.providerTestPrompt, host.status, host.toolAvailability, invite.accept, invite.challenge, invite.inspect, invite.prove, note.presence.update, pairing.getInfo, pairing.getSelfInfo, presence.update, server.pairingInfo, server.rotateToken, system.gitCredential, system.requestUpdate, system.shutdown, system.startupStatus, system.status, workspace.invite.create
+agent.workers.subscribe, browser.closeTab, browser.exec, browser.listTabs, browser.navigateTab, browser.removeTab, browser.syncTabs, browser.upsertTab, client.hello, drafts.clear, drafts.get, drafts.set, events.fence, events.subscribe, events.unsubscribe, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.invite.create, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.prepareProviderAdapters, host.providerAuthStatus, host.providerDiscovery, host.providerTestPrompt, host.status, host.toolAvailability, invite.accept, invite.challenge, invite.inspect, invite.prove, note.presence.update, pairing.cancelLocalCode, pairing.createLocalCode, pairing.getInfo, pairing.getSelfInfo, pairing.listLocalCredentials, pairing.redeemLocalCode, pairing.revokeLocalCredential, presence.update, server.pairingInfo, server.rotateToken, system.gitCredential, system.requestUpdate, system.shutdown, system.startupStatus, system.status, workspace.invite.create
 
 The multiplayer methods (presence §5.47, invites §5.48) are fast-path because they act on per-connection state: `presence.update` sets the connection's **own** focus set and typing target (member workspaces only; transient, never persisted; returns the connection's opaque typing source handle) and `note.presence.update` the caller's own caret on a note it holds a `note.presence.subscribe` lease for (coalesced daemon-side, never persisted) — both feed the `presence:changed` / `note:presence` events (§6.5);
 `workspace.invite.create` (owner/member under §5.49; requires a connected owner forge — GitHub or GitLab — else `-32603 { code: "github-identity-required" }`, or `github-unreachable` when neither is connected and one cannot be reached; the legacy owner-only policy without `hostMembership: 1`; optional `pinLogin` with its v10.8 `pinProvider` / `pinHost`, `expiresInSecs` default 7 days) mints an invite the transport wraps into the `intent://invite?…` link, and the four `invite.*` methods are the unauthenticated join served on the `/invite` endpoint only: `invite.inspect` previews an open `(inviteId, secret)` → `{ workspaceId, workspaceTitle, hostname, prettyHostname, pinIdentity }`, with the required `pinIdentity` triple or explicit `null` (10.8; see [Selecting the guest identity](./methods/multiplayer.md#selecting-the-guest-identity) for the triple shape, legacy pins, and older-daemon omission rules);
@@ -222,7 +226,7 @@ The six `browser.*` tab-registry methods (`listTabs`, `upsertTab`, `removeTab`, 
 
 The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, `note.presence.subscribe`, …, §6.9) are likewise intercepted on the subscription fast-path. `agent.workers.subscribe` (§5.5b) is counted above instead, like `events.subscribe`: it pushes complete snapshots and tears down with `events.unsubscribe`, so it has no paired unsubscribe.
 
-**UDS-only methods:** `system.shutdown` and `system.gitCredential` (v2.5) are only available on the Unix-domain socket transport (a remote WSS/TCP caller is rejected with `-32001`). `system.status` and `system.requestUpdate` (v8.6, see below) are available on both UDS and WSS transports. `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown; both are consumed by `intentd status` / `intentd stop`. `system.gitCredential` resolves the daemon-managed GitHub credential for the `intentd git-credential` helper (see below). `pairing.getInfo`, `server.pairingInfo`, and `server.rotateToken` are likewise local-only: they are gated on the real connection origin (UDS vs TCP), so a remote (TCP/WSS) caller is rejected with `-32001` regardless of locality flags.
+**UDS-only methods:** `system.shutdown` and `system.gitCredential` (v2.5) are only available on the Unix-domain socket transport (a remote WSS/TCP caller is rejected with `-32001`). `system.status` and `system.requestUpdate` (v8.6, see below) are available on both UDS and WSS transports. `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown; both are consumed by `intentd status` / `intentd stop`. `system.gitCredential` resolves the daemon-managed GitHub credential for the `intentd git-credential` helper (see below). `pairing.getInfo`, `server.pairingInfo`, and `server.rotateToken` are likewise local-only: they are gated on the real connection origin (UDS vs TCP), so a remote (TCP/WSS) caller is rejected with `-32001` regardless of locality flags. The prepared local code pairing administration methods (`pairing.createLocalCode`, `pairing.cancelLocalCode`, `pairing.listLocalCredentials`, `pairing.revokeLocalCredential`; §5.58) use the same guard, and `pairing.redeemLocalCode` is served only on the anonymous loopback-only `/local-pair` endpoint.
 
 **`system.capabilities` is a router method, not a fast-path control (v2.3).** Unlike the `system.*` fast-path methods above (which are answered by the composition root's control surface), `system.capabilities` dispatches through the main router to the service layer and is available on **both** UDS and WSS. It accepts optional routing-only `workspaceId` under the prepared contract and returns the machine-level capability flags; `{}` remains compatible on direct daemons:
 
@@ -567,6 +571,14 @@ It is callable over UDS/WSS by the current owner/member/guest and returns that c
 persistent admitted credential with the existing pairing fields plus `principal`.
 No target-principal parameter, expiry or ticket is added. Existing local-only pairing and
 server-token administration below retain their separate transport guards.
+
+#### Local code pairing (prepared, §5.58)
+
+`pairing.createLocalCode`, `pairing.cancelLocalCode`, `pairing.listLocalCredentials`
+and `pairing.revokeLocalCredential` are local-only owner administration for
+pairing another Intent on the same computer with a 6-character code;
+`pairing.redeemLocalCode` is the only method on the anonymous, loopback-only
+`/local-pair` endpoint. See [§5.58](./methods/local-code-pairing.md).
 
 #### `pairing.getInfo` (local-only)
 
@@ -948,4 +960,4 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 
 ### §5.x subsection index
 
-The per-namespace subsections (§5.1–§5.57) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).
+The per-namespace subsections (§5.1–§5.58) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).

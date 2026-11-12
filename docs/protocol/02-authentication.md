@@ -102,6 +102,31 @@ Running agents means running code as the machine owner's OS user. The
 credential is narrow in API terms but powerful in effect, which is why only the
 owner can mint it.
 
+### 2.7 Local code pairing and the `/local-pair` endpoint *(prepared)*
+
+[§5.58](./methods/local-code-pairing.md) lets an Intent on the same computer
+connect without copying the owner token. It adds two pieces to admission.
+
+- **`/local-pair` is a second unauthenticated path**, beside `/invite`. Its
+  upgrade requires `server.wsApi.enabled`, a loopback TCP peer (`127.0.0.0/8`,
+  `::1` or IPv4-mapped loopback) and an absent or loopback `Origin`; anything
+  else is `403`. It resolves no credential and serves exactly one method,
+  `pairing.redeemLocalCode`; every other method is `-32001`. With no active code
+  it grants nothing.
+- **Local pairing credentials** are a separate credential kind minted by a
+  successful redemption: 32 random bytes, hex-encoded, returned once, stored
+  as its SHA-256. On `/ws` the gate looks it up after the owner token and
+  principal credentials and admits it only from a loopback peer, bound to the
+  primary principal. It is `401` from any other peer and on `/tunnel`,
+  `/invite`, `/local-pair` and `/node/*`. As a TCP connection it cannot call
+  local-only methods, so it can never read or rotate the owner token.
+  `server.rotateToken` does not affect it. `pairing.revokeLocalCredential` closes
+  its live connections with close code **1008** and refuses it with `401` on
+  replay.
+
+Creating codes and listing or revoking these credentials is local-only owner
+administration, like `pairing.getInfo`.
+
 ### Protected bootstrap admission (prepared)
 
 The [startup contract](./startup-readiness.md#bootstrap-boundary-and-security)
