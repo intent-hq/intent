@@ -734,7 +734,8 @@ manifest and per-lane outcomes distinguish missing reports from successful runs.
 `nightly-browser-report.yml` processes every nightly/main manual completion of
 Nightly Browser Tests and of the packaged Build Smoke (`build-smoke.yml`; its
 `build-smoke` lane is listed in `BUILD_SMOKE_ARTIFACTS`; a broken package files
-a CI-evidence incident), including green runs with retries or quarantine failures. Its isolated writer
+a CI-evidence incident; cancelled runs and `--grep` dispatches file nothing),
+including green runs with retries or quarantine failures. Its isolated writer
 uses main's code and `MONOREPO_ISSUES_TOKEN` (central-tracker Issues write, with
 permission to set Bug Type, labels and assignees). New issues go to
 `intent-hq/intent`, owned by @panghy; matched issues retain their owners and human
