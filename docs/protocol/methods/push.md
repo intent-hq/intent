@@ -2,8 +2,8 @@
 
 ## 5.58 Push relay linking (prepared)
 
-The push relay (`push.intentapp.dev`, repository `intent-hq/intent-push`) keeps the iOS
-agent Live Activity current and sends agent alerts while the app is closed. The daemon
+The push relay (repository `intent-hq/intent-push`, a Cloudflare Worker on `workers.dev`)
+keeps the iOS agent Live Activity current and sends agent alerts while the app is closed. The daemon
 publishes signed facts about each workspace to the relay. A phone links itself to this
 daemon with a one-time token from `push.createLink`, then talks to the relay directly.
 
