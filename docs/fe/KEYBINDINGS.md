@@ -3,7 +3,8 @@
 > **Legend:** `Cmd` = ⌘ on Mac, `Ctrl` on Windows/Linux. `Mod` means either depending on platform.
 >
 > Rows with an **ID** are configurable in Settings → Keyboard Shortcuts. Their chord must match
-> `SHORTCUT_DEFAULTS` in cloudlands-fe `src/lib/utils/shortcut-bindings.ts`; `make check-keybindings-doc`
+> `SHORTCUT_DEFAULTS` in cloudlands-fe `src/shared/keyboard-shortcut-bindings.ts`
+> (re-exported by `src/lib/utils/shortcut-bindings.ts`); `make check-keybindings-doc`
 > checks this. To move a shortcut, see [Moving a shortcut](#moving-a-shortcut).
 
 ---
@@ -132,6 +133,19 @@
 ---
 
 ## 🔍 Dock Navigation
+
+| Shortcut       | Action                              | Context                                      | ID             |
+| -------------- | ----------------------------------- | -------------------------------------------- | -------------- |
+| `Ctrl+Shift+D` | Open the dock for the active app/tab | System-wide; press again in the dock to close | `dock.focus`   |
+| `Ctrl+Shift+S` | Capture a screenshot for the dock    | System-wide when registered                  | `dock.capture` |
+| `Ctrl+Shift+R` | Start or stop a dock recording       | System-wide when registered                  | `dock.record`  |
+
+These use Control on macOS too and are configurable in Settings → Keyboard Shortcuts.
+The **Dock experiment in Labs must be enabled**; screenshot capture and recording also
+require native support. Bindings must be available, and active capture, recording and
+dictation sessions can restrict switching or closing. On Windows/Linux,
+the default capture binding conflicts with `workspace.set-aside` (`Mod+Shift+S`), so native
+capture registration is blocked until that conflict is resolved in shortcut settings.
 
 | Shortcut | Action                              | Context                 |
 | -------- | ----------------------------------- | ----------------------- |
