@@ -74,8 +74,9 @@ The normalized permission request payload is:
   "title": "Run command",
   "description": "Tool input: { \"command\": \"npm test\" }",
   "options": [
-    { "id": "allow_once", "label": "Allow", "description": null, "destructive": false },
-    { "id": "reject_once", "label": "Deny", "destructive": true }
+    { "id": "allow_once", "label": "Allow", "description": null, "destructive": false, "kind": "allow_once" },
+    { "id": "allow_always", "label": "Always allow", "description": null, "destructive": false, "kind": "allow_always", "scope": "workspace" },
+    { "id": "reject_once", "label": "Deny", "destructive": true, "kind": "reject_once" }
   ],
   "agentName": "auggie",
   "riskLevel": "high",
@@ -84,6 +85,8 @@ The normalized permission request payload is:
 ```
 
 - `options` are normalized from both ACP (`id`/`label`) and auggie (`optionId`/`name`) shapes. If aprovider sends none, the backend defaults to `allow_once` / `reject_once`.
+- `kind` is the ACP option kind: `allow_once`, `allow_always`, `reject_once` or `reject_always`. It is omitted for a kind the backend does not know; a client treats a missing `kind` as unknown.
+- `scope` appears only on an `allow_always` option and says how far the approval reaches: `chat` (this agent session), `workspace` (saved in the agent's workspace checkout, e.g. Claude's `.claude/settings.local.json`) or `allWorkspaces` (saved in the user's own CLI configuration, e.g. Cursor's `~/.cursor/cli-config.json`). An option labelled for "this session" or "this conversation" is `chat`; otherwise the provider's own default applies (Claude `workspace`, Codex `chat`, Cursor `allWorkspaces`). It is omitted when unknown.
 - `riskLevel` (`low|medium|high`) is heuristically derived from the title (read/list → low;delete/execute/write/create → high).
 - `sessionId` equals the `agentId`, so a client can route the prompt to the right agent view.
 
