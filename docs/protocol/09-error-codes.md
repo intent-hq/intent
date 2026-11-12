@@ -203,6 +203,14 @@ existing numeric codes: `-32602` `order-stale` from `remoteMachines.setOrder`
 session import or a local model server on an orchestrator). No new numeric error
 is introduced.
 
+[Workspace homes](./methods/nodes.md#workspace-homes) add `-32603`
+`home-unavailable` (data `{ nodeId?, cloudMachineId?, name, lastBackupAt?,
+retryable: true }`: the workspace's home is detached or its link dropped
+mid-call), `-32603` `home-reply-too-large`, and `-32602`
+`home-target-unavailable` (`workspace.setHome` to an agent with no live machine).
+On the executor link, `node-home-unknown` refuses a home frame for a workspace
+whose home the machine does not hold.
+
 [Node invites](./methods/nodes.md#claim-errors) add `data.code` values on existing
 numeric codes. `-32602` from `remoteMachines.claim`: `invalid-node-link`,
 `node-invite-invalid`, `node-invite-expired` (data `expiresAt`),

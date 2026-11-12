@@ -222,6 +222,14 @@ from an `intent://node` link. It is advertised only together with
 `remoteMachines: 1`. Clients accept `intent://node` links only when it is exactly
 `1`; it grants no caller authority.
 
+**Workspace homes (additive, docs first).** Exact integer
+`server.capabilities.workspaceHomes: 1` means the backend keeps each workspace's
+files, terminals and scripts on the workspace's
+[home](./nodes.md#workspace-homes): `Workspace.home`, `workspace.setHome` and the
+`home-unavailable` error. Only an orchestrator advertises it. Clients show the
+home, the detached banner and **Move home…** only when it is exactly `1`; it
+grants no caller authority.
+
 **Machine order (additive, docs first).** Exact integer
 `server.capabilities.machineOrder: 1` means the backend keeps the
 [ordered machine list](./nodes.md#ordered-machine-list): it implements

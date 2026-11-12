@@ -1078,7 +1078,9 @@ over the executor link's [script frames](../node-link.md#saved-scripts-nodeproto
 **Where a run happens depends on who starts it**, not on who saved the script:
 
 - The app and local agents run a script in the workspace's **home checkout**
-  (today the backend's workspace checkout), as before. This is the script's
+  (the backend's workspace checkout; on an orchestrator with
+  `workspaceHomes: 1`, the checkout on the workspace's
+  [home](./nodes.md#workspace-homes)), as before. This is the script's
   **home run**: the existing `runtime` and `lastRun`.
 - A remote agent that starts any saved script, including one saved by the user
   or a local agent, runs it on its own machine as a separate **machine run** of

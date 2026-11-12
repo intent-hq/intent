@@ -2003,6 +2003,173 @@ not changed, so switching back to `regular` restores them.
 the workspace worktree and git (used to prepare remote checkouts) stay on the
 orchestrator: none of them starts a provider process.
 
+##### Workspace homes
+
+*(Additive, docs first.)* `client.hello.server.capabilities.workspaceHomes: 1`
+means the backend implements this section. Only an
+[orchestrator](#orchestrator-mode) advertises it; a regular daemon keeps every
+workspace's files, terminals and scripts on itself, unchanged.
+
+On an orchestrator each workspace has a **home**: one machine (an exposed
+machine or a [cloud machine entry](#named-e2b-entries)) that holds the
+workspace's **home checkout**. Everything the app or a hook does to the
+workspace's files runs there, not on the orchestrator:
+
+| Surface | On an orchestrator |
+| --- | --- |
+| Terminals (`terminal.create` / `write` / `resize` / `kill` / `getBuffer` / `list` / `readOutput`) | A PTY on the home, in the home checkout, over the [terminal channel](../node-link.md#terminals-on-the-home). Buffers, multi-client attach and ownership are as for local terminals. |
+| Saved scripts started by the app or a hook (home runs), `autoStart` | Machine runs on the home, in the home checkout. `script.*` results, output logs and monitors stay on the orchestrator. |
+| The workspace setup script | Runs on the home when the home checkout is made; progress is the workspace's `workspace:setup:*` status. |
+| File and git views (file list / read / write / rename / delete, attachments, `git.status` / diff / log / show / stage / commit / merge, change tracking, `search.workspace` content search) | Requests to the home checkout over the [file and git frames](../node-link.md#files-and-git-on-the-home). |
+| `host.exec` / `host.execStream` from the app or a hook | Run in the home checkout. A remote agent's own `host.exec` already runs on its machine. |
+
+Every one of these fails with `-32603` `data.code: "home-unavailable"` while
+the home is [detached](#detached-workspaces). A paused cloud home is resumed
+for the call instead.
+
+**Choosing the home.** At `workspace.create` the home is the machine or
+sandbox the initial agent is placed on; without an initial agent, the first
+row of the [ordered machine list](#ordered-machine-list) that is an exposed
+machine online on nodeProtocol 19, or a cloud entry. A machine below
+nodeProtocol 19 cannot be a home (`machine-update-required`). An empty list
+fails the create with `placement-unavailable` reason `no-agent-machine`.
+A cloud entry as home is recorded at create time, but its sandbox starts
+**lazily**: on the first terminal, file, script or setup use, or when the
+first agent lands there.
+
+```ts
+interface Workspace {
+  // ...the members in §5.1
+  home?: WorkspaceHome;            // orchestrator only
+}
+
+interface WorkspaceHome {
+  nodeId?: string;                 // an exposed machine, or a running cloud home's machine row
+  cloudMachineId?: string;         // a cloud home's entry
+  name: string;                    // the machine's or entry's name
+  state: "attached" | "detached" | "moving";
+  since: string;                   // when `state` last changed
+  lastBackupAt?: string;           // the last push of home/head that the orchestrator holds
+  backupWarning?: boolean;         // true once backups have failed for 15 minutes
+}
+```
+
+`home` is on `workspace.get` and list rows. Changes arrive as the existing
+`workspace:updated` event with `changes: { home }`; there is no new event.
+
+###### The home checkout
+
+The home checkout is one workspace-level checkout on the home, with no
+provider process of its own: the
+[workspace checkout owner](../node-link.md#the-workspace-checkout). Its refs
+are `refs/intent/ws/<workspaceId>/home/head` (commits) and `.../home/wip`
+(uncommitted work).
+
+1. **Sharing.** An agent placed on the home **without** an explicit
+   `checkout` works in the home checkout (`checkoutOf` names the workspace),
+   so it and the user's terminal see the same files at once.
+   `checkout: "isolated"` keeps today's per-agent checkout. Agents on other
+   machines start from the home refs, as from a
+   [parent's work on another machine](../node-link.md#parents-work-on-another-machine).
+2. **Lifetime.** The home checkout is removed only when the workspace is
+   archived or deleted, or by a [home move](#moving-the-home), never by an
+   agent's final stop.
+3. **Refs it may touch.** Its `/node/git` binding reads every agent's `head`
+   and `wip` of its own workspace (so the user can merge an agent's work in
+   the home checkout) and writes only `home/*`. `home/orphaned/*` and
+   `home/rewritten/*` are create-only. It cannot see other workspaces' refs.
+4. **Hub operations.** Before any hub operation on the orchestrator (PR
+   create, merge, publish) the orchestrator asks the home for a synchronous
+   push of `home/head` and `home/wip`, and fails with `home-unavailable` when
+   it cannot get one, so no operation runs on stale work. The orchestrator's
+   worktree is a **read-only mirror**: only the fast-forward from `home/head`
+   writes it; any other write path there is refused with `orchestrator-mode`.
+
+###### Continuous backup
+
+1. The home watches the home checkout's `HEAD` and refs and pushes
+   `home/head` about **2 s** after any commit (terminal, app or agent). A
+   commit made through the app pushes before its RPC returns.
+2. It pushes `home/wip` after each sharing agent's turn, after app edits
+   (debounced), before every idle pause of a cloud home, and at least every
+   **5 minutes** while it changes.
+3. **Rewrites keep old commits.** `home/head` accepts non-fast-forward pushes
+   (amend, rebase and reset in a terminal are normal). Before each one the
+   orchestrator pins the old tip at `home/rewritten/<old sha>` (create-only),
+   so a backup never loses a commit.
+4. `lastBackupAt` advances with each `home/head` push the orchestrator holds.
+   When pushes keep failing for **15 minutes**, `backupWarning` becomes `true`
+   until the next success.
+
+###### Detached workspaces
+
+When the orchestrator is reachable but the home is not (offline, revoked,
+sandbox deleted or failed to resume), the workspace becomes **detached** once
+the executor link's reconnect grace has passed (the same constant that turns
+a running turn into `node-link-unavailable`). `home.state` is then
+`"detached"`. Chats, notes, tasks, hooks and agents on other machines keep
+working; files, diffs, git status, terminals, app scripts and agents sharing
+the home checkout fail with `home-unavailable`. When the home's link comes
+back, `state` returns to `"attached"`. A paused cloud home is resumed on
+demand and is never detached.
+
+```json
+{"code":-32603,"message":"Home Mac Studio is unavailable. Chats and notes still work; files, terminals and scripts don't.","data":{"code":"home-unavailable","nodeId":"d-mac-studio","name":"Mac Studio","lastBackupAt":"2026-11-12T09:41:00Z","retryable":true}}
+```
+
+The app shows a banner in the workspace and a marker on its card: "Home
+<name> is unavailable. Chats and notes still work; files, terminals and
+scripts don't. Last backup <time>.", with **Wait** (retry the connection) and
+**Move home…**. File, diff and terminal panels show the same reason instead of
+an empty view.
+
+###### Moving the home
+
+| Method | Who | Params | Result |
+| --- | --- | --- | --- |
+| workspace.setHome | Owner, managers | workspaceId (req), to (req): `{ agentId }` \| `{ kind: "machine", nodeId }` \| `{ kind: "cloud", cloudMachineId }` | `{ home: WorkspaceHome }` with `state: "moving"`; the move then runs in the background and ends with `workspace:updated { changes: { home } }` |
+
+Collaborators get `-32003` `forbidden`, as for `workspace.update`'s
+restricted keys. `{ agentId }` moves the home to that agent's machine or
+sandbox (an agent of this workspace whose machine is live, else `-32602`
+`home-target-unavailable`). A machine below nodeProtocol 19 is
+`machine-update-required`.
+
+1. **Restore.** The new home checkout is made from the orchestrator's backup:
+   `home/head`, plus `home/wip` when present, with the
+   [relaunch-without-a-checkout](../node-link.md#relaunch-without-a-checkout)
+   rules, including the `unapplied/` pin. The app warns before it calls the
+   method: "Changes on <old home> after <last backup time> are not on the new
+   home."
+2. **Sharing agents stay put.** Agents that shared the old home stay on their
+   machine. At their next start they switch to an `isolated` checkout
+   restored from the last home refs, with a notice saying so. No agent moves
+   between machines.
+3. **Nothing lost when the old home returns.** The move durably records a
+   [home final stop](../node-link.md#home-final-stop) for the old home. When
+   that machine reconnects, the record authorizes one push of its leftover
+   home checkout to `refs/intent/ws/<workspaceId>/home/orphaned/<timestamp>/{head,wip}`
+   (create-only); only after the acknowledgement is the checkout removed. The
+   bind-time sweep never removes a checkout with a pending home final stop.
+   The workspace gets a notice naming the refs; nothing is merged
+   automatically.
+
+###### Cloud homes
+
+A sandbox that hosts a workspace's home is **co-owned by the workspace**:
+
+1. It is not deleted when its agent ends for good, only when the workspace is
+   archived or deleted, or the home moves away, **and** no agent uses it.
+2. Its `cloud.startedBy` (pause and kill authority) is the workspace owner,
+   also for a home-only sandbox and one whose original agent was deleted.
+3. An open terminal or app file or git activity counts as busy for the idle
+   pause.
+4. Before every idle pause the machine pushes `home/head` and `home/wip`.
+5. **Deleted while paused.** When the sandbox was deleted while paused
+   (`pausedDeleteDays`), the next use starts a new sandbox from the same
+   entry, rebuilds the home checkout from the backup, and posts a notice. This
+   is not a detached state.
+
 ##### Reported daemon mode
 
 A daemon reports its running mode as
