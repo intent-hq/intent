@@ -15,7 +15,7 @@ three methods; clients treat that as "not supported".
 | --- | --- | --- |
 | push.createLink | — | `{ linkToken, expiresAt, daemonId, relayUrl }` |
 | push.revokeLink | — | `{ revoked }` |
-| push.status | — | `{ enabled, relayUrl, daemonId: string \| null, linked }` |
+| push.status | — | `{ enabled, relayUrl, daemonId: string \| null, linked, linkedDevices: number \| null, publishing }` |
 
 ### Callers
 
@@ -48,15 +48,23 @@ that principal's subject the same way.
 
 `enabled` mirrors `push.relayEnabled`. `linked` is whether the caller holds a link.
 `daemonId` is `null` while the relay is off and the caller holds no link.
+`linkedDevices` is the number of phones linked to this daemon as the relay last reported
+it, or `null` before the daemon has heard from the relay. `publishing` is whether the
+daemon is sending updates now: it is `false` while the relay is off, unreachable, or has
+reported no linked phone and no unused link token.
 
 ### Published facts
 
-Only while `push.relayEnabled` is `true` and at least one link exists, the daemon sends
+Only while `push.relayEnabled` is `true`, at least one link exists, and the relay has not
+reported zero linked phones and zero unused link tokens, the daemon sends
 each workspace's state to the relay, coalesced to at most one update per workspace per
 second, and the full set on start and after the relay was unreachable. Archived, retired
 and deleted workspaces publish `{ state: null }`. The state carries the title, status
 message, `running`, `displayStatus`, `attention`, the active agent's id and name, the
 last activity time and an optional notice. It never carries note or transcript content.
+Each publish answers with the relay's link counts; at zero and zero the daemon pauses
+until the next `push.createLink`. Turning `push.relayEnabled` off publishes an empty
+full set once, so linked phones end their Live Activity.
 
 A notice is attached when:
 
