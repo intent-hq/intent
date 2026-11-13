@@ -2910,6 +2910,9 @@ not continue an imported session.
   `-32602`. The list is read fresh on every call, so a page boundary can shift
   when a session changes between calls.
 - A provider failure never fails the call: it is reported in `providers`.
+- `repoRoot` (additive, optional) is resolved once per distinct `cwd` per call, each
+  bounded; a failure only omits the field. Clients use it to select the codebase the
+  session belongs to, and must treat it as optional (older daemons omit it).
 
 ```ts
 type ImportableSession = {
@@ -2920,6 +2923,7 @@ type ImportableSession = {
   updatedAt: string | null; // ISO-8601, from the provider
   gitBranch?: string;    // when the adapter reports `_meta.gitBranch`
   messageCount?: number; // when the adapter reports `_meta.messageCount`
+  repoRoot?: string;     // git top-level of `cwd` on the daemon host; omitted when cwd is missing or not in a git repository
 };
 type ImportProviderStatus = {
   id: string;
