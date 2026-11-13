@@ -2902,10 +2902,12 @@ not continue an imported session.
   `-32602`.
 - Each adapter is asked `session/list` with no `cwd` filter, following its
   `nextCursor` (up to 40 pages). Without `query`, paging stops once the provider
-  has the newest `offset + limit` rows (adapters list newest first); with `query`
-  every page is read. The rows are merged and sorted by `updatedAt`, newest first
-  (rows without `updatedAt` last).
-- Each provider has one 15 s deadline for its start-up and pages. The rows read
+  has `offset + limit` rows, for adapters that list newest `updatedAt` first
+  (Claude Code, Pi); otherwise, and with `query`, every page is read. The rows
+  are merged and sorted by `updatedAt`, newest first (rows without `updatedAt`
+  last).
+- Each provider has one 15 s deadline for its start-up and pages, including any
+  wait for another call's listing of the same provider. The rows read
   before the deadline (or before a failed page, or the 40-page cap) are kept, and
   the provider reports `status: "ok"` with `truncated: true`. A provider that read
   no rows by then is `status: "error"`.
@@ -2914,9 +2916,9 @@ not continue an imported session.
 - `nextCursor` is opaque (an offset into the merged, filtered list); pass it back
   with the same `provider` and `query`. A cursor this method did not mint is
   `-32602`. A provider's listing answers later calls (paging, search) for 30 s
-  when it holds the rows they need; after that, or when it does not, the adapter
-  is started again. A page boundary can therefore shift when a session changes
-  between calls. `nextCursor` is also present when a provider stopped paging
+  when it holds the rows they need; a `truncated` listing answers every call.
+  After that, or when it does not, the adapter is started again. A page
+  boundary can therefore shift when a session changes between calls. `nextCursor` is also present when a provider stopped paging
   early and has more rows.
 - A provider failure never fails the call: it is reported in `providers`.
 - `repoRoot` (additive, optional) is resolved once per distinct `cwd` per call, each
