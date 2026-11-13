@@ -68,17 +68,11 @@ const response = await TypedIpcClient.invoke('your:channel', {
 Run these commands to validate types:
 
 ```bash
-# Check all types and handlers
+# Check the renderer, main and preload programs (each tsconfig)
 pnpm run type-check
 
-# Check only type contracts
-pnpm run type-check:validate
-
-# Check handler registration
-pnpm run type-check:handlers
-
-# Generate detailed report
-pnpm run type-check:report
+# Check only the renderer program (tsconfig.json; used by prebuild)
+pnpm run type-check:renderer
 ```
 
 ### Debugging Type Mismatches
