@@ -614,7 +614,7 @@ until merge and went stale in cloudlands-fe#2447. A deliberate exception appends
 `// protocol-version-ok-file: <reason>` in the first 10 lines of a fixture-heavy file —
 only a comment with a non-empty reason exempts; a bare token or one inside a string does
 not. A
-change to `scripts/type-check.ts` additionally runs `pnpm run type-check:validate`, since
+change to `scripts/type-check.ts` additionally runs `pnpm run type-check`, since
 `lint:architecture` omits that wrapper and the
 per-boundary checks invoke `tsc` directly.
 
