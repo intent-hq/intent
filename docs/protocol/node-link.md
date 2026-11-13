@@ -4075,7 +4075,9 @@ interface PtyExitedFrame { type: "ptyExited"; terminalId: string; exitCode?: num
 1. **One process per terminal.** `ptyOpen` starts the user's shell (or
    `command`) in the home checkout, under the machine user, with the
    machine's own environment plus `env`. `ptyExited` ends it; a `ptyOpen`
-   that cannot start answers `ptyExited` with `error`.
+   that cannot start answers `ptyExited` with `error`: `node-home-unknown`,
+   `node-pty-invalid-cwd` (`cwd` leaves the home checkout) or
+   `node-pty-start-failed`.
 2. **Every byte, in order.** `ptyOutput` numbers each frame from 0 per
    terminal; the backend acknowledges the highest contiguous `seq` it has with
    `ptyAck`. The machine keeps unacknowledged output, up to **4 MiB** per
@@ -4092,11 +4094,19 @@ interface PtyExitedFrame { type: "ptyExited"; terminalId: string; exitCode?: num
    link-loss grace) and resends after the next bind; after the grace it ends
    them. A bind with a different `headSession` (the orchestrator restarted)
    ends every home terminal of that backend at once; the orchestrator marks
-   the terminals exited.
-5. **Not reported.** `terminal.list`'s `isExecutingCommand`,
+   the terminals exited. When the backend still holds terminals after the
+   grace without a bind, it marks them exited too.
+5. **Unknown terminal.** A `ptyInput`, `ptyResize`, `ptyKill` or `ptyAck`
+   for a `terminalId` the machine does not run (its intentd restarted, or
+   the terminal already ended) is answered with `ptyExited`
+   `node-pty-unknown` and no `exitCode`. After each bind the backend sends
+   each terminal it still holds a `ptyAck` of its highest received `seq`
+   (a `ptyResize` to its current size before any output), so a terminal the
+   machine lost ends instead of staying open.
+6. **Not reported.** `terminal.list`'s `isExecutingCommand`,
    `foregroundProcess` and `lastProcess` come from the orchestrator's own
    process inspection, so a home terminal's row omits them.
-6. **Busy.** An open terminal counts as busy for a cloud home's idle pause.
+7. **Busy.** An open terminal counts as busy for a cloud home's idle pause.
 
 #### Home runs and setup
 
