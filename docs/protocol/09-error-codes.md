@@ -212,7 +212,10 @@ already running) and `homes-unsupported` (a backend without `workspaceHomes`).
 On the executor link, `node-home-unknown` refuses a home frame for a `homeId`
 the machine does not hold or that is not in `leaseHomes`, and
 `node-home-unsupported` a `homeOpen` on a machine with
-`remoteAgents.allowHomes` off.
+`remoteAgents.allowHomes` off. A home terminal's `ptyExited.error` starts
+with `node-pty-start-failed` (the process could not start),
+`node-pty-invalid-cwd` (`cwd` leaves the home checkout) or
+`node-pty-unknown` (the machine runs no such terminal).
 
 [Node invites](./methods/nodes.md#claim-errors) add `data.code` values on existing
 numeric codes. `-32602` from `remoteMachines.claim`: `invalid-node-link`,
