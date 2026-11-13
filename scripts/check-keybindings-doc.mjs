@@ -47,7 +47,13 @@ const SCRIPT = `scripts/${CHECK}.mjs`;
  * Chord changes the doc already shows ahead of the pin, by shortcut id:
  * `{ from: '<pinned binding>', to: '<new binding>', reason: 'cloudlands-fe#1234' }`.
  */
-export const PENDING = {};
+export const PENDING = {
+  'navigation.go-to-tab': {
+    from: 'mod+1-9',
+    to: 'mod+alt+1-9',
+    reason: 'cloudlands-fe#4530 moves workspace numbers beside Labs device navigation',
+  },
+};
 
 const MODIFIER_ORDER = ['mod', 'ctrl', 'alt', 'shift'];
 const MODIFIERS = {

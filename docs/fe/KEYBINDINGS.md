@@ -1,8 +1,10 @@
 # Workspaces App Keyboard Shortcuts Reference
 
 > **Legend:** `Cmd` = ⌘ on Mac, `Ctrl` on Windows/Linux. `Mod` means either depending on platform.
+> `Alt` means Option (⌥) on Mac.
 >
-> Rows with an **ID** are configurable in Settings → Keyboard Shortcuts. Their chord must match
+> Rows with an **ID** use the shared shortcut registry. Settings → Keyboard Shortcuts can customize editable rows.
+> Their chord must match
 > `SHORTCUT_DEFAULTS` in cloudlands-fe `src/shared/keyboard-shortcut-bindings.ts`
 > (re-exported by `src/lib/utils/shortcut-bindings.ts`); `make check-keybindings-doc`
 > checks this. To move a shortcut, see [Moving a shortcut](#moving-a-shortcut).
@@ -48,7 +50,8 @@
 | `Mod+W`            | Close Active Pane                                  | In a workspace                                              | `navigation.close-tab`            |
 | `Mod+Shift+W`      | Close Workspace Tab                                | In a workspace                                              | `navigation.close-space-tab`      |
 | `Mod+Shift+T`      | Reopen Most Recently Closed Pane, Column, or Space | In a workspace                                              | `navigation.reopen-tab`           |
-| `Mod+1-9`          | Go to Tab 1–9                                      | In a workspace                                              | `navigation.go-to-tab`            |
+| `Mod+Alt+1-9`      | Go to Home or Workspace Tab                        | Anywhere, including editors and terminals                   | `navigation.go-to-tab`            |
+| `Mod+1-9`          | Go to Device 1–9                                   | Device rail visible (Labs), including editors and terminals  | `navigation.go-to-device`         |
 | `Mod+Alt+Shift+←`  | Move Space Tab Left                                | In a workspace                                              | `navigation.move-space-tab-left`  |
 | `Mod+Alt+Shift+→`  | Move Space Tab Right                               | In a workspace                                              | `navigation.move-space-tab-right` |
 | `Mod+Alt+←`        | Focus Previous Column                              | Including editors and terminals; disabled at the left edge  | `panel.focus-previous-column`     |
@@ -58,6 +61,13 @@
 | `Mod+\`            | Create Column to the Right                         | Including editors and terminals; disabled at four columns   | `panel.create-column-right`       |
 | `Mod+Shift+M`      | Toggle Panel Zoom/Maximize                         | In panel                                                    | `panel.maximize`                  |
 | `Mod+Shift+C`      | Copy Browser URL                                   | In browser panel                                            | `panel.copy-browser-url`          |
+
+Numbered workspace navigation uses **1** for Home, **2–8** for the first seven workspace tabs,
+and **9** for the last workspace tab. With the device rail hidden, `Mod+1-9` also selects Home
+and workspace tabs. Custom bindings take precedence over these defaults.
+
+With the Labs device rail visible, device numbers follow the displayed order, with own devices
+before guest hosts. **1–8** select the first eight devices; **9** selects the last device.
 
 ---
 
@@ -77,13 +87,10 @@
 
 ---
 
-## 🎨 Layout Presets
+## 🎨 Layout
 
 | Shortcut    | Action                    | Context            |
 | ----------- | ------------------------- | ------------------ |
-| `Mod+Alt+1` | Focus Mode (single panel) | Anywhere           |
-| `Mod+Alt+2` | Split View                | Anywhere           |
-| `Mod+Alt+3` | Full Layout               | Anywhere           |
 | `Mod+Alt+=` | Equalize Panel Sizes      | Multi-panel layout |
 
 ---
