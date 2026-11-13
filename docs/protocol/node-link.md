@@ -3993,12 +3993,19 @@ interface HomeOpenReplyFrame {     // machine → backend; closed
    waits for `setupFinished`; for a home the machine does not hold it ends with
    `node-checkout-failed`. A sharing agent's pushes go to `home/*`, after each
    of its turns, one push of the checkout at a time.
-5. **`/node/git` binding.** The home's session may read `head` and `wip` of
-   every agent of its own workspace, and write `home/head` and `home/wip` only
-   while its `homeId` is the workspace's current home. Any other ref is
-   `node-git-push-refused`, or not advertised. `home/orphaned/*` is written
-   only by a [home final stop](#home-final-stop); `home/rewritten/*` only by
-   the backend.
+5. **`/node/git` binding.** A home's git remote is
+   `intent://ws/<workspaceId>/homes/<homeId>` (a submodule's:
+   `…/homes/<homeId>/modules/<moduleKey>`), over the same
+   [git connection](#agent-refs-over-git) as an agent's. Its refs are
+   `refs/intent/ws/<workspaceId>/home/`; a home has no `base` ref, so the
+   backend writes `home/head` (the workspace's base commit) before the first
+   `homeOpen`, and the machine checks out `home/head` with `home/wip` on top.
+   The home's session may read `head` and `wip` of every agent of its own
+   workspace, and write `home/head` and `home/wip` only while its `homeId` is
+   the workspace's current home, plus `home/unapplied/<sha>` (create-only, as
+   an agent's). Any other ref is `node-git-push-refused`, or not advertised.
+   `home/orphaned/*` is written only by a [home final stop](#home-final-stop);
+   `home/rewritten/*` only by the backend.
 
 #### Journal records of a home
 
