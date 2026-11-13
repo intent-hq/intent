@@ -2897,18 +2897,27 @@ not continue an imported session.
 
 **`agent.importableSessions.list { provider?, query?, cursor?, limit? }`**
 
-- Without `provider`, every enabled, runnable provider is asked in parallel, each
-  bounded by 15 s (start-up plus all of its `session/list` pages). With `provider`
-  only that one; an unknown provider id (or a profile reference) is `-32602`.
+- Without `provider`, every enabled, runnable provider is asked in parallel. With
+  `provider` only that one; an unknown provider id (or a profile reference) is
+  `-32602`.
 - Each adapter is asked `session/list` with no `cwd` filter, following its
-  `nextCursor` (up to 40 pages). The rows are merged and sorted by `updatedAt`,
-  newest first (rows without `updatedAt` last).
+  `nextCursor` (up to 40 pages). Without `query`, paging stops once the provider
+  has the newest `offset + limit` rows (adapters list newest first); with `query`
+  every page is read. The rows are merged and sorted by `updatedAt`, newest first
+  (rows without `updatedAt` last).
+- Each provider has one 15 s deadline for its start-up and pages. The rows read
+  before the deadline (or before a failed page, or the 40-page cap) are kept, and
+  the provider reports `status: "ok"` with `truncated: true`. A provider that read
+  no rows by then is `status: "error"`.
 - `query` keeps rows whose `title`, `cwd` or `sessionId` contains it,
   case-insensitively. `limit` is 1–200 (default 50; out of range is `-32602`).
 - `nextCursor` is opaque (an offset into the merged, filtered list); pass it back
   with the same `provider` and `query`. A cursor this method did not mint is
-  `-32602`. The list is read fresh on every call, so a page boundary can shift
-  when a session changes between calls.
+  `-32602`. A provider's listing answers later calls (paging, search) for 30 s
+  when it holds the rows they need; after that, or when it does not, the adapter
+  is started again. A page boundary can therefore shift when a session changes
+  between calls. `nextCursor` is also present when a provider stopped paging
+  early and has more rows.
 - A provider failure never fails the call: it is reported in `providers`.
 - `repoRoot` (additive, optional) is resolved once per distinct `cwd` per call, each
   bounded; a failure only omits the field. Clients use it to select the codebase the
@@ -2930,6 +2939,7 @@ type ImportProviderStatus = {
   label: string;         // provider display name
   status: "ok" | "error" | "unsupported";
   error?: string;        // status "error": start-up, listing or timeout failure
+  truncated?: true;      // status "ok": the deadline, a failed page or the page cap ended the listing; older sessions may be missing
 };
 ```
 
