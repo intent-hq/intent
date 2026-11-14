@@ -4115,9 +4115,10 @@ At protocol 19 the script frames (`scriptStart`, `scriptStop`,
 `agentId` or the pair `workspaceId` + `homeId`. With the pair the run is the
 workspace's **home run**, in the home checkout; everything else is as for
 [saved scripts](#saved-scripts-nodeprotocol-8), including what a lost link
-does to a run. `autoStart` scripts start when a `homeOpen` makes a new
-checkout (at create, after a move and on a rebuilt cloud home), not when it
-answers `ready` for a checkout that exists.
+does to a run. `autoStart` scripts start when the setup of a new checkout
+(at create, after a move and on a rebuilt cloud home) finishes as completed
+or skipped; not after a failed setup, and not when a
+`homeOpen` answers `ready` for a checkout that exists.
 
 #### Files and git on the home
 
@@ -4135,6 +4136,8 @@ type HomeMethod =
   | "file.list" | "file.tree" | "file.read" | "file.readChunk" | "file.stat" | "file.exists"
   | "file.write" | "file.mkdir" | "file.rename" | "file.delete"
   | "file.getAttachmentInfo" | "file.placeAttachment"
+  | "file.attachmentUpload.begin" | "file.attachmentUpload.chunk"
+  | "file.attachmentUpload.commit" | "file.attachmentUpload.abort"
   | "git.status" | "git.changes" | "git.diffs" | "git.numstat" | "git.commits"
   | "git.commitDetails" | "git.showFile" | "git.showFileChunk" | "git.branchDiff"
   | "git.branchStatus" | "git.checkMergeConflicts" | "git.getBranches"
@@ -4166,9 +4169,15 @@ interface HomeCallReplyFrame {
    orchestrator, `git.push`, `git.clone`, `git.getConfig`, `git.getRemoteUrl`
    and `git.removeLockFile` run on the orchestrator's hub (after a synchronous
    `homePush` for `push`);
-   the `file.attachmentUpload.*` methods store the upload on the
-   orchestrator, and `file.placeAttachment` then sends it to the home in
-   pieces of at most 4 MiB.
+   the `file.attachmentUpload.*` methods a client calls store the upload on
+   the orchestrator, and `file.placeAttachment` then sends it to the home in
+   pieces of at most 4 MiB: one `file.placeAttachment` home call when it fits
+   one piece, else the home's own `file.attachmentUpload.begin`, one `.chunk`
+   per piece and `.commit`, with `.abort` when the session ends uncommitted.
+   A retried placement with the same `idempotencyKey` is answered from the
+   home's `file.getAttachmentInfo`. The orchestrator also keeps a best-effort
+   copy under the same attachment ID. An attachment on the home
+   keeps its ID for the life of the home, also across a home reopen.
 3. **Paths.** Every path is resolved as [checkout files](#checkout-files-nodeprotocol-16)
    resolves one: relative, canonicalised, refused when it resolves outside the
    home checkout (also through a symlink), and refused with a `.git`
@@ -4179,12 +4188,18 @@ interface HomeCallReplyFrame {
 4. **Bounded.** A reply fits one frame. Methods that page do so as on the wire
    (`file.readChunk`, `git.showFileChunk`); a result over the frame limit is
    `-32603` `home-reply-too-large`. `host.exec` keeps its own timeout and
-   output caps; `host.execStream` is an exec-mode `ptyOpen` instead.
+   output caps; `host.execStream` is an exec-mode `ptyOpen` instead. The
+   `stdout` and `stderr` of `host.exec` are the command's own output and may
+   contain the machine's absolute paths; they are not rewritten.
 5. **Writes push.** File writes, renames, deletes, stage and discard calls
    schedule a debounced `home/wip` push. `git.agentCommit` pushes `home/head`
    before it replies. When the commit landed but that push failed, the call
    still succeeds, with `backupPending: true` in its result, so a client never
-   retries a commit that exists.
+   retries a commit that exists. The backend adds `gitIdentity` (as in
+   [commit identity](#commit-identity)) to the `git.agentCommit` params, from
+   the workspace checkout's config; the machine removes it, commits with it in
+   memory and never writes it to git config. Without it, the home checkout's
+   git config decides.
 6. **Cancel and loss.** `homeCallCancel` ends a call. A lost link fails it with
    `home-unavailable`; for `git.agentCommit` that error has `retryable: false`,
    because the commit may have landed.
