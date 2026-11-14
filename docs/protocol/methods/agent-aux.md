@@ -166,18 +166,18 @@ client gets them for free:
 1. An explicit non-blank `model` param always wins.
 2. `quickActions.typeOverrides[type]` (§5.12) when `type` is supplied and the entry is
    non-blank.
-3. `quickActions.defaultModel` when non-blank.
-4. Otherwise none — the provider CLI's own default applies.
+3. Otherwise none — the provider CLI's own default applies. The deprecated
+   `quickActions.defaultModel` is never read; the boot migration copies it into each type.
 
-Steps 2–3 are provider-guarded. An explicit `model` param must be a **bare** model id:
+Step 2 is provider-guarded. An explicit `model` param must be a **bare** model id:
 a compound `provider:model` value is rejected at the wire boundary with `-32602` (same
 guard as §5.5, [intent-hq/intentd#1647](https://github.com/intent-hq/intentd/pull/1647)).
 An explicit bare model uses the effective default provider. For settings already on disk,
 a legacy compound model names its own registered, one-shot-capable provider; bare settings
 use the effective default provider. The resolved pair reuses §5.5's cached-catalog ownership
 guard: a cold catalog permits the bare id, while affirmative contradictory evidence drops
-the candidate. Each invalid settings rung logs a warning and tries the next rung; only when
-all model rungs fail does the effective provider's default apply. These existing model
+the candidate. An invalid settings value logs a warning and falls through to the effective
+provider's default. These existing model
 routing rules are unchanged by effort settings. `quickActions.providerSettings` is deliberately **not** a rung: it is
 the client's opaque per-provider snapshot cache, not a precedence tier. This chain is scoped
 to one-shot quick actions; agent sessions (delegated ones included) keep the
@@ -197,17 +197,17 @@ the existing model chain, then resolve effort independently:
 
 1. A non-blank request `reasoningEffort`.
 2. `quickActions.typeReasoningEffortOverrides[type]` when non-blank and compatible.
-3. `quickActions.defaultReasoningEffort` when non-blank and compatible.
-4. Otherwise leave effort unset and retain the provider's default.
+3. Otherwise leave effort unset and retain the provider's default. The deprecated
+   `quickActions.defaultReasoningEffort` is never read.
 
-A per-type effort needs no per-type model. An explicit model does not suppress steps 2–3;
+A per-type effort needs no per-type model. An explicit model does not suppress step 2;
 callers that already supply a model should also pass their action `type` to receive its
-saved effort. Untyped callers receive the shared effort only. Daemon auto-commit uses the
+saved effort. Untyped callers receive no saved effort. Daemon auto-commit uses the
 same chain with `type: "commit"`. Neither `model.defaultReasoningEffort` nor
 `quickActions.providerSettings` participates. Absent all effort preferences and an explicit
 effort, preserve the existing launch/model behavior, including legacy model-id handling.
 Saved effort belongs to the active default provider. If legacy compound model routing
-selects a different provider, skip both saved effort rungs; only explicit request effort may
+selects a different provider, skip the saved effort rung; only explicit request effort may
 apply there. Do not restore another provider's snapshot inside the execution resolver.
 
 **Capabilities and stale preferences.** Cached `effortLevels` guide the UI's choices;

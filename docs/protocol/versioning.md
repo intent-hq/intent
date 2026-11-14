@@ -25,6 +25,15 @@ apps hide it against an 18.0 daemon. No store migration. The documented surface 
 **497 / 443 / 54** (dispatchable / router / fast path), four fast-path methods fewer, and
 the reverse-RPC list drops to five names.
 
+Also within 18.0 (behavioral change, no method-catalog change, so no version bump):
+**shared quick action defaults deprecated**. `quickActions.defaultModel` and
+`quickActions.defaultReasoningEffort` are folded into each action's
+`typeOverrides` / `typeReasoningEffortOverrides` once at boot and removed from
+`config.toml`; they stay in the catalog read-only, `settings.update` ignores writes to them,
+and `agent.completeOnce` no longer reads them
+([§5.12](./methods/settings.md), [§5.32](./methods/agent-aux.md#532-agentcompleteonce--one-shot-promptcompletion);
+[intent-hq/intentd#3349](https://github.com/intent-hq/intentd/pull/3349)).
+
 Also within 18.0 (additive methods and capability; capability-gated, so no version
 bump): **provider session import**. The owner-only router methods
 `agent.importableSessions.list` and `agent.importSession` list the sessions that the
