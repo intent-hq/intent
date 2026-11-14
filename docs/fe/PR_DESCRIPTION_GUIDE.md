@@ -50,7 +50,7 @@ Omit a row that does not apply. Do not write "None" or "N/A".
 A PR that changes UI shows the change in a table. The reviewer can then compare
 the two states directly.
 
-- Attach images with `gh pr create --attach ./file.png` or `gh pr edit --attach ./file.png`; reference `![alt](./file.png)`. Never host images in a gist or on another site.
+- Attach images with `gh pr create --attach ./{file}.png` or `gh pr edit --attach ./{file}.png`; reference `![alt](./{file}.png)`. Never host images in a gist or on another site.
 - Put the `Before` image and the `After` image in the same row.
 - Use one row for each state that the PR changes: default, hover, empty, error,
   long text, narrow width, dark theme. Name the state in the first column.
