@@ -173,8 +173,21 @@ model-id strings; effort is never encoded into a model id.
 
 | Setting | Value | Default / clear |
 | --- | --- | --- |
-| Shared effort: `quickActions.defaultReasoningEffort` | Optional string; shared effort preference for one-shot quick actions | Unset; `settings.reset` clears it. An empty or whitespace-only string reads as unset. |
-| Per-type effort: `quickActions.typeReasoningEffortOverrides` | Object mapping action type to effort string; conventional keys `commit`, `pr`, `review`, `fast`, with free-form keys allowed like `typeOverrides` | `{}`; remove an entry or write a blank string to inherit shared effort for that type. `settings.reset` clears the whole map. |
+| Shared effort (deprecated): `quickActions.defaultReasoningEffort` | Read-only; see below | Unset after the boot migration; `settings.update` ignores writes, `settings.reset` still clears it. |
+| Per-type effort: `quickActions.typeReasoningEffortOverrides` | Object mapping action type to effort string; conventional keys `commit`, `pr`, `review`, `walkthrough`, with free-form keys allowed like `typeOverrides` | `{}`; remove an entry or write a blank string to use the provider default for that type. `settings.reset` clears the whole map. |
+
+**Deprecated shared defaults.** `quickActions.defaultModel` and
+`quickActions.defaultReasoningEffort` are deprecated
+([intent-hq/intentd#3349](https://github.com/intent-hq/intentd/pull/3349)). At boot the daemon
+copies a saved shared value into each of `commit`, `pr`, `review` and `walkthrough` whose own
+`typeOverrides` / `typeReasoningEffortOverrides` entry is blank or absent, does the same inside
+every `quickActions.providerSettings` snapshot, and removes both shared keys from `config.toml`.
+A compound shared model keeps only its bare id when the prefix is the base provider of the
+active provider (a still-present `providers.active` counts; inside a snapshot, the snapshot's
+own provider id); any other compound is dropped with a warning. Both paths stay in the catalog, read-only and not proposable, like
+`providers.active`: `settings.update` ignores writes to them and applies the rest of the batch,
+so released clients that write the whole quick-action bundle keep working. No execution path
+reads them.
 
 Non-blank effort strings retain their spelling in storage. Providers own the vocabulary;
 settings writes validate the string/map shape, not a fixed effort enum or the currently
@@ -182,27 +195,28 @@ selected model's capabilities. A non-string map member rejects the entire settin
 with `-32602`. At execution, matching is case-insensitive after trimming, and the advertised
 provider spelling is used. Stale saved values unsupported by the resolved model are skipped
 with a daemon warning; they do not make an otherwise valid quick action fail. Resolution is
-request effort → compatible per-type effort → compatible shared effort → provider default,
+request effort → compatible per-type effort → provider default,
 independent of model inheritance; see [§5.32](agent-aux.md#532-agentcompleteonce--one-shot-promptcompletion)
 for capability checks and explicit-request errors. `model.defaultReasoningEffort` is never a
-fallback here. With both new settings absent, requests without effort retain their existing
+fallback here. With no per-type effort, requests without effort retain their existing
 execution behavior.
 
 **Clearing and model changes.** Clearing only a model override must not clear that action's
 effort override; clearing only effort must not change the model. An action's combined reset
-clears both overrides. Resetting all quick-action settings clears the shared model/effort,
-both override maps, and the provider snapshot cache. Clearing per-type effort means inherit,
-not force provider default while a shared preference is set. On a model change, retain saved
+clears both overrides. Resetting all quick-action settings clears both override maps and the
+provider snapshot cache. Clearing per-type effort means provider default. On a model change, retain saved
 effort preferences but recompute their compatibility: only supported choices may appear as
 effective in the picker. A missing/cold model catalog must not erase saved preferences or
-invent effort options. The inherited model may be the shared quick-action model or the
-provider's advertised default; this is not the ordinary agent default-model chain.
+invent effort options. An action without its own model uses the provider's advertised
+default; this is not the ordinary agent default-model chain.
 
 **Provider snapshots.** `quickActions.providerSettings` remains an opaque client-owned
 object keyed by provider id, not an execution precedence tier. Each client snapshot extends
 its existing `{ defaultModel, typeOverrides }` with optional `defaultReasoningEffort` and
 `typeReasoningEffortOverrides` members of the same shapes above. Missing effort members in
-older snapshots mean unset / `{}`. Clients must snapshot and restore model and effort
+older snapshots mean unset / `{}`. The boot migration folds a snapshot's shared
+`defaultModel` / `defaultReasoningEffort` into its per-type maps and leaves them as empty
+strings. Clients must snapshot and restore model and effort
 together on provider switches; a provider with no snapshot starts with all quick-action
 preferences unset. Persist the outgoing snapshot, restored active quick-action fields,
 `model.defaultProvider`, and any changed `model.providerDefaults` together in one atomic
@@ -351,15 +365,15 @@ accept this root as `instanceBaseUrl`. A successful PAT or device connection
 publishes host and root together; clients must not perform two independent
 settings writes to emulate connection setup.
 
-- **Providers / agents:** `providers.active` *(deprecated: superseded by `model.defaultProvider`; kept in the catalog during the deprecation window but read-only on the wire — `settings.update` tolerates-and-ignores it before the read-only rejection would fire, so old clients never fail a batch)*, `model.defaultProvider`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `model.defaultReasoningEffort`, `quickActions.defaultModel`, `quickActions.typeOverrides`, `quickActions.defaultReasoningEffort`, `quickActions.typeReasoningEffortOverrides`, `quickActions.providerSettings`, `specialists.default`, `specialists.dir`.
+- **Providers / agents:** `providers.active` *(deprecated: superseded by `model.defaultProvider`; kept in the catalog during the deprecation window but read-only on the wire — `settings.update` tolerates-and-ignores it before the read-only rejection would fire, so old clients never fail a batch)*, `model.defaultProvider`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `model.defaultReasoningEffort`, `quickActions.defaultModel` *(deprecated, read-only)*, `quickActions.typeOverrides`, `quickActions.defaultReasoningEffort` *(deprecated, read-only)*, `quickActions.typeReasoningEffortOverrides`, `quickActions.providerSettings`, `specialists.default`, `specialists.dir`.
   `model.defaultReasoningEffort` ([intent-hq/intentd#970](https://github.com/intent-hq/intentd/pull/970)) is an optional string persisted in `config.toml` under the `[model]` table as `defaultReasoningEffort` — the fallback reasoning effort for newly created agents, stored **as-is** (providers own the level vocabulary; the daemon never normalizes it) with a blank or whitespace-only value reading as unset (default: unset).
   It is the last rung of the creation-time reasoning-effort chain (§5.5 "Creation-time reasoning-effort resolution"), applying only when no explicit param / specialist model-option / specialist frontmatter effort decided the level **and** the session's model itself resolved from the settings chain; a level the resolved model's cached `effortLevels` provably does not list is dropped with a daemon warn log rather than rejected (§5.11).
   Agent model resolution walks `model.providerDefaults[provider]` → `model.default` (the settings-chain step of the daemon-side creation-time resolver, §5.5 — specialist frontmatter `model` takes precedence over this chain, and every result is provider-guarded).
-  The `quickActions.*` keys ([intent-hq/monorepo#1729](https://github.com/intent-hq/monorepo/issues/1729)) scope **only** to single-shot quick actions (commit messages and PR descriptions) and are never consulted for an agent session, delegated ones included; they were named `backgroundAgents.*` before that rename, and the old paths are **retired** — gone from the catalog (`settings.list` never advertises them; `settings.get` / `settings.reset` yield `-32602`) but tolerated-and-ignored by `settings.update`, while a `config.toml` still carrying `[backgroundAgents]` has its values carried over once at boot — per member (`defaultModel` / `typeOverrides` / `providerSettings` are applied individually, so one malformed legacy value never discards its valid siblings), into each `quickActions.*` key still at its **schema default**, so an already-migrated or deliberately re-picked value is never clobbered, and a legacy member with no `quickActions.*` counterpart is dropped with a warning — before the legacy table is stripped.
+  The `quickActions.*` keys ([intent-hq/monorepo#1729](https://github.com/intent-hq/monorepo/issues/1729)) scope **only** to single-shot quick actions (commit messages and PR descriptions) and are never consulted for an agent session, delegated ones included; they were named `backgroundAgents.*` before that rename, and the old paths are **retired** — gone from the catalog (`settings.list` never advertises them; `settings.get` / `settings.reset` yield `-32602`) but tolerated-and-ignored by `settings.update`, while a `config.toml` still carrying `[backgroundAgents]` has its values carried over once at boot — per member (`defaultModel` / `typeOverrides` / `providerSettings` are applied individually, so one malformed legacy value never discards its valid siblings), into each `quickActions.*` key still at its **schema default**, so an already-migrated or deliberately re-picked value is never clobbered, and a legacy member with no `quickActions.*` counterpart is dropped with a warning — before the legacy table is stripped. A carried `defaultModel` is then folded into each action on the same boot (see **Deprecated shared defaults** above).
   The **effective default provider** is the dedicated `model.defaultProvider` key ([intent-hq/intentd#1648](https://github.com/intent-hq/intentd/pull/1648)): registry-validated and whitespace-trimmed on read, so a stale or mistyped value reads as unset.
   The deprecated `providers.active` key is never consulted — a one-time boot migration carries a legacy value into `model.defaultProvider` (only when the target is still unset and the value names a registered provider) and removes `providers.active` from `config.toml` regardless, retrying next boot on a failed write ([intent-hq/intentd#1658](https://github.com/intent-hq/intentd/pull/1658)).
   There is no positional fallback to the first registered provider — with the key unset, resolution that falls through entirely fails loudly at the caller ([intent-hq/monorepo#3044](https://github.com/intent-hq/monorepo/issues/3044); no provider carries a hardcoded default designation).
-  Model-valued keys (`model.default`, `quickActions.defaultModel`, and the map values of `model.providerDefaults` / `quickActions.typeOverrides`) must be **bare** model ids: `settings.update` rejects a `:`-bearing value with `-32602` (`<path>: model values must be bare model ids without ':' (got "<value>"); set the provider via model.defaultProvider instead` — [intent-hq/intentd#1647](https://github.com/intent-hq/intentd/pull/1647)); legacy compound values already on disk are split on read rather than rejected ([intent-hq/intentd#1651](https://github.com/intent-hq/intentd/pull/1651)).
+  Model-valued keys (`model.default` and the map values of `model.providerDefaults` / `quickActions.typeOverrides`) must be **bare** model ids: `settings.update` rejects a `:`-bearing value with `-32602` (`<path>: model values must be bare model ids without ':' (got "<value>"); set the provider via model.defaultProvider instead` — [intent-hq/intentd#1647](https://github.com/intent-hq/intentd/pull/1647)); legacy compound values already on disk are split on read rather than rejected ([intent-hq/intentd#1651](https://github.com/intent-hq/intentd/pull/1651)).
   The former `model.workspaceOverrides` key is **retired**: it is gone from the catalog (`settings.list` never advertises it; `settings.get` / `settings.reset` yield `-32602`), and `settings.update` rejects it as an unknown setting with `-32602`, including in mixed batches: no entries are applied or published in `settings:changed`.
   Boot compatibility remains for old persisted state: any stale SQLite row is deleted, and a legacy `config.toml` key still parses and is stripped with its value discarded.
   These terminal-state cleanup paths do not make the setting writable again.
