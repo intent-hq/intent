@@ -387,6 +387,9 @@ services directly and are unchanged.
 > claimed tab goes to its workspace's driving client per the rules below, an unclaimed tab
 > to its physical host.)
 >
+> The rules below describe desktop automation. The prepared native-preview extension
+> adds a separate navigation capability; see **Native preview navigation** below.
+>
 > 1. **Eligibility gate (v9.9).** Only connections that completed `client.hello` with
 >    `capabilities.browserExec: true` (§5.17) are ever candidates. Un-hello'd sockets and
 >    hello'd connections without the flag are invisible to every rule below, regardless
@@ -409,7 +412,8 @@ services directly and are unchanged.
 > 4. **Claimed-tab host (v9.11).** Otherwise, when the workspace has at least one
 >    **claimed** registry tab (`ownerAgentId` set, §5.45): the target is the host client
 >    of the oldest claimed tab — the workspace's agent tabs all live on one client. User
->    tabs (no `ownerAgentId`) never select a host. Offline
+>    tabs (no `ownerAgentId`) never select a host. Native navigation-only tabs never
+>    select the automation host; only desktop claimed tabs participate in this rule. Offline
 >    ⇒ the same `… for this workspace is not connected` `-32603`.
 > 5. **Default (v9.9; recent focus,
 >    [intent-hq/intent#7855](https://github.com/intent-hq/intent/issues/7855)).** Otherwise,
@@ -486,6 +490,77 @@ services directly and are unchanged.
 >   `browser:tab-updated { changes: { hostClientId, ownerAgentId } }` (only
 >   `ownerAgentId` when the host is unchanged; nothing when the row is already in the
 >   target state) — §6.5.
+>
+> **Native preview navigation (prepared extension).** A client that advertises
+> `capabilities.browserNavigation: true` can receive navigation requests without
+> advertising `browserExec`. This lets a connected iOS app present agent-requested
+> previews in its native workspace browser. It requires
+> companion daemon and iOS changes; the capability is not a shipped-release claim.
+>
+> Only batches containing `openTab`, `showTab`, `focusTab`, `closeTab`, and `navigate`
+> qualify for navigation routing. `listTabs` remains daemon-local and cannot be mixed
+> with other actions. An unpinned `openTab` request naming no existing tab first
+> prefers the device that sent the agent's latest accepted user message, when that
+> device has a live connection capable of handling the complete request batch. The
+> preference is scoped to that agent's conversation and updates when a new user
+> message is accepted, including when it is queued. Processing an older queued
+> message later does not overwrite a newer preference. The preference comes from the
+> message's connection-bound client identity, not a client ID supplied in message
+> text or metadata. Automatic events and messages from other agents do not replace
+> this preference. It does not grant ownership or additional client capabilities.
+> The preference survives daemon restarts and identifies the logical client, so a
+> reconnected device can be selected through its eligible live connection. A newer
+> accepted user message without a hello-bound device clears the older preference.
+> Rejected submissions and retries of an already accepted submission do not update it.
+> A delegated agent without its own accepted user message inherits the nearest
+> ancestor's preference within the same workspace. Its own user message takes
+> precedence, including a message that clears the preference. Independent
+> conversations do not inherit, and automatic child messages never update an
+> ancestor's preference. An unavailable preferred device uses the normal fallback;
+> it does not cause a search for another ancestor's device.
+> A batch beginning with a new `openTab` may also prefer the sending device for
+> automation, but only if that device supports automation for the complete batch.
+>
+> When the preferred device is unavailable or incapable, or no preference is known,
+> the request prefers a live `browserExec` driving client, then another live
+> `browserExec` client; when none is available, it can select a live
+> `browserNavigation` client. An offline desktop
+> claimed-tab host or recorded desktop-control session does not block this fallback
+> for a new preview. Existing desktop tabs remain on their host. An explicit
+> workspace pin remains binding: an offline or incapable pinned client does not
+> authorize fallback to another device.
+>
+> An action naming a native tab goes to that tab's physical `hostClientId`, even if
+> desktop has reconnected or the workspace pin changed. A batch requiring different
+> physical devices, or automation on a native tab, fails before forwarding; it must
+> not partly navigate a native tab and then discover that automation is unsupported.
+> Native claimed tabs do not select the desktop automation driving client. Changing
+> the workspace pin does not re-home native tabs, and pinning a native client does
+> not move desktop tabs onto that client.
+>
+> Navigation does not imply automation: an accepted preview request does not prove
+> that the page loaded, that its content was inspected, or that a screenshot was
+> captured. Native clients must not advertise `browserExec` merely to receive preview
+> navigation. Page inspection, JavaScript evaluation, screenshots, clicks, typing,
+> and emulated viewport actions still require an automation-capable client.
+>
+> Native `openTab` defaults to visible; `visible: false` creates a hidden logical
+> tab, and `showTab` or `focusTab` presents it. Desktop agent tabs remain hidden by
+> default. Native open/show/focus/navigate results carry `accepted: true`, `displayed`, and
+> `capabilities: { browserNavigation: true, browserExec: false }`. Acceptance is
+> separate from presentation; `displayed` may become true in a later registry report.
+> Native user tabs may be shown without claiming them, but agents cannot navigate or
+> close them. Reopening a matching URL reuses the tab without taking ownership.
+> Unsupported automation returns the action-result error
+> `browser-automation-unavailable`; a batch spanning physical hosts returns
+> `browser-mixed-hosts`. These failures occur before dispatch. Native presentation
+> without an active window returns `browser-navigation-unavailable`; ownership
+> failures retain `not-owner` and, when known, `ownerAgentId`.
+>
+> Existing tab IDs, workspace association, and agent ownership remain authoritative.
+> A native tab must not silently become a desktop tab when desktop reconnects, nor
+> may another agent navigate or close it without ownership. The native client uses
+> the existing browser tab registry reports and structured ownership failures.
 >
 > **Loopback-hostname interpretation — FE-side, wire shape unchanged (monorepo#2323).**
 > URL hostnames in `navigate` / `openTab` action URLs are interpreted **on the frontend
@@ -1163,6 +1238,7 @@ interface BrowserTabInput {            // host-reported fields
   visibility?: "visible" | "hidden";   // default "visible" when omitted; null is REJECTED (-32602);
                                        // §5.9 hidden-by-default block
   emulatedSize?: { width: number, height: number } | null;   // omitted / null = native viewport
+  navigationOnly?: boolean;            // prepared native-preview extension; true is durable
   displayed?: boolean | null;          // §5.9 layout fact: not hidden AND the active tab of its
                                        // panel in the workspace's saved layout; omitted / null =
                                        // no value, clears a previously reported one
@@ -1176,6 +1252,7 @@ interface BrowserTab {                 // canonical row — non-null; cleared fi
   tabId: string;
   workspaceId: string;
   hostClientId: string;                // the logical client rendering the tab (§5.17)
+  navigationOnly?: boolean;            // true = native navigation only; omitted = legacy tab
   url: string;
   requestedUrl?: string;
   title?: string;
@@ -1198,6 +1275,14 @@ with `hostConnected` / `hostName?`, the `browser.listTabs` entry. The agent-faci
 unowned) plus `hostClientId` / `hostName?` / `hostConnected`; `displayed?` rides both
 projections unchanged.
 
+The prepared `navigationOnly: true` marker is persisted with the tab and cannot be
+cleared by later reports. It prevents a native tab from becoming automation-capable
+because its host disconnected, sent an auxiliary hello, or restarted. Older rows omit
+the marker. Report inputs accept a boolean or omission, not `null`; false and omission
+leave an existing true value intact. Read results omit false. The marker does not
+replace `ownerAgentId`: navigation-only tabs retain the same
+agent ownership checks as desktop tabs.
+
 **`displayed` is process-local, not persisted** ([intent-hq/intent#4835](https://github.com/intent-hq/intent/issues/4835)).
 Every other host-reported field is a `browser_tab` column; `displayed` is a layout fact of
 the live host process, so the daemon keeps it in a process-local overlay keyed by `tabId`
@@ -1219,6 +1304,10 @@ successful `claimTab` re-homes the row to the workspace's **driving client** (§
 REV-2 rule order; `browser:tab-updated { changes: { hostClientId, ownerAgentId } }`), and
 `workspace.setBrowserClient` (§5.1) moves **every claimed tab** of the workspace to the
 new pin (`changes: { hostClientId }` per moved tab; clearing the pin moves nothing).
+The prepared native-preview extension excludes native tabs from this migration and
+does not migrate desktop tabs onto a navigation-only native client. Native tab-addressed
+`browser.navigateTab` / `browser.closeTab` calls always use the physical host, regardless
+of ownership or the workspace's current pin; the receiving client still enforces ownership.
 Independently of the driving client, a successful `client.hello` moves the **open** tabs —
 claimed **and** unclaimed — still hosted by a superseded id of the same device (a shorter
 `:`-suffix of the presented `clientId` the caller may act as, with no live connection;
