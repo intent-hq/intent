@@ -4117,7 +4117,7 @@ workspace's **home run**, in the home checkout; everything else is as for
 [saved scripts](#saved-scripts-nodeprotocol-8), including what a lost link
 does to a run. `autoStart` scripts start when the setup of a new checkout
 (at create, after a move and on a rebuilt cloud home) finishes as completed
-or skipped, once per home; not after a failed setup, and not when a
+or skipped; not after a failed setup, and not when a
 `homeOpen` answers `ready` for a checkout that exists.
 
 #### Files and git on the home
@@ -4173,8 +4173,10 @@ interface HomeCallReplyFrame {
    the orchestrator, and `file.placeAttachment` then sends it to the home in
    pieces of at most 4 MiB: one `file.placeAttachment` home call when it fits
    one piece, else the home's own `file.attachmentUpload.begin`, one `.chunk`
-   per piece and `.commit` (`.abort` when a piece fails). The orchestrator
-   keeps its copy under the same attachment ID. An attachment on the home
+   per piece and `.commit`, with `.abort` when the session ends uncommitted.
+   A retried placement with the same `idempotencyKey` is answered from the
+   home's `file.getAttachmentInfo`. The orchestrator also keeps a best-effort
+   copy under the same attachment ID. An attachment on the home
    keeps its ID for the life of the home, also across a home reopen.
 3. **Paths.** Every path is resolved as [checkout files](#checkout-files-nodeprotocol-16)
    resolves one: relative, canonicalised, refused when it resolves outside the
