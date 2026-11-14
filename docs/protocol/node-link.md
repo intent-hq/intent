@@ -4195,7 +4195,11 @@ interface HomeCallReplyFrame {
    schedule a debounced `home/wip` push. `git.agentCommit` pushes `home/head`
    before it replies. When the commit landed but that push failed, the call
    still succeeds, with `backupPending: true` in its result, so a client never
-   retries a commit that exists.
+   retries a commit that exists. The backend adds `gitIdentity` (as in
+   [commit identity](#commit-identity)) to the `git.agentCommit` params, from
+   the workspace checkout's config; the machine removes it, commits with it in
+   memory and never writes it to git config. Without it, the home checkout's
+   git config decides.
 6. **Cancel and loss.** `homeCallCancel` ends a call. A lost link fails it with
    `home-unavailable`; for `git.agentCommit` that error has `retryable: false`,
    because the commit may have landed.
