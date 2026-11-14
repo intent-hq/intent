@@ -4191,6 +4191,18 @@ interface HomeCallReplyFrame {
    output caps; `host.execStream` is an exec-mode `ptyOpen` instead. The
    `stdout` and `stderr` of `host.exec` are the command's own output and may
    contain the machine's absolute paths; they are not rewritten.
+   For `host.execStream` the orchestrator quotes `command` and `args` into the
+   `ptyOpen` `command` (run with `exec`, so no shell stays in between), maps
+   `cwd` as in point 3, sends the initial `stdin` and each
+   `host.execStream.write` as `ptyInput`, and sends `ptyKill` on
+   `host.execStream.cancel` or once `timeoutMs` passes. Each `ptyOutput` is
+   published as `host:exec:stdout` or `host:exec:stderr` by its `stream`, and
+   `ptyExited` as the one `host:exec:exit`, after all output. A `ptyExited`
+   with `error` and no `exitCode` (the process never started, or the home was
+   lost) ends the stream with that error as a last stderr chunk. A home
+   process's stdin cannot be closed over the link: `host.execStream.write`
+   with `eof: true` is `-32602` `home-exec-eof-unsupported`, and nothing is
+   written.
 5. **Writes push.** File writes, renames, deletes, stage and discard calls
    schedule a debounced `home/wip` push. `git.agentCommit` pushes `home/head`
    before it replies. When the commit landed but that push failed, the call
