@@ -2032,7 +2032,7 @@ the workspace checkout owner (`homeOpen`, `homeOpenReply`, `homeStop`,
 records with a `homeId` instead of an `agentId`, including `homePushed`), the
 terminal channel (`ptyOpen`, `ptyInput`, `ptyResize`, `ptyKill`, `ptyAck`,
 `ptyOutput`, `ptyExited`), home calls (`homeCall`, `homeCallReply`,
-`homeCallCancel`), `launch.checkoutOf` naming a home, and script and setup
+`homeCallCancel`), home events (`homeEvents`), `launch.checkoutOf` naming a home, and script and setup
 frames that name a home instead of an agent. They give a
 machine a checkout no agent owns and route the user's files and terminals
 there, so they need a new version. A daemon that implements it offers
@@ -2093,6 +2093,7 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `ptyOutput` / `ptyExited` | machine → backend | script | Protocol 19 or later |
 | `homeCall` / `homeCallCancel` | backend → machine | rpc | Protocol 19 or later: see [files and git on the home](#files-and-git-on-the-home) |
 | `homeCallReply` | machine → backend | rpc | Protocol 19 or later: `requestId`, `outcome`, `result?`, `error?` |
+| `homeEvents` | machine → backend | script | Protocol 19 or later: see [file and git events of a home](#file-and-git-events-of-a-home) |
 
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
 Heartbeats run every 15 s and a link silent for 45 s is dead. The backend
@@ -2128,8 +2129,8 @@ accepts it only on a protocol 7 or later link. Likewise the backend accepts
 `checkoutReadReply` only on a protocol 16 or later link,
 `oneShotReply` only on a protocol 18 or later link,
 and `homeOpenReply`, `homeStopAck`, `homePushReply`, `ptyOutput`, `ptyExited`,
-`homeCallReply` and the `homePushed` journal body only on a protocol 19 or
-later link.
+`homeCallReply`, `homeEvents` and the `homePushed` journal body only on a
+protocol 19 or later link.
 
 ### Stop acknowledgement (nodeProtocol 7)
 
@@ -4203,6 +4204,67 @@ interface HomeCallReplyFrame {
 6. **Cancel and loss.** `homeCallCancel` ends a call. A lost link fails it with
    `home-unavailable`; for `git.agentCommit` that error has `retryable: false`,
    because the commit may have landed.
+
+#### File and git events of a home
+
+A client of the orchestrator refreshes a homed workspace from the same
+[events](./06-events.md#65-event-taxonomy) it gets for a local one. The
+machine produces them for the home checkout and relays them:
+
+```ts
+interface HomeEventsFrame {        // machine → backend, script lane; closed
+  type: "homeEvents";
+  workspaceId: string;
+  homeId: string;
+  events: HomeEvent[];             // 1 to 256, oldest first
+}
+interface HomeEvent {              // closed
+  type: HomeEventType;
+  data: object;                    // the client event's data
+}
+type HomeEventType =
+  | "file:changed" | "file:created" | "file:deleted"
+  | "git:commit" | "git:pull" | "changes:git-status";
+```
+
+1. **Sources.** The machine watches each open home checkout as a daemon
+   watches a local workspace: file changes give `file:*` events, and file
+   or `.git` changes (a commit from a home terminal, for example) a
+   debounced `changes:git-status`. Home calls give the events their wire
+   methods give: `git.agentCommit` gives `git:commit` and
+   `changes:git-status`, `git.pull` gives `git:pull`. Only the
+   `HomeEventType`s travel. Anything else the machine emits for the home
+   stays on the machine, unseen, as before.
+2. **Paths.** `data` is cleaned as a [home call](#files-and-git-on-the-home)
+   result is. Paths are relative to the home checkout, the checkout itself is
+   `""`, its git directories are `.git`, and `workspaceId` is the backend's
+   workspace. No event carries the machine's absolute paths.
+3. **Bounded.** The machine sends at most one `homeEvents` per home every
+   **250 ms**, with at most 256 events. Within one frame it keeps only the
+   latest `changes:git-status`. When more `file:*` events wait than fit,
+   it replaces all of them with one burst summary, as the watcher's own:
+   `file:changed` with `data` `{ path: ".", relativePath: ".", action:
+   "modify", burst: true, affectedCount, creates, deletes, modifies }`.
+4. **Best effort.** The frames have no `seq` and no ack. `file:*` events
+   are transient on a local daemon too, and `changes:git-status` is a whole
+   snapshot that the next one replaces. Events that arrive while no link is
+   bound are dropped. After each bind the machine sends a fresh
+   `changes:git-status` for every open home, so a client that missed events
+   is current again.
+5. **Re-emitted.** The orchestrator publishes each event as the client event
+   of its `type`, for its own workspace: `file:*` as transient events, as its
+   watcher's are, and the others as their local emitters publish them, with
+   the system actor. `changes:git-status` gets the orchestrator's
+   `status.existingPR`, because the home holds no PR record. It drops a
+   frame for a (`workspaceId`, `homeId`) that is not the workspace's current
+   home on that machine (a moved or retired home). It also drops an event of
+   any other `type`.
+6. **After close.** A home's relay ends when the home closes (a `homeStop`,
+   the sweep or the machine's shutdown). Events still waiting are dropped,
+   and no `homeEvents` for that `homeId` follows.
+7. **Not relayed.** Agent session events travel as they do for any remote
+   agent. A home call's `search:*` results are streamed by the orchestrator,
+   as its own searches are.
 
 #### Home final stop
 
