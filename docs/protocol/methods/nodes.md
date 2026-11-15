@@ -2025,7 +2025,8 @@ workspace's files runs there, not on the orchestrator:
 
 Every one of these fails with `-32603` `data.code: "home-unavailable"` while
 the home is [detached](#detached-workspaces) or [moving](#moving-the-home). A
-paused cloud home is resumed for the call instead.
+cloud home that is not running is [started](#cloud-homes) for the call
+instead.
 
 **Who.** Terminals give an interactive shell on the home machine, under its
 owner's account. On an orchestrator `terminal.create`, `terminal.write`,
@@ -2049,7 +2050,8 @@ consent to host homes.
 
 A cloud entry as home is recorded at create time, but its sandbox starts
 **lazily**: on the first terminal, file, script or setup use, or when the
-first agent lands there. The home checkout is opened, and its setup has
+first agent lands there. While it starts, `home.state` is `"starting"`
+([cloud homes](#cloud-homes)). The home checkout is opened, and its setup has
 finished, before an agent that shares it starts.
 
 ```ts
@@ -2063,7 +2065,7 @@ interface WorkspaceHome {
   nodeId?: string;                 // an exposed machine, or a running cloud home's machine row
   cloudMachineId?: string;         // a cloud home's entry
   name: string;                    // the machine's or entry's name
-  state: "attached" | "detached" | "moving";
+  state: "attached" | "detached" | "moving" | "starting";
   since: string;                   // when `state` last changed
   lastBackupAt?: string;           // the last push of home/head or home/wip the orchestrator holds
   backupWarning?: boolean;         // true once backups have failed for 15 minutes
@@ -2135,7 +2137,7 @@ after which a running turn fails `node-link-unavailable`. `home.state` is then
 working; files, diffs, git status, terminals, app scripts and agents sharing
 the home checkout fail with `home-unavailable`. When the home's link comes
 back, `state` returns to `"attached"`. A paused cloud home is resumed on
-demand and is never detached.
+demand (`state: "starting"` meanwhile) and is never detached.
 
 ```json
 {"code":-32603,"message":"Home Mac Studio is unavailable. Chats and notes still work; files, terminals and scripts don't.","data":{"code":"home-unavailable","nodeId":"d-mac-studio","name":"Mac Studio","lastBackupAt":"2026-11-12T09:41:00Z","retryable":true}}
@@ -2215,6 +2217,16 @@ A sandbox that hosts a workspace's home is **co-owned by the workspace**:
    (`pausedDeleteDays`), the next use starts a new sandbox from the same
    entry, opens a new home there (a new `homeId`) from the backup, and posts a
    notice. This is not a detached state.
+6. **Starting.** While the orchestrator starts, resumes or rebuilds a cloud
+   home's sandbox, `home.state` is `"starting"` (sent as
+   `workspace:updated { changes: { home } }`), until the home checkout is open
+   and, for a new checkout, its setup has finished; then it is `"attached"`.
+   A call that needs the home waits up to **10 s** for it; if the home is
+   still starting, the call fails with `home-unavailable`
+   (`data.starting: true`, `retryable: true`) and the app shows
+   "Starting home…" and retries once `state` is `"attached"`. A start that
+   fails makes the home `"detached"` as for any unreachable home. Clients treat
+   a `state` value they do not know as not attached.
 
 ##### Reported daemon mode
 

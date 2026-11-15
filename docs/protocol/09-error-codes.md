@@ -205,8 +205,8 @@ is introduced.
 
 [Workspace homes](./methods/nodes.md#workspace-homes) add `-32603`
 `home-unavailable` (data `{ nodeId?, cloudMachineId?, name, lastBackupAt?,
-retryable: true }`: the workspace's home is detached or its link dropped
-mid-call), `-32603` `home-reply-too-large`, and `-32602` `home-target-unavailable` (a
+moving?, starting?, retryable: true }`: the workspace's home is detached,
+moving or a cloud home still starting, or its link dropped mid-call), `-32603` `home-reply-too-large`, and `-32602` `home-target-unavailable` (a
 `workspace.setHome` target that cannot be a home), `home-moving` (a move is
 already running) and `homes-unsupported` (a backend without `workspaceHomes`).
 On the executor link, `node-home-unknown` refuses a home frame for a `homeId`
