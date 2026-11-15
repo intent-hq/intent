@@ -652,6 +652,7 @@ jobs:
       - run: python3 -m pip install 'PyYAML==6.0.3'
       - run: bash scripts/ci-gate.test.sh
       - run: python3 -I -B scripts/test-ci-event-policy.py
+      - run: python3 -I -B scripts/test-consumer-checks-cargo-network.py
 
   gate:
     name: CI Gate

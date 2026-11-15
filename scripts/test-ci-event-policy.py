@@ -17,6 +17,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 QUEUE_JOBS = {'bridge-test', 'shell-tests', 'shell-tests-bash3', 'bootstrap-install'}
 RUNTIME_STEPS = {'Verify connected harnesses and source revisions', 'Prepare the connected test toolchains',
+                 'Fetch locked crates (retries crates.io network errors)',
                  'Configure the self-hosted compiler cache', 'Install the selected renderer dependencies',
                  'Run the connected transfer selection contract'}
 
