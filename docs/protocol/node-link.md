@@ -4305,7 +4305,7 @@ interface HomeStopAckFrame {
 1. **Durable record.** The backend keeps one row per pending home stop
    (`workspaceId`, `homeId`, `nodeId`, `stopId`, `reason`, `orphanedAt`,
    `recordedAt`), written in the same transaction that archives or deletes the
-   workspace or switches its home. It sends the stop after every bind until it
+   workspace, switches its home, or ends a failed move (for the move's target). It sends the stop after every bind until it
    gets the ack, then deletes the row. A home stop has no time bound; the row
    goes only with its ack, or when the machine is removed from the backend
    (`remoteMachines.remove`), which is then the user's choice to drop that
@@ -4314,7 +4314,9 @@ interface HomeStopAckFrame {
    agents sharing the checkout (as an [owner's final stop](#shared-checkout)
    does), pushes `home/head` and `home/wip` once more (authorized by the
    record, also after the workspace was archived; skipped when the workspace
-   was deleted), removes the checkout and acks.
+   was deleted), removes the checkout and acks. For a failed move's target the
+   backend accepts that push and discards it, so `home/head` and `home/wip`
+   keep the old home's work; the machine does not need to know.
 3. **Moved.** The machine stops the home's terminals and runs and the sharing
    agents, then pushes its leftover checkout once to
    `refs/intent/ws/<workspaceId>/home/orphaned/<orphanedAt>/{head,wip}`

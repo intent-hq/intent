@@ -2176,9 +2176,9 @@ restart. Its steps:
    [relaunch-without-a-checkout](../node-link.md#relaunch-without-a-checkout)
    rules (the unapplied pin is `home/unapplied/<sha>`), then its setup runs.
    When this fails, the move ends: `home` returns to the old home with its old
-   `state`. If the target may have made the new checkout (for example, its
-   `homeOpen` reply was lost), the orchestrator also records a final stop for
-   that checkout and sends it as in [Home final stop](../node-link.md#home-final-stop);
+   `state`. Because the target may have made the new checkout (for example,
+   its `homeOpen` reply was lost), the orchestrator also records a final stop
+   for that checkout and sends it as in [Home final stop](../node-link.md#home-final-stop);
    that stop's last push is discarded, so `home/head` and `home/wip` keep the
    old home's work. An archive or delete during a move does the same.
 3. **Switch.** In one store transaction the workspace's home becomes the new
