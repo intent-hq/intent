@@ -131,6 +131,13 @@ jobs:
       COMPONENT: ${{ inputs.component }}
       COMPONENT_REPOSITORY: ${{ inputs.self-test && format('intent-hq/{0}', inputs.component) || github.repository }}
       HEAD_SHA: ${{ inputs.head-sha || github.sha }}
+      # crates.io blips ("[16] Error in the HTTP2 framing layer" fetching
+      # serde_with ejected intentd#3384 from the merge queue): one connection
+      # per transfer and more cargo retries, as in intentd's ci.yml
+      # (intentd#3026). scripts/test-consumer-checks-cargo-network.py keeps
+      # these and the crate fetch below in place.
+      CARGO_HTTP_MULTIPLEXING: "false"
+      CARGO_NET_RETRY: "10"
     steps:
       - uses: actions/setup-python@v6
         with:
@@ -279,6 +286,13 @@ jobs:
             scripts/retry.sh -- sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
           fi
           corepack enable
+
+      # Download every locked crate once, retrying with backoff, before the
+      # first build. Like setup-sccache.py below, this is the intentd
+      # checkout's script, never a monorepo copy.
+      - name: Fetch locked crates (retries crates.io network errors)
+        if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'
+        run: python3 -I -B packages/intentd/scripts/fetch-locked-crates.py
 
       # The monorepo keeps no copy of this script (an intentd caller runs its PR
       # head's), so a download outage compiles uncached instead of ejecting
