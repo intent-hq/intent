@@ -478,8 +478,8 @@ downstream_gates=$(awk -v queue_gate="$queue_gate_line" -v gate="$gate_line" -v 
 ' "$workflow")
 grep -q '^ungated ' <<<"$downstream_gates" &&
   fail "every step after the guard must carry \"$gate_line\":"$'\n'"$downstream_gates"
-[ "$(grep -c '^gated ' <<<"$downstream_gates")" -eq 13 ] ||
-  fail "expected 13 gated steps after the guard (lightweight, shell-suite, connected checks and the stale-rerun explainer):"$'\n'"$downstream_gates"
+[ "$(grep -c '^gated ' <<<"$downstream_gates")" -eq 14 ] ||
+  fail "expected 14 gated steps after the guard (lightweight, shell-suite, connected checks and the stale-rerun explainer):"$'\n'"$downstream_gates"
 
 # A failed rerun that reused an old monorepo commit must say how to recover:
 # "Re-run failed jobs" keeps the reusable workflow SHA of the first attempt
