@@ -84,6 +84,16 @@ home calls, home backups and the home final stop
 ([link contract](./node-link.md#workspace-homes-nodeprotocol-19)); daemons offer
 `{ min: 7, max: 19 }`. The documented surface is **502 / 448 / 54**.
 
+Also within 18.0 (additive enum value and error data member under the
+existing `workspaceHomes: 1` capability, so no version bump): a cloud home
+whose sandbox is starting, resuming or being rebuilt reports
+`home.state: "starting"`, and calls made meanwhile fail with
+`home-unavailable` `data.starting: true` after waiting up to 10 s
+([cloud homes](./methods/nodes.md#cloud-homes)). A failed start detaches the
+home at once. Apps released before this value ignore a home with an unknown
+`state` (no home shown, update dropped); their calls still fail with
+`home-unavailable`.
+
 **Version 17.0 — CoW isolation setting retirement (breaking).**
 Copy-on-write is now used only to hydrate checkouts from the repo cache.
 `workspace.create` from a local repository always provisions a linked worktree
