@@ -97,7 +97,7 @@ home at once. Apps released before this value ignore a home with an unknown
 Also within 18.0 (link-only optional launch member; no method-catalog change and
 no nodeProtocol change): **sub-agents fetch submodule repositories through the
 backend**. A launch with `forgeFetch` may carry `forgeFetchModules` (`path`,
-`moduleKey`, `remoteUrl`): one entry per populated submodule of the workspace
+`moduleKey`, `remoteUrl`): one entry per pinned submodule of the sub-agent's
 checkout whose own `origin` is on GitHub. The machine rewrites those URLs too,
 gives each listed submodule of the sub-agent's checkout a worktree-scoped
 `origin`, and fetches over the new module forge remote
