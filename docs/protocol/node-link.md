@@ -3777,9 +3777,11 @@ interface ForgeFetchLaunch {     // closed: unknown or mistyped members are node
    first successful fetch it copies the workspace repository's
    `refs/remotes/origin/*`, `refs/remotes/origin/HEAD` and tags into the
    namespace and serves them. The OPEN fails only when neither exists
-   (`node-git-unavailable`); the helper then prints `error: could not fetch
-   from GitHub through intent1: the backend has nothing to serve for this
-   repository` and exits non-zero.
+   (`node-git-unavailable`). On any `node-git-unavailable` for a forge
+   session (this empty-namespace refusal, an unreachable backend, or a lost link) the helper
+   prints `error: could not fetch from GitHub through intent1: the backend is
+   not reachable or has nothing to serve for this repository` and exits
+   non-zero.
 7. **Ref mapping.** The forge upload-pack runs in the `intent-forge`
    namespace (`GIT_NAMESPACE`), so it advertises
    `refs/namespaces/intent-forge/refs/heads/<branch>` as
