@@ -2515,6 +2515,8 @@ interface LaunchCommand {
   compactToolDescriptions?: boolean; // see below
   checkoutOf?: string;             // protocol 13 only; see Sub-agent checkouts
   forge?: ForgeLaunch;             // protocol 15 only, top-level agents only; see Forge token on the machine
+  forgeFetch?: ForgeFetchLaunch;   // protocol 17 only, sub-agents only; see Sub-agent fetch through the backend
+  forgeFetchModules?: ForgeFetchModule[]; // only with forgeFetch; see Submodules through the backend
   gitIdentity?: GitIdentity;       // any protocol; see Commit identity
   newMachine?: string;             // any protocol; see Relaunch without a checkout
   resumedFromDisk?: true;          // any protocol; see Cloud machines
@@ -2866,10 +2868,12 @@ pin in order (parents first):
    the agent checkout's for a top-level pin, the parent submodule's worktree
    for a nested one (git reads a submodule's `active` from the repository
    that contains it). It never sets a submodule URL and never contacts the
-   forge;
+   forge (a sub-agent's submodule `origin` comes later, from
+   [submodules through the backend](#submodules-through-the-backend));
 4. sets `submodule.<name>.fetchRecurseSubmodules=false` and
    `fetch.recurseSubmodules=false` in the same worktree config. The submodule
-   has no remote, so git's on-demand recursion would otherwise make every
+   has no remote at this point (a sub-agent's may get one later), so git's
+   on-demand recursion would otherwise make every
    `git fetch` whose new commits move the gitlink exit 1. The per-module key
    wins over a `.gitmodules` value; the worktree's `fetch.recurseSubmodules`
    wins over a user's global `submodule.recurse`. For a pin an earlier launch
@@ -3773,7 +3777,9 @@ interface ForgeFetchLaunch {     // closed: unknown or mistyped members are node
    first successful fetch it copies the workspace repository's
    `refs/remotes/origin/*`, `refs/remotes/origin/HEAD` and tags into the
    namespace and serves them. The OPEN fails only when neither exists
-   (`node-git-unavailable`).
+   (`node-git-unavailable`); the helper then prints `error: could not fetch
+   from GitHub through intent1: the backend has nothing to serve for this
+   repository` and exits non-zero.
 7. **Ref mapping.** The forge upload-pack runs in the `intent-forge`
    namespace (`GIT_NAMESPACE`), so it advertises
    `refs/namespaces/intent-forge/refs/heads/<branch>` as
@@ -3788,9 +3794,11 @@ interface ForgeFetchLaunch {     // closed: unknown or mistyped members are node
 8. **ACCEPT payload.** On protocol 17 a forge ACCEPT may carry JSON
    `{ warning?: "forge-refresh-failed" }`. The helper prints
    `warning: could not refresh from GitHub; showing the last fetched refs` to
-   the sub-agent's stderr and continues. Every other ACCEPT stays empty; the
-   machine treats a non-empty ACCEPT on any other remote, or on a link below
-   17, as `node-git-invalid`: it sends CLOSE, ends the session, and the helper
+   the sub-agent's stderr and continues. A
+   [module forge remote](#submodules-through-the-backend) ACCEPT may carry the
+   same payload. Every other ACCEPT stays empty; the machine treats a
+   non-empty ACCEPT on any other remote, or on a link below 17, as
+   `node-git-invalid`: it sends CLOSE, ends the session, and the helper
    exits non-zero.
 9. **Push refused.** The backend answers a forge receive-pack OPEN with CLOSE
    `{ error: "node-git-push-refused" }` before any ref or object moves. The
@@ -3804,9 +3812,11 @@ interface ForgeFetchLaunch {     // closed: unknown or mistyped members are node
        processes. A sub-agent with `GH_TOKEN` can still write with `gh` or push
        to another URL; its instructions tell it not to (rule 9 of the
        [forge token](#forge-token-on-the-machine-nodeprotocol-15)).
-    2. Submodules are not rewritten. A fetch that recurses into submodules
-       reaches their URLs directly, with no credential helper, so a private
-       submodule fails.
+    2. Only the submodules in `forgeFetchModules` are rewritten
+       ([submodules through the backend](#submodules-through-the-backend)).
+       Git in any other submodule (not on GitHub, not populated on the
+       backend, or on a machine from before that member) reaches its URL
+       directly, with no credential helper, so a private one fails.
     3. In a shared checkout the remote-tracking refs are common to all its
        agents, and the refspec is forced. A fetch served from stale refs
        (rule 6) can move an `origin/<branch>` back that the owner updated
@@ -3823,6 +3833,118 @@ Reply error codes on `/node/git` CLOSE:
 | Code | Meaning |
 | --- | --- |
 | `node-git-push-refused` | A push on a forge remote; sub-agents hand work back through their agent refs |
+
+#### Submodules through the backend
+
+A sub-agent also fetches the GitHub repository of each pinned submodule of
+its checkout, for example `packages/ios` in an `intent-hq/intent` workspace,
+the same way. Its `git push` there is refused with the same message.
+
+```ts
+interface LaunchCommand {
+  // ...as in launch above
+  forgeFetchModules?: ForgeFetchModule[]; // only with forgeFetch
+}
+interface ForgeFetchModule {   // closed: unknown or mistyped members are node-link-protocol
+  path: string;                // a pin's path, as SubmodulePin.path
+  moduleKey: string;           // that pin's moduleKey
+  remoteUrl: string;           // "https://github.com/<owner>/<repo>.git"
+}
+```
+
+1. **When sent.** At each launch that carries `forgeFetch`, the backend
+   takes the [pins](#submodule-pins) of the checkout the sub-agent works in:
+   its own, or its checkout owner's when it [shares](#shared-checkout) one.
+   For each pin that is still a submodule of the workspace checkout (checked
+   as for a [module OPEN](#module-repositories-and-git-sessions)) and whose
+   own `origin` now normalizes to a GitHub repository (as for `forgeFetch`),
+   it sends one entry with the pin's `path` and `moduleKey`. It leaves out an
+   entry whose `remoteUrl` equals `forgeFetch.remoteUrl` or an earlier
+   entry's, comparing the normalized strings exactly. It omits the member when
+   the list is empty, and never sends it without `forgeFetch`. An agent
+   without pins, or in a [home](#workspace-homes-nodeprotocol-19) checkout,
+   gets no entries.
+2. **No new version.** The member is optional, and leaving it out withholds
+   access; it never grants any. A machine from before this contract ignores
+   it, and its sub-agents' submodules stay as in known gap 2 above. That is
+   the state before this member, so the launch works and nothing else
+   changes. A backend from before this contract never sends it. The backend
+   cannot tell whether a machine honours the member and does not need to: it
+   never refuses an OPEN or a launch because of it.
+3. **Checks on the machine.** The launch fails with `node-checkout-failed`
+   when it carries entries without `forgeFetch`, or when an entry has a
+   `path` that is not a safe relative path (as for a pin), a `moduleKey` that
+   is not a safe ref component, a `remoteUrl` that does not have the form
+   above, or repeats another entry's `path`, `moduleKey` or `remoteUrl`, or
+   has a `remoteUrl` equal to `forgeFetch.remoteUrl`. URLs are compared as
+   exact strings. An empty list is the same as no member.
+4. **Module forge remote.** Each entry has one more remote on the `/node/git`
+   connection:
+
+   ```text
+   intent://ws/<workspaceId>/agents/<agentId>/modules/<moduleKey>/forge
+   ```
+
+   It has the messages and limits of the forge remote and shares them: the
+   session cap of 8 and at most 2 forge sessions at a time on the machine.
+   The backend authorizes the OPEN as the agent's forge OPEN (rule 2). It
+   then maps `moduleKey` to a path only through the pins of rule 1 (the
+   agent's, or its checkout owner's), never from the request, checks that
+   path as for a module OPEN (gitlink path, no symlinked step, same
+   repository), and requires that the submodule's `origin` still normalizes
+   to a GitHub repository. A key that is not such a pin, or a check that
+   fails, is `node-git-denied`; a path with no repository any more is
+   `node-git-unavailable`.
+5. **Rewrite and socket.** For each entry the machine adds the two
+   `url.<module forge remote>.insteadOf` values of rule 3 (its `remoteUrl`
+   and the `git@github.com:` form) to the same `GIT_CONFIG_PARAMETERS`. The
+   sub-agent's own socket accepts only its forge remote and the module forge
+   remotes of its launch's entries. Any other forge remote (another agent's,
+   or its own with a `moduleKey` not in its launch) is `node-git-denied`.
+6. **Origin in the submodule.** For each entry whose `path` is a populated
+   submodule of the sub-agent's checkout (it has its own `.git`), the machine
+   sets the `origin` of rule 4 in that submodule's worktree, with the
+   entry's `remoteUrl`, when it has none; it skips a `path` that is not
+   populated there. It enables `extensions.worktreeConfig` in the module
+   cache first, as for the checkout, and writes the keys with
+   `git config --worktree`, so other worktrees of the same
+   [module cache](#checkout-on-the-machine) do not get them. In a shared
+   checkout the owner sees this `origin` too; its git uses it without the
+   rewrite and with no credential helper, as in rule 4.
+7. **Refresh and serving.** As rules 5 to 9, in the **submodule's own
+   repository** on the backend: the backend fetches the submodule's
+   `origin` as it is at the OPEN, normalized, into that repository's own
+   `intent-forge` namespace, with its own coalescing (keyed by its git common
+   directory), the same token and timeouts. The fallback seeds from that
+   repository's `refs/remotes/origin/*`, `refs/remotes/origin/HEAD` and tags,
+   with the warning, and pushes are refused.
+8. **Read scope.** A sub-agent can read, with the backend's token, the
+   GitHub repository named by the current `origin` of each submodule pinned
+   in its checkout. As for the superproject, this does not depend on
+   `exposeGitCredentialToChildren`. The fallback of rule 7 serves the
+   backend repository's remote-tracking refs: for this path the
+   module OPEN's "other branches stay hidden" does not hold for them. The
+   submodule repository's own `refs/heads`, and every agent's refs, stay
+   hidden.
+9. **Private repositories.** When the backend's token cannot read the
+   submodule's repository, the refresh fails as in rule 6: the fetch gets the
+   last fetched refs with the warning, or, with nothing to serve, the helper
+   message of rule 6. The launch never fails for it.
+10. **Known gaps.** As rule 10, and also:
+    1. When two pins with different keys have the same `remoteUrl`, only
+       the first gets an entry. Git in the second still reaches the first's
+       module forge remote through the rewrite, but the second gets no
+       `origin`.
+    2. A workspace whose own `origin` is not on GitHub gets no `forgeFetch`,
+       so no submodule entries either.
+    3. A submodule that is populated on the machine and not pinned (for
+       example, initialized there by the agent) gets no entry.
+    4. When a submodule's `origin` changes on the backend while the agent
+       runs, its next fetch gets the new repository's refs under the old URL,
+       as gap 4.
+    5. The remote-tracking refs of a submodule live in the machine's module
+       cache, which every agent on that machine whose pins name the same
+       `moduleKey` shares, in any workspace of this backend.
 
 ### Quick actions on the machine (nodeProtocol 18)
 
