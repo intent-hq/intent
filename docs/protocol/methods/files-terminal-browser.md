@@ -750,6 +750,19 @@ services directly and are unchanged.
 > with the same additive `warning` string as above; a hidden tab in a displayed
 > workspace mounts with no warning.
 >
+> **WebMCP actions** read and run the tools a page registered with
+> `document.modelContext.registerTool()` ([WebMCP](https://webmachinelearning.github.io/webmcp/));
+> the FE turns on Chromium's `WebMCP` Blink feature in embedded tabs. Both are
+> ownership-enforced and mount, settle and bound themselves like the capture ops.
+> `listTools { tabId? }` answers `result: { tools: [{ name, title?, description,
+> inputSchema?, annotations?, origin? }] }` (`inputSchema` decoded from the page's
+> JSON string); a page without `document.modelContext` (WebMCP needs a secure
+> context: https or a loopback host) answers empty `tools` plus an additive
+> `warning`. `callTool { name, input?, tabId? }` runs the named tool (preferring the
+> top frame's registration) with `input` (an object, default `{}`) and answers the
+> tool's decoded JSON result as `result`; an unknown name, a throwing tool, or a
+> page without WebMCP fails the action with `error` and no `errorCode`.
+>
 > A workspace that **no window has open** (its tab was closed, or it was not reopened
 > since a restart) is **hosted in the background** before the batch runs: the FE asks
 > one app window connected to the workspace's host (the focused one first) to
