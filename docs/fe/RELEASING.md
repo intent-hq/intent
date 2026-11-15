@@ -81,6 +81,8 @@ The following secrets must be configured in the `intent-hq/cloudlands-fe` reposi
   - Fine-grained (preferred): `Contents: Read-only` with repository access to `intent-hq/intentd`
   - Classic: `repo` scope (classic scopes are write-capable; only read access is exercised — prefer fine-grained)
 
+- **`DISCORD_ANNOUNCEMENTS_WEBHOOK`** (optional) - Discord webhook URL for the community `#announcements` channel, used by `announce-promotion.yml` (see [Discord announcements](#discord-announcements))
+
 **Important:** If `INTENTD_READ_PAT` is invalid or expired, the workflow fails at the "Fetch pinned intentd sidecar" step — either with "Release v{X.Y.Z} not found" (GitHub returns 404 for private repos the token cannot read) or with "GitHub API error fetching release … HTTP 401/403" for bad credentials.
 
 ## Cutting a Beta Release
@@ -151,6 +153,10 @@ The following secrets must be configured in the `intent-hq/cloudlands-fe` reposi
    ```
 
    If `beta` lags, sync it with `gh workflow run publish-intent-web.yml --repo intent-hq/cloudlands-fe -f channel=beta`. If npm rejects the move (the trusted publisher's dist-tag permission, announced as ["Allow npm dist-tag"](https://github.blog/changelog/2026-09-30-opt-in-dist-tag-permissions-for-npm-trusted-publishing), is off), an `@intent-hq` npm owner runs `npm dist-tag add @intent-hq/web@<version> beta`. A channel version older than the first npm publish is skipped. If `alpha` lags, publish the tag again with `gh workflow run publish-intent-web.yml --repo intent-hq/cloudlands-fe -f tag=v<version>`. `make release-status` in the monorepo shows the same drift.
+
+6. **Check the Discord announcement**
+
+   `announce-promotion.yml` posts the new beta version to the community Discord's `#announcements` channel. See [Discord announcements](#discord-announcements).
 
 ## Promoting to Stable
 
@@ -261,6 +267,15 @@ when the requested CPU's asset is absent. Website changes need their own PR.
    Keep at most one open site release-notes PR at a time, and always branch from the current `main` of `intent-hq/intentapp.dev`. Before opening a new one, check for an open release-notes PR on that repo (`gh pr list --repo intent-hq/intentapp.dev --search "release notes"`). If one exists, either update it instead of opening a second (rebase it on `main`, make the newest stable the Latest Release, and archive every intermediate stable in Release History, newest first) or close it as superseded and open a fresh PR from `main`. The site must never end up showing an older release as Latest.
 
    The site PR is review-only and independent of the release pipeline: a delayed or missing site PR never blocks or reverts a promotion.
+
+## Discord announcements
+
+`announce-promotion.yml` (Announce Promotion) runs after each successful Promote Beta or Release Stable run. It reads the version that channel's feed on `intent-hq/cloudlands-releases` now serves and posts one message to the community Discord's `#announcements` channel, linking to the channel's rolling release notes (`releases/tag/beta` or `releases/tag/stable`). Alpha releases are never announced, and the message cannot mention anyone.
+
+- **Secret:** the webhook URL is the `DISCORD_ANNOUNCEMENTS_WEBHOOK` repository secret. Create it in Discord under `#announcements` → Edit Channel → Integrations → Webhooks, then run `gh secret set DISCORD_ANNOUNCEMENTS_WEBHOOK --repo intent-hq/cloudlands-fe`. Without it the job skips the post and stays green.
+- **Re-runs:** re-running a promotion whose earlier attempt succeeded posts nothing. A new `notes_base` repair run for an already promoted version does post again; delete the duplicate in Discord.
+- **Post by hand:** `gh workflow run announce-promotion.yml --repo intent-hq/cloudlands-fe -f channel=<beta|stable> -f dry_run=false`. The default `dry_run=true` only prints the message in the job log.
+- **Followers:** Discord does not forward webhook posts to servers that follow the channel. A moderator clicks **Publish** on the message when that is wanted.
 
 ## Troubleshooting
 

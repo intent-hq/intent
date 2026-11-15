@@ -726,6 +726,9 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   delta `v{prev pin}..v{new pin}`, so an fe release that merely bumps the sidecar
   still comments on intentd-fixed issues.
 - Comments never name a channel and there are no beta/stable promotion comments.
+  Promotions are announced only in the community Discord, by cloudlands-fe's
+  `announce-promotion.yml` after each successful Promote Beta or Release Stable run
+  (see [fe/RELEASING.md § Discord announcements](./fe/RELEASING.md#discord-announcements)).
   intentd posts "This fix is included in intentd vX.Y.Z."; cloudlands-fe posts
   "This fix is included in cloudlands-fe vX.Y.Z (bundles intentd vA.B.C)."
 - Completeness gate ("stay silent until complete"): the range scan is only a cheap

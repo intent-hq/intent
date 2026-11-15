@@ -140,6 +140,10 @@ Release workflows require the following secrets configured on `intent-hq/cloudla
 - `RELEASE_PAT` — Personal access token with `repo` scope on `cloudlands-fe` + `cloudlands-releases` (also used by release-please, which needs contents + pull-requests + issues write; `repo` scope covers all three)
 - `INTENTD_READ_PAT` — Personal access token with read-only access to `intent-hq/intentd` (used to download the pinned intentd release assets while the repo is private)
 
+**Community announcements (optional):**
+
+- `DISCORD_ANNOUNCEMENTS_WEBHOOK`: Discord webhook URL for the community server's `#announcements` channel. `announce-promotion.yml` posts there after each successful Promote Beta or Release Stable run; without it the post is skipped with a notice.
+
 Production Windows releases require no Windows signing secrets because they remain
 **unsigned** (see [Platform builds and runners](#platform-builds-and-runners)).
 Optional manual Azure-signed builds require the separate configuration described
