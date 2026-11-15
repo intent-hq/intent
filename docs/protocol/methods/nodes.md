@@ -2025,8 +2025,9 @@ workspace's files runs there, not on the orchestrator:
 
 Every one of these fails with `-32603` `data.code: "home-unavailable"` while
 the home is [detached](#detached-workspaces) or [moving](#moving-the-home). A
-cloud home that is not running is [started](#cloud-homes) for the call
-instead.
+cloud home that is not running is [started](#cloud-homes) instead: the call
+waits up to 10 s for it, then fails with `home-unavailable`
+(`data.starting: true`) if it is still starting.
 
 **Who.** Terminals give an interactive shell on the home machine, under its
 owner's account. On an orchestrator `terminal.create`, `terminal.write`,
@@ -2137,7 +2138,9 @@ after which a running turn fails `node-link-unavailable`. `home.state` is then
 working; files, diffs, git status, terminals, app scripts and agents sharing
 the home checkout fail with `home-unavailable`. When the home's link comes
 back, `state` returns to `"attached"`. A paused cloud home is resumed on
-demand (`state: "starting"` meanwhile) and is never detached.
+demand (`state: "starting"` meanwhile) and is not detached while it starts;
+a cloud home whose start, resume or rebuild fails is detached at once,
+without the 60 s grace.
 
 ```json
 {"code":-32603,"message":"Home Mac Studio is unavailable. Chats and notes still work; files, terminals and scripts don't.","data":{"code":"home-unavailable","nodeId":"d-mac-studio","name":"Mac Studio","lastBackupAt":"2026-11-12T09:41:00Z","retryable":true}}
@@ -2224,9 +2227,12 @@ A sandbox that hosts a workspace's home is **co-owned by the workspace**:
    A call that needs the home waits up to **10 s** for it; if the home is
    still starting, the call fails with `home-unavailable`
    (`data.starting: true`, `retryable: true`) and the app shows
-   "Starting home…" and retries once `state` is `"attached"`. A start that
-   fails makes the home `"detached"` as for any unreachable home. Clients treat
-   a `state` value they do not know as not attached.
+   "Starting home…" and retries once `state` is `"attached"`. A start, resume
+   or rebuild that fails makes the home `"detached"` at once. Apps released
+   before this state existed ignore a home whose `state` they do not know: its
+   row shows no home and its `workspace:updated` change is dropped, so they
+   keep the previous state; their calls still fail with `home-unavailable`,
+   which they show as an error.
 
 ##### Reported daemon mode
 
