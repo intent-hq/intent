@@ -94,6 +94,20 @@ home at once. Apps released before this value ignore a home with an unknown
 `state` (no home shown, update dropped); their calls still fail with
 `home-unavailable`.
 
+Also within 18.0 (link-only optional launch member; no method-catalog change and
+no nodeProtocol change): **sub-agents fetch submodule repositories through the
+backend**. A launch with `forgeFetch` may carry `forgeFetchModules` (`path`,
+`moduleKey`, `remoteUrl`): one entry per populated submodule of the workspace
+checkout whose own `origin` is on GitHub. The machine rewrites those URLs too,
+gives each listed submodule of the sub-agent's checkout a worktree-scoped
+`origin`, and fetches over the new module forge remote
+`intent://ws/<ws>/agents/<agent>/modules/<moduleKey>/forge`; the backend
+refreshes into that submodule repository's `intent-forge` namespace and refuses
+pushes with `node-git-push-refused`
+([link contract](./node-link.md#submodules-through-the-backend)). A machine from
+before ignores the member, and its sub-agents' submodules work as before. The
+surface counts are unchanged.
+
 **Version 17.0 — CoW isolation setting retirement (breaking).**
 Copy-on-write is now used only to hydrate checkouts from the repo cache.
 `workspace.create` from a local repository always provisions a linked worktree
