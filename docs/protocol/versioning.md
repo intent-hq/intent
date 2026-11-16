@@ -108,6 +108,19 @@ pushes with `node-git-push-refused`
 before ignores the member, and its sub-agents' submodules work as before. The
 surface counts are unchanged.
 
+Also within 18.0 (behaviour change plus one link close code; no method-catalog
+change and no nodeProtocol change): **an orchestrator leaves its backends**. A
+machine switched to orchestrator mode refuses every executor bind with
+`node-link-orchestrator-mode`, and a backend that gets it removes the machine
+as `remoteMachines.remove` does (row, token, leases, stop records, order
+entry) and sends `remoteMachine:changed { machineId, removed: true }`
+([orchestrator mode](./methods/nodes.md#an-orchestrator-leaves-its-backends)).
+The call that dialed fails with the new `-32602`
+`data.code: "machine-orchestrator"`. An older
+backend sees the unknown close code as a route failure and keeps retrying, as
+before. An older orchestrator still binds; its report lists no providers.
+The surface counts are unchanged.
+
 **Version 17.0 — CoW isolation setting retirement (breaking).**
 Copy-on-write is now used only to hydrate checkouts from the repo cache.
 `workspace.create` from a local repository always provisions a linked worktree
