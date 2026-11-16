@@ -4348,9 +4348,17 @@ interface HomeCallReplyFrame {
    root is inside the workspace checkout. The orchestrator resolves the id as
    a local call does (an unknown or foreign id is `-32602` `Unknown git root`
    there), and adds `gitRootPath`: the root's path relative to the checkout.
-   The machine resolves `gitRootPath` as a path in point 3, finds or registers
-   that root on its own record of the home, and runs the method against it.
-   The reply shows the orchestrator's `gitRootId`, never the machine's.
+   The orchestrator removes any `gitRootPath` a client sent, and maps an
+   absolute path the call names against the root, as a local call reads it.
+   The machine resolves `gitRootPath` as a path in point 3, checks the call's
+   paths in the root (the same rules, with the root as the base), finds or
+   registers that root on its own record of the home, and runs the method
+   against it. A `gitRootPath` without a `gitRootId` is `-32602`. The reply
+   shows the orchestrator's `gitRootId`, never the machine's. Work in a root
+   that is one of the home's submodules is backed up with the home's pushes,
+   in the submodule's own refs (point 5 of
+   [the workspace checkout](#the-workspace-checkout)); work in any other root
+   is not backed up.
    Errors, all `-32602`:
    - `home-root-outside-checkout`: the root is not inside the workspace
      checkout, so the home does not have it (the orchestrator answers).
