@@ -4254,7 +4254,7 @@ interface HomeCallFrame {          // backend → machine, rpc lane
   workspaceId: string;
   homeId: string;
   method: HomeMethod;
-  params: object;                  // the wire method's own params
+  params: object;                  // the wire method's own params; with gitRootId, also gitRootPath (point 7)
   timeoutMs: number;
 }
 type HomeMethod =
@@ -4343,6 +4343,28 @@ interface HomeCallReplyFrame {
 6. **Cancel and loss.** `homeCallCancel` ends a call. A lost link fails it with
    `home-unavailable`; for `git.agentCommit` that error has `retryable: false`,
    because the commit may have landed.
+7. **Git roots.** A call with a `gitRootId` (a registered root of the
+   workspace: a submodule or another repository) runs on the home when the
+   root is inside the workspace checkout. The orchestrator resolves the id as
+   a local call does (an unknown or foreign id is `-32602` `Unknown git root`
+   there), and adds `gitRootPath`: the root's path relative to the checkout.
+   The machine resolves `gitRootPath` as a path in point 3, finds or registers
+   that root on its own record of the home, and runs the method against it.
+   The reply shows the orchestrator's `gitRootId`, never the machine's.
+   Errors, all `-32602`:
+   - `home-root-outside-checkout`: the root is not inside the workspace
+     checkout, so the home does not have it (the orchestrator answers).
+   - `home-root-missing`: the home checkout has no git repository at
+     `gitRootPath` (for example a nested repository that is not committed, or
+     a submodule the home did not populate).
+   - `home-root-unsupported`: the home's machine is older and does not read
+     `gitRootPath`; it needs an intentd update. The orchestrator sends the
+     backend's `gitRootId` too, so such a machine refuses the call
+     (`Unknown git root`) rather than running it against the checkout root,
+     and the orchestrator answers with this code.
+
+   The home's [file and git events](#file-and-git-events-of-a-home) cover the
+   checkout root only.
 
 #### File and git events of a home
 
