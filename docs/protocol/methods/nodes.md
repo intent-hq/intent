@@ -2205,6 +2205,14 @@ While `state` is `"moving"`, terminals, home runs and file and git calls fail
 with `home-unavailable` (`data.moving: true`); open terminals of the old home
 end.
 
+A move to a cloud entry, or to an agent's sandbox, shows the new home early:
+once the old home's last backup has landed, `home` names the new home with
+`state: "starting"` (sent as `workspace:updated { changes: { home } }`) until
+the switch, then `"attached"`. Calls made meanwhile behave as for any
+[starting cloud home](#cloud-homes): they wait up to 10 s, then fail with
+`home-unavailable` (`data.starting: true`). If the move rolls back, `home`
+names the old home again with its old `state`.
+
 ###### Cloud homes
 
 A sandbox that hosts a workspace's home is **co-owned by the workspace**:
