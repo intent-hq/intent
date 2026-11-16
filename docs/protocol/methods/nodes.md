@@ -2006,25 +2006,31 @@ orchestrator: none of them starts a provider process.
 ###### An orchestrator leaves its backends
 
 An orchestrator never runs agents for another backend. On the executor link
-it refuses every bind, for any credential, with the close reason `node-link-orchestrator-mode`
-([executor link errors](../node-link.md#errors)), before it checks the
-version or the binding. A backend that gets this refusal removes the machine
-as `remoteMachines.remove` does, without asking for stops (an orchestrator
-runs none):
+it refuses every bind with the close reason `node-link-orchestrator-mode`
+([executor link errors](../node-link.md#errors)). It checks this after the
+token (a bad token is still `401`) and before the version and the binding.
+A backend that gets this refusal for an exposed machine removes it as
+`remoteMachines.remove` does, without asking for stops (an orchestrator runs
+none):
 
-1. It ends the machine's agents with
-   `orchestrator-mode: <name> is now an orchestrator and no longer runs agents for other backends`.
-2. It deletes the machine row, its stored token
+1. At once, it ends the machine's agents with
+   `machine-orchestrator: <name> is now an orchestrator and no longer runs agents for other backends`,
+   and the call that dialed (`remoteMachines.refresh`, a placement, a prompt)
+   fails with `-32602` and `data: { code: "machine-orchestrator" }`.
+2. Then, in the background, it deletes the machine row, its stored token
    (`remoteMachines.<id>.token`), its leases and pending stop records, and its
    [ordered list](#ordered-machine-list) entry.
 3. It sends `remoteMachine:changed { machineId, removed: true }`, then
-   `{ order }`.
+   `{ order }`. The `removed` event is the signal that the removal is done.
+   A removal that fails (a store error) runs again at the next dial.
 
-The call that dialed (`remoteMachines.refresh`, a placement) fails with
-`-32602` and `data: { code: "orchestrator-mode" }`; a `remoteMachines.remove` of such a machine succeeds. `remoteMachines.add` of an
-orchestrator fails the same way and saves nothing. To use the machine as a
+`remoteMachines.add` of an orchestrator fails with the same error. A new
+machine is not saved; a machine already saved is removed as above.
+`remoteMachines.remove` of such a machine succeeds. To use the machine as a
 backend, pair with it as one. Switched back to `regular`, it mints a new
-credential and is added again as usual.
+credential and is added again as usual. `machine-orchestrator` is not the
+`-32003` `orchestrator-mode` refusal: that one means the daemon answering
+is an orchestrator, this one that a machine it dialed is.
 
 ##### Workspace homes
 

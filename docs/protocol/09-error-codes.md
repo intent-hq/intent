@@ -188,7 +188,10 @@ machines reported signed out; data `{ providerRef, machines, retryable }`),
 gains `limit: "count" | "memory"` with its counts or bytes. `-32603`:
 `machine-unreachable` (with the routes tried) and `machine-revoked` from
 `remoteMachines.add` / `refresh`, and `machine-unreachable` with
-`unconfirmedStops` from `remoteMachines.remove` when stops go unacknowledged. `-32003` with `data.code: "node-mode"` refuses
+`unconfirmedStops` from `remoteMachines.remove` when stops go unacknowledged.
+`-32602` `machine-orchestrator`: a machine the backend dialed now runs as an
+[orchestrator](./methods/nodes.md#an-orchestrator-leaves-its-backends), and the
+backend removes it. `-32003` with `data.code: "node-mode"` refuses
 a method outside the node-mode list. The message-prefixed
 `remote-model-change-unsupported` (`-32602`, no `data.code`) is no longer
 returned by `agent.setModel`; it remains only as a remote start failure when

@@ -1873,7 +1873,7 @@ offer it decides:
 
 | Offer | Result |
 | --- | --- |
-| Any offer, while the machine runs as an [orchestrator](./methods/nodes.md#an-orchestrator-leaves-its-backends) | `node-link-orchestrator-mode`, checked first |
+| Any offer, while the machine runs as an [orchestrator](./methods/nodes.md#an-orchestrator-leaves-its-backends) | `node-link-orchestrator-mode`, checked before the others |
 | Names another `nodeId` | `node-link-wrong-node` |
 | `headId` is not the credential's `backendId` | `node-link-other-head` ("this credential belongs to another backend") |
 | `generation` not greater than the persisted one | `node-link-stale` (the backend retries with a newer generation) |
@@ -4910,7 +4910,7 @@ and `refresh` report them per route in `machine-unreachable`'s `attempts`:
 | `node-link-config` | A malformed stored route, pin or token | With backoff |
 | `node-link-closed` / `node-link-timeout` | The link closed or a request timed out before completing | With backoff |
 | `node-link-binding-store` | The machine cannot read or persist the binding | With backoff |
-| `node-link-orchestrator-mode` | The machine runs as an [orchestrator](./methods/nodes.md#an-orchestrator-leaves-its-backends) and refuses every bind | Never: the backend removes the machine |
+| `node-link-orchestrator-mode` | The machine runs as an [orchestrator](./methods/nodes.md#an-orchestrator-leaves-its-backends) and refuses every bind; reported as `machine-orchestrator`, not in `attempts` | Every 60 s until the backend has removed it |
 | `node-link-frame-too-large` / `node-link-frame-invalid` | A frame over 8 MiB, or malformed | n/a (frame rejected) |
 
 Without a connected machine an agent cannot start (`node-unavailable`); an
