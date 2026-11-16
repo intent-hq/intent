@@ -1975,7 +1975,7 @@ machines here. They are raised before any write.
 | A create route with no placement | Walks the ordered list; an empty list fails `placement-unavailable` reason `no-agent-machine` |
 | Starting, resuming or prompting an agent that was created locally before the switch (`agent.sendMessage`, `agent.retry`, `agent.editAndRegenerate`, `agent.setModel`, `agent.resolveInterrupted`, `agent.wakeOrCreate`'s wake branch, queued delivery, failover, `serve --resume-all`) | Refused; the agent stays listed and nothing is deleted |
 | A batch `agent.delegate` with `isolation` and an unplaced task | Refused (isolation keeps a task on this daemon) |
-| `executor.mint`, `executor.invite.create` (being exposed to another backend as a machine) | Refused. A credential minted before the switch still binds, but its capabilities report lists no providers and every `launch` fails with `orchestrator-mode`, so placement never picks it |
+| `executor.mint`, `executor.invite.create` (being exposed to another backend as a machine) | Refused. A credential minted before the switch is refused at bind with `node-link-orchestrator-mode` ([leaving its backends](#an-orchestrator-leaves-its-backends)) |
 | `host.providerTestPrompt` | Refused ([provider profiles](./provider-profiles.md#profiles-on-an-orchestrator)) |
 | `agent.importableSessions.list`, `agent.importSession`, and starting a local model server (Unsloth) | Refused |
 | `agent.completeOnce`, `agent.enhancePrompt` | Run on a machine ([quick actions on a machine](./agent-aux.md#quick-actions-on-an-orchestrator)) |
@@ -2002,6 +2002,29 @@ not changed, so switching back to `regular` restores them.
 **Not changed.** Hooks, scripts started by the app, PR and review monitors,
 the workspace worktree and git (used to prepare remote checkouts) stay on the
 orchestrator: none of them starts a provider process.
+
+###### An orchestrator leaves its backends
+
+An orchestrator never runs agents for another backend. On the executor link
+it refuses every bind, for any credential, with the close reason `node-link-orchestrator-mode`
+([executor link errors](../node-link.md#errors)), before it checks the
+version or the binding. A backend that gets this refusal removes the machine
+as `remoteMachines.remove` does, without asking for stops (an orchestrator
+runs none):
+
+1. It ends the machine's agents with
+   `orchestrator-mode: <name> is now an orchestrator and no longer runs agents for other backends`.
+2. It deletes the machine row, its stored token
+   (`remoteMachines.<id>.token`), its leases and pending stop records, and its
+   [ordered list](#ordered-machine-list) entry.
+3. It sends `remoteMachine:changed { machineId, removed: true }`, then
+   `{ order }`.
+
+The call that dialed (`remoteMachines.refresh`, a placement) fails with
+`-32602` and `data: { code: "orchestrator-mode" }`; a `remoteMachines.remove` of such a machine succeeds. `remoteMachines.add` of an
+orchestrator fails the same way and saves nothing. To use the machine as a
+backend, pair with it as one. Switched back to `regular`, it mints a new
+credential and is added again as usual.
 
 ##### Workspace homes
 
