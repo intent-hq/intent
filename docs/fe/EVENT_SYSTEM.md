@@ -71,8 +71,7 @@ The DomainEvents broadcast layer (`domain-events` actions and sagas under `src/s
 | Daemon events bridge | `features/events/daemon-events-bridge.client.ts` | Routes daemon events into renderer Redux |
 | workspace-events slice | `store/renderer/slices/workspace-events/` | Event state management |
 | agent-subscription-ui slice | `store/renderer/slices/agent-subscription-ui/` | Agent event filter state |
-| EventFilterEngine | `features/events/event-filter-engine.ts` | Pure filter matching logic |
-| agent-subscription-ops | `features/events/main/agent-subscription-ops.ts` | Agent subscription operations |
+| Agent subscription state | `features/events/main/agent-subscription-state.service.ts` | Agent subscription canonical state |
 
 ## Emitting Events
 
@@ -80,16 +79,12 @@ Main-process event emission via `mainDispatch` no longer does anything: `src/sto
 
 ## IPC Channels
 
-All event IPC channels are defined in `src/shared/ipc-registry.ts`:
+Event IPC channels are defined in `src/shared/ipc-registry.ts`. The main process handles two of them (`features/events/main/events.ipc.ts`):
 
 | Channel | Purpose |
 |---------|---------|
 | `events:emit` | Emit event from renderer |
-| `events:subscribe` | Subscribe to events |
-| `events:unsubscribe` | Unsubscribe from events |
-| `events:query` | Query events with filters |
-| `events:getLastEvent` | Get last event of type |
-| `events:getStatistics` | Get event statistics |
+| `events:get-agent-subscriptions` | Read agent subscription state |
 
 ## Data Flow: File Change Event
 
