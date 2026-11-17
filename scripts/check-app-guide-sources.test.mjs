@@ -254,6 +254,11 @@ test('--format-only parses one file without git or pins', t => {
   assert.match(bad.stderr, /guide\.md:4: error: unqualified path 'src\/bare\.ts'/);
   assert.match(bad.stderr, FORMAT_HINT);
 
+  writeFileSync(file, `${GOOD}<!-- Sources: src/bare.ts. -->\n`);
+  const unqualified = spawnSync(process.execPath, [script, '--format-only', file], { encoding: 'utf8' });
+  assert.equal(unqualified.status, 1, unqualified.stdout + unqualified.stderr);
+  assert.doesNotMatch(unqualified.stderr, FORMAT_HINT, 'the header hint is only for malformed headers');
+
   const missing = spawnSync(process.execPath, [script, '--format-only', path.join(dir, 'absent.md')], { encoding: 'utf8' });
   assert.equal(missing.status, 2, missing.stdout + missing.stderr);
   assert.match(missing.stderr, /cannot read .*absent\.md/);

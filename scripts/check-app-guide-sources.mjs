@@ -317,7 +317,7 @@ function main() {
     if (result.errors.length > 0) {
       for (const error of result.errors) console.error(error);
       console.error(`app-guide-sources: ${result.errors.length} Sources problem(s) among ${result.scope}`);
-      if (result.formatErrors > 0) console.error(FORMAT_HINT);
+      if (result.errors.some(error => error.includes('malformed Sources comment'))) console.error(FORMAT_HINT);
       if (result.errors.length > result.formatErrors) console.error(MISSING_HINT);
       return 1;
     }
