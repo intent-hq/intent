@@ -1762,7 +1762,7 @@ interface NorthflankEntrySettings {
 | `projectId` | Required to create. A Northflank id: 3-100 bytes of letters, digits and single hyphens. Changing it while the entry has any sandbox is `-32602` `machine-in-use` with `runningAgents`. |
 | `plans` | A partial map from size to plan id. A given size replaces its plan; the other sizes keep theirs. A size that Northflank entries do not offer is `-32602` `invalid-params`. |
 | `image` | An image repository without tag or digest, pulled without credentials (a public image). The backend appends `:<intentdVersion>`. |
-| `diskGiB` | 5-500, default 20. It applies to new services only, because Northflank cannot make a volume smaller. |
+| `diskGiB` | 6-500, default 20; Northflank makes no volume under 6 GiB, so a smaller value is `-32602` `invalid-params`, and an entry saved with less reports and gets 6. It applies to new services only, because Northflank cannot make a volume smaller. |
 
 `region` is not a parameter: the backend reads it from the project. To run in
 another region, the owner makes another Northflank project and entry.
