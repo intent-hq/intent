@@ -9,9 +9,9 @@
 // desktop "Starting intentd" screen the app did not have (fixed by
 // intentd#2831).
 //
-// Reads git objects only (`git ls-tree`, `git cat-file`), never a component's
-// working tree and never its code, so an upstream PR checkout cannot change
-// what runs.
+// Reads git objects only (`git ls-tree`, `git cat-file`) plus the checked-out
+// guide text for the format parse below, and never runs a component's code, so
+// an upstream PR checkout cannot change what runs.
 //
 // Monorepo mode (default) resolves each component at its recorded gitlink and
 // fails on any missing citation. `--upstream` (the component consumer job)
@@ -21,8 +21,15 @@
 // warns: either the intentd PR documents a frontend change that has not been
 // pinned yet, or the frontend PR removes a cited file before the guide
 // follows. The auto/submodule-bump PR runs in monorepo mode and stays strict.
+//
+// Comment format needs no pin, so both modes also parse the checked-out guide
+// file (uncommitted edits included) and fail on its malformed comments: a
+// local run catches a typo before CI does (intentd#3430 lost a CI round to
+// `Sources (Labs device rail, paths relative to ...)`). `--format-only <file>`
+// runs only that parse, with no git: intentd's pr-static job calls it when the
+// guide changes.
 import { execFileSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -235,6 +242,13 @@ export function check({ root, upstream = false }) {
   const { comments, citations, problems } = parseGuide(text);
   const guide = `${guideDir}/${GUIDE_PATH}`;
   const errors = problems.map(({ line, message }) => `${guide}:${line}: error: ${message}`);
+  let formatErrors = problems.length;
+  const checkedOut = readGuide(path.join(root, guide), { optional: true });
+  if (checkedOut !== null && checkedOut !== text) {
+    const local = parseGuide(checkedOut).problems;
+    formatErrors += local.length;
+    errors.push(...local.map(({ line, message }) => `${guide}:${line}: error: ${message} (checked-out file)`));
+  }
   const warnings = [];
   const checked = new Set();
   let skipped = 0;
@@ -255,26 +269,61 @@ export function check({ root, upstream = false }) {
   }
   const pins = Object.entries(revisions).map(([name, rev]) => `${name} ${rev.slice(0, 7)}`).join(' and ');
   const scope = `${citations.length - skipped} citations (${checked.size} files) in ${comments} Sources comments at ${pins}; ${skipped} packages/ios citations skipped`;
-  return { errors, warnings, scope };
+  return { errors, warnings, scope, formatErrors };
 }
+
+function readGuide(file, { optional = false } = {}) {
+  try {
+    return readFileSync(file, 'utf8');
+  } catch (error) {
+    if (optional && error.code === 'ENOENT') return null;
+    throw new CheckError(`cannot read ${file}: ${error.code ?? error.message}`);
+  }
+}
+
+export function checkFormat(file) {
+  const { comments, problems } = parseGuide(readGuide(file));
+  return {
+    errors: problems.map(({ line, message }) => `${file}:${line}: error: ${message}`),
+    warnings: [],
+    scope: `${comments} Sources comments in ${file}`,
+    formatErrors: problems.length,
+  };
+}
+
+const FORMAT_HINT = "hint: a Sources comment starts with 'Sources:' or 'Sources (paths relative to packages/<component>):'; put any other words after the colon, e.g. '<!-- Sources (paths relative to packages/cloudlands-fe): src/a.ts (Labs device rail). -->'.";
+const MISSING_HINT = 'hint: point the comment at the file that implements the behavior, or remove the guide text that describes code the component does not have (fix it in intentd, then let auto-bump-submodules advance the pin).';
 
 function main() {
   const here = fileURLToPath(new URL('../', import.meta.url));
   let values;
   try {
-    ({ values } = parseArgs({ options: { root: { type: 'string' }, upstream: { type: 'boolean', default: false } } }));
+    ({ values } = parseArgs({
+      options: { root: { type: 'string' }, upstream: { type: 'boolean', default: false }, 'format-only': { type: 'string' } },
+    }));
+    if (values['format-only'] !== undefined && (values.upstream || values.root !== undefined)) {
+      throw new Error('--format-only takes no --root or --upstream');
+    }
   } catch (error) {
-    console.error(`app-guide-sources: ${error.message}\nusage: check-app-guide-sources.mjs [--root <monorepo>] [--upstream]`);
+    console.error(`app-guide-sources: ${error.message}\nusage: check-app-guide-sources.mjs [--root <monorepo>] [--upstream] | --format-only <guide.md>`);
     return 2;
   }
   try {
-    const result = check({ root: path.resolve(values.root ?? here), upstream: values.upstream });
+    const formatOnly = values['format-only'] !== undefined;
+    const result = formatOnly
+      ? checkFormat(values['format-only'])
+      : check({ root: path.resolve(values.root ?? here), upstream: values.upstream });
     for (const warning of result.warnings) console.log(`::warning::app-guide-sources: ${warning}`);
     if (result.errors.length > 0) {
       for (const error of result.errors) console.error(error);
-      console.error(`app-guide-sources: ${result.errors.length} broken Sources citation(s) among ${result.scope}`);
-      console.error('hint: point the comment at the file that implements the behavior, or remove the guide text that describes code the component does not have (fix it in intentd, then let auto-bump-submodules advance the pin).');
+      console.error(`app-guide-sources: ${result.errors.length} Sources problem(s) among ${result.scope}`);
+      if (result.formatErrors > 0) console.error(FORMAT_HINT);
+      if (result.errors.length > result.formatErrors) console.error(MISSING_HINT);
       return 1;
+    }
+    if (formatOnly) {
+      console.log(`app-guide-sources: format ok, ${result.scope} (cited files are checked at the pins by 'make check-app-guide-sources')`);
+      return 0;
     }
     console.log(`app-guide-sources: ok, ${result.scope}${result.warnings.length ? `; ${result.warnings.length} upstream warning(s)` : ''}`);
     return 0;

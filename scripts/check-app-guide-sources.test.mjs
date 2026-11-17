@@ -178,10 +178,10 @@ test('reads the pinned commit, not the working tree or a newer checkout HEAD', t
   assert.doesNotMatch(upstream.stdout, /::warning::/, 'upstream mode reads the checkout HEAD');
 });
 
-test('reads the guide from the intentd pin', t => {
+test('checks citations of the guide at the intentd pin, not the checked-out edit', t => {
   const fx = fixture(t, { guide: GOOD, ...GOOD_FILES });
   fx.write(fx.intentd, GUIDE, `${GOOD}<!-- Sources: packages/cloudlands-fe/src/nope.ts. -->\n`);
-  assert.equal(checkAt(fx.root).status, 0, 'an unpinned guide edit is not checked in monorepo mode');
+  assert.equal(checkAt(fx.root).status, 0, 'a well-formed unpinned edit is not checked for missing files');
 });
 
 test('a missing component commit is a usage error naming the fix', t => {
@@ -211,4 +211,53 @@ test('a missing guide is reported as such', t => {
   const result = checkAt(fx.root, '--upstream');
   assert.equal(result.status, 2, result.stdout + result.stderr);
   assert.match(result.stderr, /assistant-app-guide\.md is missing at intentd [0-9a-f]{7}/);
+});
+
+// intentd#3430: this header passed a local run (the guide was read at the pin)
+// and failed CI a round later.
+const MALFORMED = '<!-- Sources (Labs device rail, paths relative to packages/cloudlands-fe): src/one.ts. -->\n';
+const FORMAT_HINT = /hint: a Sources comment starts with 'Sources:' or 'Sources \(paths relative to packages\/<component>\):'/;
+
+test('a malformed Sources note in the checked-out guide fails before the pin moves', t => {
+  for (const args of [[], ['--upstream']]) {
+    const fx = fixture(t, { guide: GOOD, ...GOOD_FILES });
+    fx.write(fx.intentd, GUIDE, `${GOOD}${MALFORMED}`);
+    const result = checkAt(fx.root, ...args);
+    assert.equal(result.status, 1, `${args}: ${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /assistant-app-guide\.md:3: error: malformed Sources comment.*\(checked-out file\)$/m);
+    assert.match(result.stderr, FORMAT_HINT);
+    assert.doesNotMatch(result.stderr, /point the comment at the file/, 'no missing-file hint for a format problem');
+  }
+});
+
+test('a malformed note at the pin is reported once, not again for an identical checkout', t => {
+  const { root } = fixture(t, { guide: `${GOOD}${MALFORMED}`, ...GOOD_FILES });
+  const result = checkAt(root);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.equal(result.stderr.match(/malformed Sources comment/g).length, 1, result.stderr);
+});
+
+test('--format-only parses one file without git or pins', t => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'app-guide-format-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'guide.md');
+
+  writeFileSync(file, `${GOOD}<!-- Sources: packages/cloudlands-fe/src/not-checked.ts. -->\n`);
+  const ok = spawnSync(process.execPath, [script, '--format-only', file], { encoding: 'utf8' });
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+  assert.match(ok.stdout, /^app-guide-sources: format ok, 3 Sources comments in .*guide\.md/m);
+
+  writeFileSync(file, `${GOOD}${MALFORMED}<!-- Sources: src/bare.ts. -->\n`);
+  const bad = spawnSync(process.execPath, [script, '--format-only', file], { encoding: 'utf8' });
+  assert.equal(bad.status, 1, bad.stdout + bad.stderr);
+  assert.match(bad.stderr, /guide\.md:3: error: malformed Sources comment/);
+  assert.match(bad.stderr, /guide\.md:4: error: unqualified path 'src\/bare\.ts'/);
+  assert.match(bad.stderr, FORMAT_HINT);
+
+  const missing = spawnSync(process.execPath, [script, '--format-only', path.join(dir, 'absent.md')], { encoding: 'utf8' });
+  assert.equal(missing.status, 2, missing.stdout + missing.stderr);
+  assert.match(missing.stderr, /cannot read .*absent\.md/);
+
+  const both = spawnSync(process.execPath, [script, '--format-only', file, '--upstream'], { encoding: 'utf8' });
+  assert.equal(both.status, 2, both.stdout + both.stderr);
 });
