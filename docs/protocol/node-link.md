@@ -4761,7 +4761,11 @@ interface MachineCapabilities {
   launch status and `modelsStale: true`)
   and sends an unsolicited
   `capabilitiesReply` on every live backend link, then refreshes the full
-  report (models and sign-in probes) and pushes again. The backend handles an
+  report (models and sign-in probes) and pushes again. Its background refresh
+  (right after a backend is first given access, then every 10 minutes) pushes
+  the same way whenever it changes the provider list, so the first full report
+  replaces the primed one (launch statuses, `models: []`, `modelsStale: true`)
+  without waiting for the backend's next request. The backend handles an
   uncorrelated `capabilitiesReply` exactly like a requested one: it stores the
   report and announces the machine's change. This adds no frame type and no
   nodeProtocol version. An older machine does not push; the backend picks the
