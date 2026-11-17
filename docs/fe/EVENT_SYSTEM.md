@@ -1,7 +1,7 @@
 # Event System Architecture
 
 **Version**: 3.0
-**Date**: 2026-03-25
+**Date**: 2026-11-17
 **Purpose**: Comprehensive guide to the Redux-based event system
 
 ## Overview
@@ -71,25 +71,20 @@ The DomainEvents broadcast layer (`domain-events` actions and sagas under `src/s
 | Daemon events bridge | `features/events/daemon-events-bridge.client.ts` | Routes daemon events into renderer Redux |
 | workspace-events slice | `store/renderer/slices/workspace-events/` | Event state management |
 | agent-subscription-ui slice | `store/renderer/slices/agent-subscription-ui/` | Agent event filter state |
-| EventFilterEngine | `features/events/event-filter-engine.ts` | Pure filter matching logic |
-| agent-subscription-ops | `features/events/main/agent-subscription-ops.ts` | Agent subscription operations |
+| Agent subscription state | `features/events/main/agent-subscription-state.service.ts` | Agent subscription canonical state |
 
 ## Emitting Events
 
-Main-process event emission via `mainDispatch` no longer does anything: `src/store/main/redux-store-bridge.ts` is neutralized (the main-process Redux store was removed; `mainDispatch` is a no-op that returns the action unchanged). Events originate from the intentd daemon and reach the renderer through the daemon events bridge (`src/features/events/daemon-events-bridge.client.ts`).
+The main process does not emit workspace events (the main-process Redux store and its `mainDispatch` bridge were removed). Events originate from the intentd daemon and reach the renderer through the daemon events bridge (`src/features/events/daemon-events-bridge.client.ts`).
 
 ## IPC Channels
 
-All event IPC channels are defined in `src/shared/ipc-registry.ts`:
+Event IPC channels are defined in `src/shared/ipc-registry.ts`. The main process handles only these two (`features/events/main/events.ipc.ts`); the other `EVENTS` registry entries have no handler:
 
 | Channel | Purpose |
 |---------|---------|
 | `events:emit` | Emit event from renderer |
-| `events:subscribe` | Subscribe to events |
-| `events:unsubscribe` | Unsubscribe from events |
-| `events:query` | Query events with filters |
-| `events:getLastEvent` | Get last event of type |
-| `events:getStatistics` | Get event statistics |
+| `events:get-agent-subscriptions` | Read agent subscription state |
 
 ## Data Flow: File Change Event
 
@@ -106,11 +101,6 @@ Change detection is daemon-owned (the FE change-tracking subsystem — ChangeDet
    ↓
 5. UI components update via Redux selectors
 ```
-
-## Best Practices
-
-1. **Import pure utilities from features/events**: EventFilterEngine
-2. **Use EventFilterBuilder**: For type-safe filter construction
 
 ## Configuration
 
@@ -145,7 +135,7 @@ window.webContents.send('agent:deleted', event);
 // Renderer receives via listenSync:
 // { payload: { type: 'agent:deleted', id: '...', data: { agentId, agentName } } }
 ```
-(Historically these events were dispatched through the main-process Redux store via `mainDispatch(emitWorkspaceEvent(...))`; that store has been removed and `mainDispatch` is now a no-op.)
+(Historically these events were dispatched through the main-process Redux store via `mainDispatch(emitWorkspaceEvent(...))`; that store and `mainDispatch` have been removed.)
 
 ### The `listenSync` Wrapping
 
