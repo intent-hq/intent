@@ -4847,20 +4847,22 @@ delays, changes or reorders them, and it adds no frame type.
 ### Cloud machines
 
 A [cloud machine](./methods/nodes.md#cloud-machines-e2b) is a machine the
-backend starts itself in an E2B sandbox or a
-[Northflank service](./methods/nodes.md#cloud-machines-on-northflank). It uses
+backend starts itself in an E2B sandbox, a
+[Northflank service](./methods/nodes.md#cloud-machines-on-northflank) or an
+[Agent37 instance](./methods/nodes.md#cloud-machines-on-agent37). It uses
 this link unchanged: there is no new nodeProtocol, frame, path or route type,
 and the machine daemon offers the same range as any daemon of its version.
 Only the way the machine is enrolled, reached and resumed differs.
 
-1. **Fresh identity.** The template that E2B starts, and the image that
-   Northflank starts, never ran intentd, so they hold no daemon id, certificate
+1. **Fresh identity.** The templates that E2B and Agent37 start, and the
+   image that Northflank starts, never ran intentd, so they hold no daemon id, certificate
    or tailcat key. intentd first starts in each new sandbox and makes its own.
    Two sandboxes never share an identity. A Northflank machine keeps its
    identity on its volume across a pause and a resume.
 2. **Enrollment.** In place of the frontend relay of the expose flow, the
    backend uses the provider's authenticated command API as the owner channel
-   (E2B's process API, or Northflank's command execution API): it
+   (E2B's process API, Northflank's command execution API, or Agent37's exec
+   API): it
    starts `intentd serve` with the tunnel on (the image only idles), then runs `executor.mint` over
    the sandbox's local socket with the backend's `remoteMachines.backendInfo`
    values. The token goes straight into the backend secret store and never
@@ -4869,7 +4871,7 @@ Only the way the machine is enrolled, reached and resumed differs.
 3. **Route.** The backend dials only the tailcat route (`tcAddress`; `hosts`
    is empty). It never uses E2B's public sandbox URL: E2B ends TLS at its
    proxy, so the certificate pin would fail there. A Northflank service opens
-   no port. The sandbox accepts no public traffic.
+   no port, and an Agent37 instance gets no port URL or public port. The sandbox accepts no public traffic.
 4. **Provider sign-in.** A sandbox has no sign-in of its own. Every launch on
    a cloud machine carries a [`profileEnv`](#provider-credentials-profile-environment);
    placement refuses one that would not (`cloud-profile-required`).
@@ -4887,6 +4889,10 @@ Only the way the machine is enrolled, reached and resumed differs.
    in the same notice as any `unapplied/<sha>` notice of a
    [relaunch without a checkout](#relaunch-without-a-checkout). It needs no nodeProtocol: a machine from
    before ignores the member and starts the agent with no notice.
+   On Agent37, a wake that restores the memory checkpoint is like an E2B
+   resume, and a wake that boots fresh is like a Northflank resume, with
+   `resumedFromDisk: true`
+   ([Agent37 sleep and wake](./methods/nodes.md#agent37-sleep-and-wake)).
 6. **Deletion.** The backend deletes the sandbox only after the agent's
    [final stop](#final-stop-nodeprotocol-9) is acknowledged, or after its wait
    ends. Deleting the sandbox also removes the credential, certificate and
