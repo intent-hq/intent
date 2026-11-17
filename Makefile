@@ -216,9 +216,11 @@ check-app-ui-targets: ## Check Assistant navigation against the frontend registr
 # objects only; packages/ios citations are skipped). The upstream consumer job
 # sets CHECK_APP_GUIDE_SOURCES_UPSTREAM=1: each checkout's HEAD is read, and a
 # missing cloudlands-fe file only warns there (docs leading or trailing the
-# pin); the auto/submodule-bump PR stays strict.
+# pin); the auto/submodule-bump PR stays strict. Both modes also parse the
+# checked-out guide (uncommitted edits included) and fail on malformed
+# comments; intentd's pr-static job runs that parse alone (--format-only).
 CHECK_APP_GUIDE_SOURCES_UPSTREAM ?=
-check-app-guide-sources: ensure-intentd-submodule ensure-fe-submodule ## Check that the assistant app guide's Sources comments cite files present at the pinned components (CHECK_APP_GUIDE_SOURCES_UPSTREAM=1 reads checkout HEADs and warns for cloudlands-fe)
+check-app-guide-sources: ensure-intentd-submodule ensure-fe-submodule ## Check that the assistant app guide's Sources comments are well formed in the checked-out guide and cite files present at the pinned components (CHECK_APP_GUIDE_SOURCES_UPSTREAM=1 reads checkout HEADs and warns for cloudlands-fe)
 	@node scripts/check-app-guide-sources.mjs $(if $(filter 1,$(CHECK_APP_GUIDE_SOURCES_UPSTREAM)),--upstream)
 
 check-doc-links: ## Check agent-facing Markdown links, paths, and heading anchors (CI: repo-hygiene without submodules, docs-check with the component pins)
