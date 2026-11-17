@@ -1424,6 +1424,28 @@ surface counts are unchanged, and no `AgentLite` or `Workspace` field is added.
 The public protocol version is unchanged; clients detect Northflank only
 through the flag.
 
+**Agent37 cloud machines — `"agent37"` in `providerKinds` (additive).**
+`CloudProviderKind` adds `"agent37"`, so an entry's `provider` (and
+`cloud.provider`, and `provider` on the three cloud error datas) can be
+`"agent37"`. An [Agent37 entry](./methods/nodes.md#cloud-machines-on-agent37)
+starts one Agent37 instance per sandbox, of the entry's instance type
+(`default` or `vm`) and region (`us`, or `eu` and `ap-south` for `vm`), from a
+template the backend imports once per intentd version. New optional members:
+`cloudMachines.configure` `provider: "agent37"` and the Agent37-only
+`instanceType`, `region` and `diskGiB` (`apiKey` and `apiKeyFrom` carry the
+Agent37 API key); `CloudMachineProvider.agent37` (`instanceType`, `region`,
+`diskGiB`); the sizes `"4x16"` and `"4x32"` (Agent37 only); and the
+`cloud-machine-unavailable` reason `no-capacity`. An Agent37 machine pauses
+with an Agent37 sleep, which usually keeps memory; a wake that boots fresh
+relaunches the agents with the disk resume notice, as on Northflank. The
+backend advertises Agent37 only by listing it in `providerKinds`, which
+needs `cloudMachineProviders: 1`; no flag is added. Clients that do not know
+`"agent37"` skip its entries and show its machine rows without provider
+details, as for any unknown kind. No method or event is added or renamed, so
+the method and event catalogs and the surface counts are unchanged, and no
+`AgentLite` or `Workspace` field is added. The public protocol version is
+unchanged.
+
 **Secrets for remote agents — nodeProtocol 14 (additive result fields and error code; no method-catalog change, so no version bump).**
 A remote top-level agent can now request and use secrets
 ([§5.56 remote agents](./methods/secrets.md#remote-agents)). Its

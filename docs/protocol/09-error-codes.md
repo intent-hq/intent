@@ -243,7 +243,10 @@ the other reasons (`api-error`, `template-missing`, `bootstrap-failed`,
 (`cloudMachineProviders: 1`), `provider` in all three datas can be
 `"northflank"`, and `cloud-machine-unavailable` adds the `-32602` reasons
 `project-missing` and `permission-denied` (data adds `action`). After a placement reply the same codes arrive as the agent's
-`placementError.code`. No error carries the E2B key or the Northflank token.
+`placementError.code`. With [Agent37 entries](./methods/nodes.md#cloud-machines-on-agent37)
+(`"agent37"` in `providerKinds`), `provider` can be `"agent37"`, and
+`cloud-machine-unavailable` adds the `-32603` reason `no-capacity` (Agent37 had
+no room in the entry's region; retryable). No error carries a provider key or token.
 
 ### Truncated note read errors
 

@@ -1052,7 +1052,7 @@ machines** of that base provider, in the saved profile order, instead:
   of the provider as candidates (their CLI must be installed); it chooses a
   machine as usual; **then**, if the chosen machine is signed out, the profile is
   sent ([placement across machines](./nodes.md#placement-across-machines), step 5);
-- on a [cloud machine](./nodes.md#placement-on-e2b) (E2B or Northflank), which has no sign-in; there the profile
+- on a [cloud machine](./nodes.md#placement-on-e2b) (E2B, Northflank or Agent37), which has no sign-in; there the profile
   must also send a set variable.
 
 A machine whose sign-in is `signed-in` or `unknown` runs the Default on its own
@@ -1076,7 +1076,7 @@ was `unknown` and then fails on authentication reports `node-provider-signed-out
 ([machine codes](../node-link.md#machine-start-failure-codes)).
 
 There is no setting to stop a machine using its own sign-in. On
-[cloud machines](./nodes.md#placement-on-e2b) (E2B and Northflank) the CLIs are never signed in, so only the
+[cloud machines](./nodes.md#placement-on-e2b) (E2B, Northflank and Agent37) the CLIs are never signed in, so only the
 second rule applies. Providers without profiles have only the first.
 
 #### Compatibility
