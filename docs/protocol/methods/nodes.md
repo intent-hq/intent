@@ -2330,20 +2330,26 @@ agent uses:
 | `"failed"` | The open failed (`error`, for example `node-checkout-failed: …`, or the machine could not be reached), or the setup script failed (`exitCode`, or `error` such as `node-setup-timeout: …`). |
 
 1. **When.** An exposed machine's home gets `setup: { state: "pending" }`
-   when `workspace.create` records it. A failed open is tried again at the
-   machine's next bind, which makes it `"pending"` again. A home whose open
-   answered `ready` for a checkout the machine already held, and a cloud
-   home (its start is `state: "starting"`, see [cloud homes](#cloud-homes)),
-   have no `setup`.
-2. **Not persisted.** The backend keeps `setup` in memory for the home's
-   `homeId`: it is absent after a backend restart and for a new home after a
-   move.
-3. **Output.** `workspace.get` adds `output` (the last 256 KiB of checkout
+   when `workspace.create` records it. A cloud home has no `setup`: its start
+   is `state: "starting"` (see [cloud homes](#cloud-homes)).
+2. **Failed opens.** An open that fails, or whose answer the backend does not
+   get (no link, a timeout), is `failed` with its `error`. The machine may
+   still have made the checkout, so its `setupStarted` and `setupFinished`
+   records still move `setup` on. The open is tried again at the machine's
+   next bind, which makes `setup` `"pending"` again; when the machine answers
+   `ready` without sending checkout output (it already held the checkout), the
+   home is `"completed"`.
+3. **Not persisted.** The backend keeps `setup` in memory for the home's
+   `homeId`: it is absent after a backend restart, for a new home after a
+   move, and is dropped when the workspace is archived or deleted.
+4. **Output.** `workspace.get` adds `output` (the last 256 KiB of checkout
    and setup output) and `outputTruncated`; list rows and `workspace:updated`
-   omit both. The backend publishes `workspace:updated { changes: { home } }`
-   on every `setup.state` change and, while output arrives, at most once
-   every 2 s; a client showing the output reads `workspace.get` again.
-4. **Not a home state.** `setup` does not change `state`: files, terminals
+   omit both. A `completed` or `skipped` home keeps no output. The backend
+   publishes `workspace:updated { changes: { home } }` on every `setup.state`
+   change and, while output arrives, at most once every 2 s (and once more
+   after the last output); a client showing the output reads `workspace.get`
+   again.
+5. **Not a home state.** `setup` does not change `state`: files, terminals
    and scripts follow `state` as before. A failed setup script leaves the
    home `"attached"` and starts no `autoStart` scripts.
 
