@@ -2256,7 +2256,7 @@ workspace's files runs there, not on the orchestrator:
 | --- | --- |
 | Terminals (`terminal.create` / `write` / `resize` / `kill` / `getBuffer` / `list` / `readOutput`) | A PTY on the home, in the home checkout, over the [terminal channel](../node-link.md#terminals-on-the-home). Buffers and multi-client attach are kept on the orchestrator. |
 | Saved scripts started by the app or a hook (home runs), `autoStart` | Runs on the home, in the home checkout ([home runs](../node-link.md#home-runs-and-setup)). `script.*` results, output logs and monitors stay on the orchestrator. |
-| The workspace setup script | Runs on the home when its home checkout is made; progress is the workspace's `workspace:setup:*` status. |
+| The workspace setup script | Runs on the home when its home checkout is made; progress is the home's `setup` ([opening the home](#opening-the-home)). |
 | File, git, change-tracking and search reads and writes | [Home calls](../node-link.md#files-and-git-on-the-home) to the home checkout, for the methods listed there. |
 | `host.exec` / `host.execStream` from the app or a hook | `host.exec` is a home call; `host.execStream` is an exec stream on the terminal channel. A remote agent's own `host.exec` already runs on its machine. |
 
@@ -2307,11 +2307,45 @@ interface WorkspaceHome {
   since: string;                   // when `state` last changed
   lastBackupAt?: string;           // the last push of home/head or home/wip the orchestrator holds
   backupWarning?: boolean;         // true once backups have failed for 15 minutes
+  setup?: RemoteSetupStatus;       // opening the home checkout on its machine (below)
 }
 ```
 
 `home` is on `workspace.get` and list rows. Changes arrive as the existing
 `workspace:updated` event with `changes: { home }`; there is no new event.
+
+###### Opening the home
+
+*(Additive, docs first.)* `workspace.create` returns once the home is
+recorded; its machine then opens the home checkout in the background
+(fetch, checkout, then the workspace setup script). `home.setup` reports
+that open with the [`RemoteSetupStatus`](#prepared-checkout) shape a remote
+agent uses:
+
+| `state` | Meaning |
+| --- | --- |
+| `"pending"` | The machine is fetching and making the home checkout. |
+| `"running"` | The workspace setup script runs in the home checkout (`startedAt`). |
+| `"completed"` / `"skipped"` | The home is ready (`skipped`: the workspace has no setup script). |
+| `"failed"` | The open failed (`error`, for example `node-checkout-failed: …`, or the machine could not be reached), or the setup script failed (`exitCode`, or `error` such as `node-setup-timeout: …`). |
+
+1. **When.** An exposed machine's home gets `setup: { state: "pending" }`
+   when `workspace.create` records it. A failed open is tried again at the
+   machine's next bind, which makes it `"pending"` again. A home whose open
+   answered `ready` for a checkout the machine already held, and a cloud
+   home (its start is `state: "starting"`, see [cloud homes](#cloud-homes)),
+   have no `setup`.
+2. **Not persisted.** The backend keeps `setup` in memory for the home's
+   `homeId`: it is absent after a backend restart and for a new home after a
+   move.
+3. **Output.** `workspace.get` adds `output` (the last 256 KiB of checkout
+   and setup output) and `outputTruncated`; list rows and `workspace:updated`
+   omit both. The backend publishes `workspace:updated { changes: { home } }`
+   on every `setup.state` change and, while output arrives, at most once
+   every 2 s; a client showing the output reads `workspace.get` again.
+4. **Not a home state.** `setup` does not change `state`: files, terminals
+   and scripts follow `state` as before. A failed setup script leaves the
+   home `"attached"` and starts no `autoStart` scripts.
 
 ###### The home checkout
 
