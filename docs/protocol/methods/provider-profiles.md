@@ -452,13 +452,17 @@ existing profiles are not silently degraded.
 <a id="codex-api-key"></a>**Codex API key.** *(Additive.)* Codex ignores an API key
 that is only in its environment. A Codex profile that sets a non-empty `CODEX_API_KEY`
 and no `CODEX_HOME` therefore runs in its own Codex home on the host that runs the
-provider, `~/.intent/codex-api-key/<profileId>`, and the launch sets
+provider (this daemon for a local launch, the node for a remote one):
+`~/.intent/codex-api-key/<profileId>-<key digest>`, where the digest is the first 16 hex
+characters of the key's SHA-256. The launch also sets
 `DEFAULT_AUTH_REQUEST={"methodId":"api-key"}`, so the Codex ACP adapter signs that home
-in with the key when it has no login. The home persists, so sessions resume. When the
-key changes, the home's stored login is removed and the new key signs in. The user's own
-`~/.codex` login is never read or replaced. `host.providerAuthStatus` reports such a
-profile `authenticated: true` without running `codex login status`. Clients save this
-kind with `CODEX_API_KEY` set and `CODEX_ACCESS_TOKEN` and `OPENAI_API_KEY` unset.
+in with the key when it has no login. Both entries are added at launch only, after the
+profile is read; they are never saved and do not make the profile an account-folder
+configuration. The home persists, so sessions resume; a changed key gets a new home, so
+a login for an older key is never used. The user's own `~/.codex` login is never read or
+replaced. A local `host.providerAuthStatus` probe reports such a profile
+`authenticated: true` without running `codex login status`. Clients save this kind with
+`CODEX_API_KEY` set and `CODEX_ACCESS_TOKEN` and `OPENAI_API_KEY` unset.
 `OPENAI_API_KEY` alone keeps today's behaviour.
 
 **Delete blocking.** `delete` refuses while a saved setting explicitly selects the
