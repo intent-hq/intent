@@ -2738,7 +2738,7 @@ Heavy block bodies follow the slim projection's previews and flags; read a whole
 
 #### Prompt breakdown
 
-*(Additive; recorded for harness 3.10, 3.12 and 3.13.)* `agent.getSession` adds a
+*(Additive; recorded for harness 3.10, 3.12, 3.13 and 3.14.)* `agent.getSession` adds a
 top-level `promptBreakdown` field: what Intent put into the agent's context, by section.
 It is served on `agent.getSession` only. `agent.get`, `agent.list` rows and the agent
 collection channel never carry it. Clients older than this field ignore it.
@@ -2788,7 +2788,7 @@ interface HiddenSkill {
    available" from an absent field:
    1. `harness-predates-breakdown`: the session's `harnessVersion` is not one the
       daemon admits. The daemon admits versions by name: 3.10 (eval-only), 3.12,
-      which releases the breakdown, and 3.13, which keeps it. Released 3.11 only
+      which releases the breakdown, and 3.13 and 3.14, which keep it. Released 3.11 only
       corrects visual guidance and records none. Each later version is admitted
       explicitly, so a client must not infer availability from a version number.
       The wire reason retains its original name. The daemon never computes a
