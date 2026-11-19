@@ -20,6 +20,11 @@ outputs, so fixture tests behave as under `make test-select`. It never reads
 or writes the resume journal or completion markers: a stress pass is not
 evidence that `RESUME=1 make test` may skip a test.
 
+A filter that selects no runnable test fails before the run (exit 4), naming
+the FEATURES knob: a test behind a Cargo feature (the Postgres store tests are
+behind intent-store/postgres) compiles to an empty binary without it, and a
+stress run of nothing once "passed".
+
 Output and a summary are kept under CACHE_DIR/stress/<id>/ (output.log,
 summary.txt, summary.json); the id directory is removed after seven days.
 """
@@ -32,6 +37,7 @@ import os
 from pathlib import Path
 import random
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -172,6 +178,14 @@ def summary_line(label: str, counts: dict[str, object], conditions: str, status:
 # The run's failures and passes are not evidence: the advertised load or
 # stalls did not hold.
 INVALID_EXIT = 3
+# The filter selected no runnable test (nextest's own exit code for an empty run).
+NO_TESTS_EXIT = 4
+
+
+def selected_tests(listing: str, gate) -> int:
+    """Runnable tests (matched, not skipped as ignored) in a `nextest list` JSON listing."""
+    members, _ = gate.inventory(listing)
+    return sum(1 for meta in members.values() if meta["active"] and not meta["skipped"])
 PR_SET_PDEATHSIG = 1
 
 
@@ -613,7 +627,7 @@ def run_stress(args, gate) -> int:
     repo_root = Path(args.repo_root).resolve()
     intentd_dir = (repo_root / args.intentd_dir).resolve()
     stress_dir = Path(args.cache_dir).expanduser().resolve() / "stress"
-    selection = ["--workspace", "-E", args.filterset]
+    selection = gate.filterset_selection(args.filterset, getattr(args, "features", None))
     host = host_load.check()
     if host:
         print(host_load.warning(host, label), flush=True)
@@ -649,11 +663,20 @@ def run_stress(args, gate) -> int:
                 raise RuntimeError("this cargo-nextest has no --stress-count; "
                                    "run 'cargo install cargo-nextest --locked' to upgrade")
             # Build (and list) before any load starts, so the load only slows the tests.
-            gate.run(["cargo", "nextest", "list", *selection, "--build-jobs", args.build_jobs,
-                      "--message-format", "json", *cargo_config, *output_args], intentd_dir, env)
+            listing = gate.run(["cargo", "nextest", "list", *selection, "--build-jobs", args.build_jobs,
+                                "--message-format", "json", *cargo_config, *output_args], intentd_dir, env)
+            selected = selected_tests(listing, gate)
+            if not selected:
+                print(f"[{label}] ERROR: {shlex.join(selection)} matched no runnable tests, so there is "
+                      f"nothing to stress; {gate.NO_MATCH_HINT}", file=sys.stderr, flush=True)
+                status = NO_TESTS_EXIT
+                return status
+            print(f"[{label}] selected {selected} test{'' if selected == 1 else 's'}", flush=True)
             command = [
                 "cargo", "nextest", "run", *selection,
                 "--retries", "0", "--stress-count", str(args.stress_count), "--no-fail-fast",
+                # Never let NEXTEST_NO_TESTS or a profile turn an empty run into a pass.
+                "--no-tests", "fail",
                 "--failure-output", "immediate", "--success-output", "never",
                 # The tally counts one status line per run: never let the
                 # environment or a profile hide PASS lines.
@@ -692,6 +715,9 @@ def run_stress(args, gate) -> int:
             counts = tally.counts()
             if status == 0 and counts["failed"]:
                 status = 1
+            if status == 0 and not counts["tests"]:
+                # The listing matched tests but no run reported a status line.
+                status = NO_TESTS_EXIT
             line = summary_line(label, counts, f"{load}, {stall.describe() if stall else 'STALL=0'}", status,
                                 host)
             invalid = False

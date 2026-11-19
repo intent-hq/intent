@@ -1705,6 +1705,27 @@ class ResumableNextestTests(unittest.TestCase):
             record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
             self.assertFalse((record_dir / "complete").exists())
 
+    def test_empty_selection_fails_even_when_nextest_lets_it_pass(self):
+        # NEXTEST_NO_TESTS=pass (or a profile) relaxes nextest's empty-run
+        # failure; a selection that matched nothing must still fail, naming the
+        # FEATURES knob (the Postgres store tests are empty without
+        # intent-store/postgres).
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = PlannedRunHarness(root, [([], 0)])
+            harness.listing = self._filtered_listing({
+                "unrelated": {"ignored": False, "filter-match": {"status": "mismatch", "reason": "expression"}},
+            })
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(harness.execute(make_args(root)), 4)
+            self.assertIn("matched no tests", stderr.getvalue())
+            self.assertIn("FEATURES=intent-store/postgres", stderr.getvalue())
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            self.assertFalse((record_dir / "complete").exists())
+            run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
+            self.assertEqual((run_record["exit_code"], run_record["results"][0]["exit_code"]), (4, 4))
+
     def test_filter_matching_nothing_fails_despite_ignored_tests(self):
         # Regression (intentd#2941): nextest reports every #[ignore] test as
         # mismatch reason "ignored" before evaluating the filter, so a filter
@@ -3440,6 +3461,28 @@ class FilterSelectionTests(unittest.TestCase):
         self.assertEqual(gate.split_plans(args.plan), [["--workspace", "-E", self.EXPRESSION]])
         self.assertEqual(args.label, "test-select")
 
+    def test_features_join_the_one_workspace_plan(self):
+        for value, expected in (("intent-store/postgres", "intent-store/postgres"),
+                                (" intent-store/postgres,  alpha/x ", "intent-store/postgres,alpha/x"),
+                                ("a b", "a,b")):
+            with self.subTest(value=value):
+                args = self.parse("--label", "test-select", "--filterset", self.EXPRESSION, "--features", value)
+                self.assertEqual(gate.split_plans(args.plan),
+                                 [["--workspace", "--features", expected, "-E", self.EXPRESSION]])
+        args = self.parse("--filterset", self.EXPRESSION)
+        self.assertNotIn("--features", gate.split_plans(args.plan)[0])
+
+    def test_features_need_a_filterset_and_valid_names(self):
+        for argv, message in ((["--features", "intent-store/postgres"], "--features needs --filterset"),
+                              (["--filterset", "all()", "--features", "x'; touch pwned"], "Cargo features"),
+                              (["--filterset", "all()", "--features", " , "], "Cargo features"),
+                              (["--filterset", "all()", "--features=--all-features"], "Cargo features")):
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()) as stderr:
+                with self.assertRaises(SystemExit) as refused:
+                    self.parse(*argv)
+                self.assertEqual(refused.exception.code, 2)
+                self.assertIn(message, stderr.getvalue())
+
     def test_filterset_refuses_plan_and_blank_expression(self):
         for argv in (["--filterset", "all()", "--plan", "-p alpha"], ["--filterset", ""],
                      ["--filterset", "  "]):
@@ -4988,6 +5031,12 @@ class StaleExecutableTests(unittest.TestCase):
         self.assertTrue(gate.whole_workspace([["--workspace", "-E", "test(x)"]]))
         self.assertFalse(gate.whole_workspace([["--workspace", "-p", "alpha"]]))
         self.assertFalse(gate.whole_workspace([["--workspace"], ["--package=alpha", "--workspace"]]))
+        # Extra features build other executables: keep the default build's copies.
+        for selection in (["--workspace", "--features", "a/b", "-E", "all()"],
+                          ["--workspace", "--features=a/b"], ["--workspace", "-F", "a/b"],
+                          ["--workspace", "--all-features"]):
+            with self.subTest(selection=selection):
+                self.assertFalse(gate.whole_workspace([selection]))
 
     def test_pruning_failure_or_interrupt_never_changes_the_recorded_run(self):
         for failure in (RuntimeError("symlink loop"), KeyboardInterrupt(), gate.Terminated("SIGTERM")):

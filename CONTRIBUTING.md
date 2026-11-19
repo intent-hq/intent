@@ -115,6 +115,10 @@ Keep the relevant checks green before opening a PR:
 runs tests only; `make test-changed` selects tests changed against `BASE`
 (default `origin/main`) and falls back to the full suite for build-wide changes;
 `make test-select E='<nextest filterset>'` runs just the matching tests.
+`test-select` and `test-stress` take `FEATURES=<crate>/<feature>` for tests
+behind a Cargo feature, such as `FEATURES=intent-store/postgres` for the
+Postgres store tests, which build as empty binaries without it. Both fail when
+`E` selects no runnable test, and the error names `FEATURES`.
 
 Every Rust gate first prints the intentd tree it tests:
 `[<goal>] testing intentd: <path> <branch>@<sha> (<pin state>, <lag>)`. It stops,

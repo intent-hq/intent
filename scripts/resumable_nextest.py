@@ -51,6 +51,11 @@ not unique coverage totals. A completed shortcut revalidates its execution sourc
 and records that source on the report, including each selection's evidence owner.
 No later invocation repairs unfinished receipts; only tree expiry removes them.
 
+`--features LIST` (make test-select / test-stress FEATURES=...) builds the one
+`--filterset` selection with those Cargo features, e.g. `intent-store/postgres`
+for the feature-gated Postgres store tests; without it they compile to empty
+binaries and the filter matches nothing, which fails the run.
+
 `--stress-count N` (make test-stress) hands one `--filterset` to
 scripts/nextest_stress.py: the same fixtures and Cargo outputs, N iterations with
 retries off, an optional `--load 1` CPU + fsync load confined to `--load-cores`
@@ -1707,10 +1712,38 @@ def apply_storage_policy(output_args: list[str], label: str) -> None:
 
 
 def whole_workspace(selections: list[list[str]]) -> bool:
-    """Whether every selection resolves features like a full `--workspace` build."""
+    """Whether every selection resolves features like a full `--workspace` build.
+
+    Extra Cargo features (FEATURES=...) build different test executables, so
+    such a run must keep the default build's executables, as a package scope does.
+    """
     return all("--workspace" in selection and not any(
-        arg in ("-p", "--package") or arg.startswith(("--package=", "-p"))
+        arg in ("-p", "--package", "-F", "--features", "--all-features")
+        or arg.startswith(("--package=", "-p", "--features=", "-F"))
         for arg in selection) for selection in selections)
+
+
+# Cargo feature names (optionally `package/feature`), separated by commas or spaces.
+FEATURES_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_+./-]*(?:[ ,]+[A-Za-z0-9_][A-Za-z0-9_+./-]*)*")
+
+
+def cargo_features(value: str) -> str:
+    """--features: one Cargo feature list, normalized to comma-separated."""
+    value = value.strip(" ,")
+    if not FEATURES_RE.fullmatch(value):
+        raise argparse.ArgumentTypeError(
+            f"expected Cargo features such as 'intent-store/postgres', got {value!r}")
+    return ",".join(part for part in re.split(r"[ ,]+", value) if part)
+
+
+def filterset_selection(filterset: str, features: str | None = None) -> list[str]:
+    """The one workspace selection for --filterset, with --features when asked."""
+    return ["--workspace", *(["--features", features] if features else []), "-E", filterset]
+
+
+NO_MATCH_HINT = ("check the filter (test names include their module path, "
+                 "e.g. test(=module::name) or test(/name$/)); a test behind a Cargo "
+                 "feature needs it enabled, e.g. FEATURES=intent-store/postgres")
 
 
 def open_paths(candidates: list[Path]) -> set[str] | None:
@@ -2181,11 +2214,16 @@ def run_nextest(args: argparse.Namespace) -> int:
                         count = sum(1 for meta in inventories[index - 1].values() if meta["active"])
                         print(f"[{label}] WARNING: selection {index} matched only skipped/ignored tests "
                               f"({count}); passed with no tests run", file=sys.stderr, flush=True)
+                    if status == 0 and not policy and not outcomes and not any(
+                            meta["active"] for meta in inventories[index - 1].values()):
+                        # nextest fails an empty run by default, but NEXTEST_NO_TESTS or a
+                        # profile can relax that; an empty selection is never a pass here.
+                        status = 4
+                        result["exit_code"] = status
+                        save_receipt()
                     if status != 0 and not any(meta["active"] for meta in inventories[index - 1].values()):
                         print(f"[{label}] ERROR: selection {index} matched no tests: {shlex.join(selection)}; "
-                              "check the filter (test names include their module path, "
-                              "e.g. test(=module::name) or test(/name$/))",
-                              file=sys.stderr, flush=True)
+                              f"{NO_MATCH_HINT}", file=sys.stderr, flush=True)
                     if status != 0:
                         if not no_fail_fast:
                             break
@@ -2343,6 +2381,13 @@ def main() -> int:
         help="run one nextest filterset across the workspace (make test-select E=EXPR); "
         "the same as --plan '--workspace -E EXPR', so it cannot be combined with --plan",
     )
+    parser.add_argument(
+        "--features",
+        type=cargo_features,
+        metavar="LIST",
+        help="Cargo features for the --filterset build (make test-select/test-stress FEATURES=...), "
+        "e.g. 'intent-store/postgres'; needs --filterset",
+    )
     parser.add_argument("--base", metavar="REF", help="base ref recorded in run.json")
     parser.add_argument(
         "--stress-count",
@@ -2369,6 +2414,8 @@ def main() -> int:
     args = parser.parse_args()
     stall_options = args.stall != "0" or args.stall_ms is not None or args.stall_every_ms is not None
     load_options = args.load != "0" or args.load_cpus is not None or args.load_cores is not None
+    if args.features is not None and args.filterset is None:
+        parser.error("--features needs --filterset")
     if args.stress_count is None and (load_options or stall_options):
         parser.error("--load, --load-cpus, --load-cores and the --stall options need --stress-count")
     if args.stress_count is not None:
@@ -2396,7 +2443,7 @@ def main() -> int:
         if not args.filterset.strip():
             parser.error("--filterset needs a nextest filterset expression, e.g. 'test(/name/)'")
         # Quote into the one plan string so split_plans() restores it exactly.
-        args.plan = [shlex.join(["--workspace", "-E", args.filterset])]
+        args.plan = [shlex.join(filterset_selection(args.filterset, args.features))]
     try:
         return run_nextest(args)
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:

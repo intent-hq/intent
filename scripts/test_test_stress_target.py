@@ -56,7 +56,7 @@ class TestStressTargetTests(unittest.TestCase):
     def run_make(self, *arguments, env=None):
         environment = {k: v for k, v in os.environ.items()
                        if k not in {"MAKEFLAGS", "MFLAGS", "MAKELEVEL", "E", "RESUME", "GATE_FORCE",
-                                    "NO_FAIL_FAST", "HERMETIC", "COMPACT", "BUILD_JOBS", "TEST_THREADS",
+                                    "NO_FAIL_FAST", "FEATURES", "HERMETIC", "COMPACT", "BUILD_JOBS", "TEST_THREADS",
                                     "GATE_CACHE_DIR", "COUNT", "LOAD", "LOAD_CPUS", "LOAD_CORES", "STALL", "STALL_MS",
                                     "STALL_EVERY_MS",
                                     "INTENTD_TEST_TIMEOUT_MULTIPLIER"}}
@@ -143,6 +143,22 @@ class TestStressTargetTests(unittest.TestCase):
                 self.assertFalse(self.cargo_log.exists(), "cargo ran before the usage error")
                 self.assertFalse((self.root / "pwned").exists())
 
+
+    def test_features_reach_the_runner_quoted_and_only_from_the_make_line(self):
+        # The Postgres store tests are behind intent-store/postgres; without
+        # FEATURES the filter selects nothing (and the runner fails the run).
+        result, calls = self.run_make("E=test(/one/)", "FEATURES= intent-store/postgres a'b ")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        argv = self.stress_call(calls)["runner"]
+        self.assertEqual(argv[argv.index("--features") + 1], "intent-store/postgres a'b",
+                         "quoted byte-for-byte; the runner validates and normalizes it")
+        for arguments, env in (((), None), ((), {"FEATURES": "intent-store/postgres"}),
+                               (("FEATURES=",), None)):
+            with self.subTest(arguments=arguments, env=env):
+                self.log.unlink(missing_ok=True)
+                result, calls = self.run_make("E=test(/one/)", *arguments, env=env)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn("--features", self.stress_call(calls)["runner"])
 
 if __name__ == "__main__":
     unittest.main()
