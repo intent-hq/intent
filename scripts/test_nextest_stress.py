@@ -722,8 +722,14 @@ class RunStressTests(unittest.TestCase):
         self.assertIn("[test-stress] selected 1 test\n", stdout)
 
     def test_a_clean_exit_without_any_status_line_is_not_a_pass(self):
+        # The listing found a test, so this is not an empty selection: the
+        # status lines went unrecognised, which gets its own exit code.
         status, stdout, _ = self.run_stress("", exit_code=0)
-        self.assertEqual(status, stress.NO_TESTS_EXIT, stdout)
+        self.assertEqual(status, stress.UNPARSED_EXIT, stdout)
+        self.assertNotEqual(stress.UNPARSED_EXIT, stress.NO_TESTS_EXIT)
+        self.assertIn("ERROR: nextest exited 0 but no test status line was recognised "
+                      "(new nextest output format?)", stdout)
+        self.assertNotIn("without a test failure", stdout)
 
     def test_a_parsed_failure_makes_the_exit_non_zero(self):
         status, _, _ = self.run_stress(OUTPUT, exit_code=0)

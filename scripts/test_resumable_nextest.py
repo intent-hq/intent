@@ -3483,6 +3483,105 @@ class FilterSelectionTests(unittest.TestCase):
                 self.assertEqual(refused.exception.code, 2)
                 self.assertIn(message, stderr.getvalue())
 
+    def test_feature_builds_never_share_resume_credit_with_default_builds(self):
+        # Review of intent#9654: TREE/passed.jsonl is shared by every selection
+        # of a tree, so a FEATURES=intent-store/postgres pass credited a later
+        # default RESUME=1 run (and the reverse). Feature builds key a tree of
+        # their own.
+        featured = [gate.shlex.join(gate.filterset_selection("all()", "intent-store/postgres"))]
+
+        def keyed(*_args, features=None, **_kwargs):
+            return hashlib.sha256(json.dumps(features).encode()).hexdigest()
+
+        for first, second in ((featured, None), (None, featured)):
+            with self.subTest(first=first), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                with mock.patch.object(gate, "tree_key", side_effect=keyed), self.fixtures(root):
+                    passed = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+                    self.assertEqual(self.execute_with_real_key(
+                        passed, make_args(root, plan=first, label="test-select")), 0)
+                    resumed = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+                    self.assertEqual(self.execute_with_real_key(
+                        resumed, make_args(root, plan=second, resume="1", label="test-select")), 0)
+                self.assertEqual(len(resumed.run_commands), 1, "the pass was credited across feature sets")
+                self.assertNotIn("resumed: skipped", resumed.stdout.getvalue())
+                self.assertEqual(len(list((root / "cache").iterdir())), 2, "one tree per feature set")
+
+    @staticmethod
+    @contextlib.contextmanager
+    def fixtures(root):
+        environment = {k: v for k, v in os.environ.items() if k != "NODE_OPTIONS"}
+        with mock.patch.dict(os.environ, environment, clear=True), \
+                mock.patch.object(gate, "callback_fixture_identity",
+                                  return_value={"root": str(root / "callback"), "manifest": "verified"}), \
+                mock.patch.object(gate, "transfer_fixture_identity", return_value={"root": str(root / "transfer")}):
+            yield
+
+    @staticmethod
+    def execute_with_real_key(harness, args):
+        """PlannedRunHarness.execute without its fixed tree key."""
+        harness.selection_index = 0
+        with mock.patch.object(gate, "apply_storage_policy"), mock.patch.object(
+                gate, "run", side_effect=harness.fake_run), mock.patch.object(
+                gate.subprocess, "Popen", side_effect=harness.fake_popen), \
+                contextlib.redirect_stdout(harness.stdout):
+            return gate.run_nextest(args)
+
+    def test_selection_features_normalize_every_cargo_spelling(self):
+        self.assertEqual(gate.selection_features([["--workspace", "-E", "all()"]]), [])
+        self.assertEqual(gate.selection_features([["--features", "b,a"], ["-F", "a"], ["--features=c d"],
+                                                  ["-Fe"], ["--all-features", "--no-default-features"]]),
+                         ["--all-features", "--no-default-features",
+                          "feature:a", "feature:b", "feature:c", "feature:d", "feature:e"])
+
+    def test_features_join_the_tree_key_only_when_present(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(gate, "worktree_tree", return_value="tree"), \
+                mock.patch.object(gate, "submodule_heads", return_value=[]), \
+                mock.patch.object(gate, "required_hash", return_value="hash"), \
+                mock.patch.object(gate, "run", return_value="version"):
+            root = Path(temporary)
+            plain = gate.tree_inputs(root, root, child_env={})
+            self.assertNotIn("cargo-features", plain, "default records keep their existing keys")
+            self.assertEqual(gate.tree_inputs(root, root, child_env={}, features=[]), plain)
+            featured = gate.tree_inputs(root, root, child_env={}, features=["feature:intent-store/postgres"])
+            self.assertEqual(featured["cargo-features"], ["feature:intent-store/postgres"])
+
+    def test_filter_selecting_only_ignored_tests_fails_test_select(self):
+        # test-changed keeps the skipped-only warning (a changed crate may hold
+        # only #[ignore] tests); a named test-select selection must run something.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = PlannedRunHarness(root, [([], 4)])
+            harness.listing = json.dumps({"rust-suites": {"alpha::one": {
+                "package-name": "alpha", "binary-name": "one", "binary-id": "alpha::one",
+                "testcases": {"skipped": {"ignored": True,
+                                         "filter-match": {"status": "mismatch", "reason": "ignored"}}}}}})
+            plans = [gate.shlex.join(gate.filterset_selection("test(=skipped)"))]
+            args = make_args(root, plan=plans, label="test-select", require_runnable=True)
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr), self.fixtures(root):
+                self.assertEqual(harness.execute(args), 4)
+            self.assertNotIn("--no-tests", harness.run_commands[0])
+            self.assertIn("matched only skipped/ignored tests (1), so nothing ran", stderr.getvalue())
+            # Even when nextest is told to let an empty run pass.
+            harness = PlannedRunHarness(root, [([], 0)])
+            harness.listing = json.dumps({"rust-suites": {"alpha::one": {
+                "package-name": "alpha", "binary-name": "one", "binary-id": "alpha::one",
+                "testcases": {"skipped": {"ignored": True,
+                                         "filter-match": {"status": "mismatch", "reason": "ignored"}}}}}})
+            with contextlib.redirect_stderr(io.StringIO()), self.fixtures(root):
+                self.assertEqual(harness.execute(args), 4)
+
+    def test_filterset_requires_a_runnable_test_and_plans_do_not(self):
+        self.assertTrue(self.parse("--filterset", "all()").require_runnable)
+        with mock.patch.object(sys, "argv", ["resumable_nextest.py", "--repo-root", ".",
+                                             "--intentd-dir", "intentd", "--cache-dir", "cache",
+                                             "--build-jobs", "1", "--test-threads", "1", "--plan", "-p a"]), \
+                mock.patch.object(gate, "run_nextest", return_value=0) as run:
+            gate.main()
+        self.assertFalse(run.call_args.args[0].require_runnable)
+
     def test_filterset_refuses_plan_and_blank_expression(self):
         for argv in (["--filterset", "all()", "--plan", "-p alpha"], ["--filterset", ""],
                      ["--filterset", "  "]):

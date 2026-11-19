@@ -118,7 +118,9 @@ runs tests only; `make test-changed` selects tests changed against `BASE`
 `test-select` and `test-stress` take `FEATURES=<crate>/<feature>` for tests
 behind a Cargo feature, such as `FEATURES=intent-store/postgres` for the
 Postgres store tests, which build as empty binaries without it. Both fail when
-`E` selects no runnable test, and the error names `FEATURES`.
+`E` selects no runnable test (none matched, or only `#[ignore]` ones), and the
+error names `FEATURES`. Feature builds keep resume records of their own, so
+`RESUME=1` never credits a pass across feature sets.
 
 Every Rust gate first prints the intentd tree it tests:
 `[<goal>] testing intentd: <path> <branch>@<sha> (<pin state>, <lag>)`. It stops,

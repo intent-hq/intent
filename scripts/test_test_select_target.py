@@ -119,8 +119,13 @@ class TestSelectTargetTests(unittest.TestCase):
         argv = self.selection_call(calls)["runner"]
         self.assertEqual(argv[argv.index("--features") + 1], "intent-store/postgres a'b",
                          "quoted byte-for-byte; the runner validates and normalizes it")
+        self.log.unlink()
+        result, calls = self.run_make("E=test(/one/)", "FEATURES=a/b,c ,")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        argv = self.selection_call(calls)["runner"]
+        self.assertEqual(argv[argv.index("--features") + 1], "a/b c", "commas become spaces")
         for arguments, env in (((), None), ((), {"FEATURES": "intent-store/postgres"}),
-                               (("FEATURES=",), None)):
+                               (("FEATURES=",), None), (("FEATURES= , ,",), None)):
             with self.subTest(arguments=arguments, env=env):
                 self.log.unlink(missing_ok=True)
                 result, calls = self.run_make("E=test(/one/)", *arguments, env=env)

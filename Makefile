@@ -1040,7 +1040,10 @@ TEST_SELECT_E = $(subst ','\'',$(value E))
 ifneq ($(findstring environment,$(origin FEATURES)),)
 FEATURES :=
 endif
-TEST_SELECT_FEATURES = $(if $(strip $(FEATURES)), --features '$(subst ','\'',$(strip $(FEATURES)))')
+# Commas become spaces, so FEATURES=' , ' is no features rather than a bad list.
+COMMA := ,
+TEST_SELECT_FEATURES_LIST = $(strip $(subst $(COMMA), ,$(FEATURES)))
+TEST_SELECT_FEATURES = $(if $(TEST_SELECT_FEATURES_LIST), --features '$(subst ','\'',$(TEST_SELECT_FEATURES_LIST))')
 unexport E FEATURES
 ifneq ($(filter test-select test-stress,$(MAKECMDGOALS)),)
 ifneq ($(origin E),command line)

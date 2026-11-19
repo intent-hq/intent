@@ -167,6 +167,9 @@ def summary_line(label: str, counts: dict[str, object], conditions: str, status:
                  "so the counts above missed status lines (new nextest output format?)")
     if status is None:
         text += "; ERROR: the run did not complete (see the error above)"
+    elif status == UNPARSED_EXIT and not counts["tests"]:
+        text += ("; ERROR: nextest exited 0 but no test status line was recognised "
+                 "(new nextest output format?), so nothing is counted")
     elif status != 0 and not failures:
         text += f"; ERROR: exited {status} without a test failure (build, selection or setup; see output above)"
     if host and status != 0:
@@ -180,6 +183,8 @@ def summary_line(label: str, counts: dict[str, object], conditions: str, status:
 INVALID_EXIT = 3
 # The filter selected no runnable test (nextest's own exit code for an empty run).
 NO_TESTS_EXIT = 4
+# nextest exited 0 for a selection with tests, but no status line was recognised.
+UNPARSED_EXIT = 5
 
 
 def selected_tests(listing: str, gate) -> int:
@@ -716,8 +721,8 @@ def run_stress(args, gate) -> int:
             if status == 0 and counts["failed"]:
                 status = 1
             if status == 0 and not counts["tests"]:
-                # The listing matched tests but no run reported a status line.
-                status = NO_TESTS_EXIT
+                # The listing selected tests, yet no status line was recognised.
+                status = UNPARSED_EXIT
             line = summary_line(label, counts, f"{load}, {stall.describe() if stall else 'STALL=0'}", status,
                                 host)
             invalid = False
