@@ -25,6 +25,12 @@ apps hide it against an 18.0 daemon. No store migration. The documented surface 
 **497 / 443 / 54** (dispatchable / router / fast path), four fast-path methods fewer, and
 the reverse-RPC list drops to five names.
 
+Also within 18.0 (additive event field, no version bump): **clone download counters**.
+`git:clone:progress` `receiving` frames carry an optional `transfer { receivedObjects,
+totalObjects, receivedBytes?, bytesPerSecond? }` parsed from git's progress line, and a
+frame re-emits when only these counters change ([§6.5](./06-events.md)). Older clients
+ignore the key; older daemons never send it, so clients show it only when present.
+
 Also within 18.0 (behavioral change, no method-catalog change, so no version bump):
 **shared quick action defaults deprecated**. `quickActions.defaultModel` and
 `quickActions.defaultReasoningEffort` are folded into each action's
