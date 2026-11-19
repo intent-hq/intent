@@ -371,8 +371,11 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
   digest, and the run waits (up to 20 minutes) until VCR reports the image **Ready**;
   `errored`, `unoptimized` or a timeout fails the run. Only the exact version tag is
   written: never `latest`, `alpha` or `beta`, even when the GHCR run moves `latest`.
-  An existing VCR version tag is never moved or deleted (sandboxes pin by digest): a
-  re-run with the same image is a no-op, and a different image fails the run.
+  An existing VCR version tag is never moved or deleted (sandboxes pin by digest). A
+  re-run rebuilds the GHCR image with a new digest, so a version already on VCR keeps
+  its earlier build (the run warns) and only waits for it to be Ready. If that kept
+  image is `errored` or `unoptimized`, the run fails with the
+  `vercel vcr image delete` command to run before re-running.
   Configuration, in intent-hq/intentd **Settings → Secrets and variables → Actions**:
   - Variables `VERCEL_TEAM_ID` (`team_3FDuuIrwFJKvP0TFkb69Hd4z`) and
     `VCR_INTENT_NODE_IMAGE` (`vcr.vercel.com/sutterhill/intent-images/intent-node`).
@@ -380,7 +383,9 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
   - Credential, preferred: a Vercel OIDC policy (no stored secret). In the sutterhill
     team's **Settings → Build and Deployment**, add a VCR OIDC policy with read-write
     Container Registry access to `intent-images`, matching repository
-    `intent-hq/intentd` and workflow `intent-node-image.yml`. The release job has
+    `intent-hq/intentd`. To narrow it to the workflow, note that the step runs in the
+    reusable `intent-node-image-build.yml`: the token's `workflow_ref` names the caller
+    `intent-node-image.yml`, its `job_workflow_ref` names the build file. The release job has
     `id-token: write`; the run exchanges its GitHub OIDC token for a short-lived Vercel
     token and revokes it at the end.
   - Fallback: a `VERCEL_TOKEN` secret (a Vercel access token scoped to the sutterhill
