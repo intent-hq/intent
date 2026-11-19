@@ -390,7 +390,9 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
     token and revokes it at the end.
   - Fallback: a `VERCEL_TOKEN` secret (a Vercel access token scoped to the sutterhill
     team). When it is set, it is used instead of OIDC.
-  Once the variables are set, a refused login, copy or status check fails the run.
+  While Vercel refuses the OIDC exchange (no policy yet) the copy also only warns.
+  Once a credential works, a failed copy, digest check or Ready wait fails the run,
+  and so does a refused `VERCEL_TOKEN`.
   The `intent-node` repository must be public so other teams can start sandboxes
   from it; the run warns if it is not but does not change it
   (`vercel vcr update intent-node --public --project intent-images`). To backfill a
