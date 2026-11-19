@@ -388,8 +388,10 @@ next time such a definition is saved through `script.create`.
 >   hydrated `previouslyRunning` (or `lost` reading) drops as the state flips to `running`
 >   (an auto-restart's respawn re-sets the marker).
 > - **Restores marked services at boot** (new in intentd, unreleased): every marked,
->   unarchived `service` row starts again, whatever its `autoStart`. Only a failed restore
->   leaves it `idle` with `previouslyRunning: true`. Command rows are never re-run.
+>   unarchived `service` row in an unarchived workspace starts again, whatever its
+>   `autoStart`. Only a failed restore leaves it `idle` with `previouslyRunning: true`.
+>   Command rows are never re-run. A saved `autoStart` service in an unarchived workspace
+>   also starts at boot, even when it was not running (a user stop does not prevent it).
 > - **Survives repeated daemon restarts** untouched while unconsumed: a service whose
 >   restore fails keeps hydrating as `idle` with `previouslyRunning: true`, and a marked
 >   command row as `exited` / `-1` / `lost`, until the script is started or explicitly
