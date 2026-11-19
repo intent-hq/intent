@@ -380,16 +380,20 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
   - Variables `VERCEL_TEAM_ID` (`team_3FDuuIrwFJKvP0TFkb69Hd4z`) and
     `VCR_INTENT_NODE_IMAGE` (`vcr.vercel.com/sutterhill/intent-images/intent-node`).
     Without them the copy logs a warning and the run succeeds.
-  - Credential, preferred: a Vercel OIDC policy (no stored secret). In the sutterhill
-    team's **Settings → Build and Deployment**, add a VCR OIDC policy with read-write
-    Container Registry access to `intent-images`, matching repository
-    `intent-hq/intentd`. To narrow it to the workflow, note that the step runs in the
-    reusable `intent-node-image-build.yml`: the token's `workflow_ref` names the caller
-    `intent-node-image.yml`, its `job_workflow_ref` names the build file. The release job has
-    `id-token: write`; the run exchanges its GitHub OIDC token for a short-lived Vercel
-    token and revokes it at the end.
-  - Fallback: a `VERCEL_TOKEN` secret (a Vercel access token scoped to the sutterhill
-    team). When it is set, it is used instead of OIDC.
+  - Credential, one of:
+    - **`VERCEL_TOKEN` secret** (the path in use). A Vercel access token
+      (**Account Settings → Tokens**) whose scope is the sutterhill team; the job logs
+      in to `vcr.vercel.com` with the team ID as user name and calls the VCR API with
+      it. When it is set it is used, and a refused token fails the run. Rotate it
+      before its expiry.
+    - **Vercel OIDC policy** (no stored secret), if the team can add one: a VCR OIDC
+      policy (team **Settings → Build and Deployment**) with read-write Container
+      Registry access to `intent-images`, matching repository `intent-hq/intentd`. To
+      narrow it to the workflow, note that the step runs in the reusable
+      `intent-node-image-build.yml`: the token's `workflow_ref` names the caller
+      `intent-node-image.yml`, its `job_workflow_ref` names the build file. The
+      release job has `id-token: write`; without `VERCEL_TOKEN`, the run exchanges its
+      GitHub OIDC token for a short-lived Vercel token and revokes it at the end.
   While Vercel refuses the OIDC exchange (no policy yet) the copy also only warns.
   Once a credential works, a failed copy, digest check or Ready wait fails the run,
   and so does a refused `VERCEL_TOKEN`.
