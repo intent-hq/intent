@@ -387,6 +387,10 @@ next time such a definition is saved through `script.create`.
 >   with it); a `script.create` upsert resets it. Starting a marked script clears it — the
 >   hydrated `previouslyRunning` (or `lost` reading) drops as the state flips to `running`
 >   (an auto-restart's respawn re-sets the marker).
+> - **An `autoStart`-only upsert keeps the run** (new in intentd, unreleased): a
+>   `script.create` upsert whose definition differs from the stored one only in
+>   `autoStart` updates it in place. A live run, its marker and `lastRun` are kept, and
+>   `script:changed` reports `updated`. Any other difference still replaces the run.
 > - **Restores marked services at boot** (new in intentd, unreleased): every marked,
 >   unarchived `service` row in an unarchived workspace starts again, whatever its
 >   `autoStart`. Only a failed restore leaves it `idle` with `previouslyRunning: true`.
