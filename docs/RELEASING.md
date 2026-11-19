@@ -382,7 +382,9 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
     Without them the copy logs a warning and the run succeeds.
   - Credential, one of:
     - **`VERCEL_TOKEN` secret** (the path in use). A Vercel access token
-      (**Account Settings → Tokens**) whose scope is the sutterhill team; the job logs
+      (**Account Settings → Tokens**) whose scope is the sutterhill team (a token
+      limited to the `intent-images` project can read VCR but its pushes get HTTP
+      403); the job logs
       in to `vcr.vercel.com` with the team ID as user name and calls the VCR API with
       it. When it is set it is used, and a refused token fails the run. Rotate it
       before its expiry.
