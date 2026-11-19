@@ -149,7 +149,9 @@ optional `Workspace.autoArchiveDisabled` field, the `autoArchiveDisabled` param 
 have not opted out omit the field, so clients cannot detect support by presence; they offer
 the opt-out only for exact integer `1`, and older daemons omit it.
 
-**Script autoStart in place (behaviour change).** Exactly integer
+**Script autoStart in place (behaviour change; prepared, unreleased).** This contract leads
+the daemon advertisement and the app's gate (intent-hq/intentd#3549,
+intent-hq/cloudlands-fe#4809); no released daemon advertises it yet. Exactly integer
 `server.capabilities.scriptAutoStartInPlace: 1` says a `script.create` upsert that changes only
 `autoStart` keeps the script's live run ([§5.8](./scripts.md)). Clients may offer the
 auto-start toggle on a running script only for exact integer `1`; older daemons omit it and
