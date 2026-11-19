@@ -1006,7 +1006,7 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 # continuation). NO_FAIL_FAST=1 maps to --keep-going: every selected check still
 # runs and records its result after one fails, then the run fails listing them
 # all. SKIP_CT_FULL=1 maps to --skip-ct-full: a CT-contract change such as
-# src/app.css no longer pulls in the full component suite (about two hours);
+# src/app.css no longer pulls in the full component suite (about 2h15m);
 # the run prints the command to run it separately (cloudlands-fe#4787).
 # Nothing masks the exit status:
 # pnpm passes the script's code through to make ("Error 2" = empty change set). FE_VERIFY_BASE escapes

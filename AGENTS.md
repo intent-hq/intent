@@ -292,7 +292,7 @@ with no rollback.
   frontend `make fe-verify-changed` (cloudlands-fe `verify:changed`: uncommitted plus branch commits), or
   `make test-scripts-changed` for `scripts/`, the Makefile or ci.yml (PR CI skips its shell suites).
   All take `BASE=<ref>` and `DRY_RUN=1` (prints the plan), the first two `RESUME=1`; `fe-verify-changed SKIP_CT_FULL=1` defers
-  the ~2h full component suite a CT-contract edit like `src/app.css` selects (cloudlands-fe#4787). Iterate on Rust
+  the ~2h15m full component suite a CT-contract edit like `src/app.css` selects (cloudlands-fe#4787). Iterate on Rust
   tests with `make test-select E='<filterset>'`, not raw `cargo nextest`, which skips fixture setup
   (95 bogus failures, intentd#2559); to prove a flake, its fix, or that a CI failure is not yours,
   use `make test-stress E=... COUNT=200 LOAD=1` (retries off, optional CPU + fsync load; `STALL=1`
