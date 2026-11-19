@@ -1005,17 +1005,21 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 # RESUME=1 does for the Rust targets (with DRY_RUN=1 it previews the
 # continuation). NO_FAIL_FAST=1 maps to --keep-going: every selected check still
 # runs and records its result after one fails, then the run fails listing them
-# all. Nothing masks the exit status:
+# all. SKIP_CT_FULL=1 maps to --skip-ct-full: a CT-contract change such as
+# src/app.css no longer pulls in the full component suite (about 2h15m);
+# the run prints the command to run it separately (cloudlands-fe#4787).
+# Nothing masks the exit status:
 # pnpm passes the script's code through to make ("Error 2" = empty change set). FE_VERIFY_BASE escapes
 # apostrophes for the single-quoted hand-off; scripts/fe-verify-changed.test.sh
 # pins the mapping.
 FE_VERIFY_BASE = $(subst ','\'',$(BASE))
-fe-verify-changed: ensure-fe-submodule ensure-fe-toolchain ## Run only the frontend checks and unit tests the cloudlands-fe branch changed (BASE=<fe ref>, DRY_RUN=1 lists the selected tests, RESUME=1 resumes after a failed run, NO_FAIL_FAST=1 runs every check past a failure)
+fe-verify-changed: ensure-fe-submodule ensure-fe-toolchain ## Run only the frontend checks and unit tests the cloudlands-fe branch changed (BASE=<fe ref>, DRY_RUN=1 lists the selected tests, RESUME=1 resumes after a failed run, NO_FAIL_FAST=1 runs every check past a failure, SKIP_CT_FULL=1 defers the full component suite)
 	@$(FE_DEPS_FRESH) || (echo "[fe-verify-changed] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
 	@set --; \
 	if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ]; then set -- "$$@" --resolved-plan; fi; \
 	if [ -n "$(RESUME)" ] && [ "$(RESUME)" != 0 ]; then set -- "$$@" --resume; fi; \
 	if [ -n "$(NO_FAIL_FAST)" ] && [ "$(NO_FAIL_FAST)" != 0 ]; then set -- "$$@" --keep-going; fi; \
+	if [ -n "$(SKIP_CT_FULL)" ] && [ "$(SKIP_CT_FULL)" != 0 ]; then set -- "$$@" --skip-ct-full; fi; \
 	if [ -n '$(FE_VERIFY_BASE)' ]; then set -- "$$@" --base '$(FE_VERIFY_BASE)'; fi; \
 	cd "$(FE_DIR)" && exec corepack pnpm run verify:changed -- "$$@"
 
