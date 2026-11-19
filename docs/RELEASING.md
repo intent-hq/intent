@@ -363,6 +363,33 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
   (`gh workflow run intent-node-image.yml --repo intent-hq/intentd -f version=X.Y.Z`;
   add `-f latest=true` to move `latest`). PRs that change `packaging/e2b` build and
   smoke-test a local `pr-<n>` image without pushing it.
+- **Intent node image on Vercel.** After a GHCR push succeeds, the same job copies
+  the linux/amd64 image to Vercel Container Registry for Vercel Sandbox
+  (`packaging/e2b/vcr.mjs`), as `vcr.vercel.com/sutterhill/intent-images/intent-node:<version>`
+  (team sutterhill, project `intent-images`). It is a registry-to-registry copy
+  (`skopeo copy --preserve-digests`), so the VCR digest must equal the GHCR amd64
+  digest, and the run waits (up to 20 minutes) until VCR reports the image **Ready**;
+  `errored`, `unoptimized` or a timeout fails the run. Only the exact version tag is
+  written: never `latest`, `alpha` or `beta`, even when the GHCR run moves `latest`.
+  An existing VCR version tag is never moved or deleted (sandboxes pin by digest): a
+  re-run with the same image is a no-op, and a different image fails the run.
+  Configuration, in intent-hq/intentd **Settings → Secrets and variables → Actions**:
+  - Variables `VERCEL_TEAM_ID` (`team_3FDuuIrwFJKvP0TFkb69Hd4z`) and
+    `VCR_INTENT_NODE_IMAGE` (`vcr.vercel.com/sutterhill/intent-images/intent-node`).
+    Without them the copy logs a warning and the run succeeds.
+  - Credential, preferred: a Vercel OIDC policy (no stored secret). In the sutterhill
+    team's **Settings → Build and Deployment**, add a VCR OIDC policy with read-write
+    Container Registry access to `intent-images`, matching repository
+    `intent-hq/intentd` and workflow `intent-node-image.yml`. The release job has
+    `id-token: write`; the run exchanges its GitHub OIDC token for a short-lived Vercel
+    token and revokes it at the end.
+  - Fallback: a `VERCEL_TOKEN` secret (a Vercel access token scoped to the sutterhill
+    team). When it is set, it is used instead of OIDC.
+  Once the variables are set, a refused login, copy or status check fails the run.
+  The `intent-node` repository must be public so other teams can start sandboxes
+  from it; the run warns if it is not but does not change it
+  (`vercel vcr update intent-node --public --project intent-images`). To backfill a
+  version, dispatch the image workflow for it as above.
 
 ### When a published daemon reaches running installs
 
