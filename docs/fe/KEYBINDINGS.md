@@ -13,31 +13,39 @@
 
 ## 🌐 Global / App-Wide
 
-| Shortcut         | Action                        | Context                          | ID                           |
-| ---------------- | ----------------------------- | -------------------------------- | ---------------------------- |
-| `Mod+K`          | Open Command Palette          | Anywhere (not in terminal)       | `global.command-palette-alt` |
-| `Mod+T`          | Open Blank Working Panel      | In workspace                     | `navigation.new-tab`         |
-| `Mod+Alt+A`      | New Agent                     | In workspace                     | `workspace.new-agent`        |
-| `Mod+Alt+N`      | New Note                      | In workspace                     | `workspace.new-note`         |
-| `Mod+Alt+T`      | New Terminal                  | In workspace                     | `workspace.new-terminal`     |
-| `Mod+Alt+B`      | New Browser                   | In workspace with browser panels | `workspace.new-browser`      |
-| `Mod+P`          | Quick Open (file picker)      | Anywhere (not in terminal)       |                              |
-| `Mod+Shift+P`    | Open Command Palette          | Anywhere (not in terminal)       | `global.command-palette`     |
-| `Mod+,`          | Open Settings                 | Anywhere                         | `global.settings`            |
-| `Mod+O`          | Toggle All Spaces             | Anywhere                         | `global.toggle-spaces`       |
-| `Mod+N`          | New Workspace                 | Anywhere (not in inputs)         | `global.new-space`           |
-| `Mod+?`          | Toggle Keyboard Shortcuts     | Anywhere                         | `global.keyboard-shortcuts`  |
-| `Mod+F`          | Search                        | Focused searchable panel         | `global.search`              |
-| `Ctrl+Tab`       | Next Space                    | Anywhere in workspace            | `global.next-space`          |
-| `Ctrl+Shift+Tab` | Previous Space                | Anywhere in workspace            | `global.previous-space`      |
-| `Mod+Shift+]`    | Next Space (alternate)        | Anywhere in workspace            | `global.next-space-alt`      |
-| `Mod+Shift+[`    | Previous Space (alternate)    | Anywhere in workspace            | `global.previous-space-alt`  |
-| `Mod+Shift+S`    | Set Workspace Aside           | On a Home workspace row          | `workspace.set-aside`        |
-| `Alt+Z`          | Toggle Word Wrap              | In editor                        | `editor.toggle-word-wrap`    |
-| `Mod+J`          | Toggle Quake Terminal Overlay | Anywhere                         |                              |
-| `Ctrl+\``        | Toggle Quake Terminal Overlay | Anywhere (always Ctrl, even Mac) |                              |
-| `Ctrl+Shift+\``  | Create New Terminal           | Anywhere (always Ctrl, even Mac) |                              |
-| `Escape`         | Close modal/dialog/cancel     | Various contexts                 |                              |
+| Shortcut         | Action                                   | Context                                            | ID                           |
+| ---------------- | ---------------------------------------- | -------------------------------------------------- | ---------------------------- |
+| `Mod+K`          | Open Command Palette                     | Anywhere (not in terminal)                         | `global.command-palette-alt` |
+| `Mod+T`          | Open Blank Working Panel                 | In workspace                                       | `navigation.new-tab`         |
+| `Mod+Alt+A`      | New Agent                                | In workspace                                       | `workspace.new-agent`        |
+| `Mod+Alt+N`      | New Note                                 | In workspace                                       | `workspace.new-note`         |
+| `Mod+Alt+T`      | New Terminal                             | In workspace                                       | `workspace.new-terminal`     |
+| `Mod+Alt+B`      | New Browser                              | In workspace with browser panels                   | `workspace.new-browser`      |
+| `Mod+P`          | Quick Open (file picker)                 | Anywhere (not in terminal)                         |                              |
+| `Mod+Shift+P`    | Open Command Palette                     | Anywhere (not in terminal)                         | `global.command-palette`     |
+| `Mod+,`          | Open Settings                            | Anywhere                                           | `global.settings`            |
+| `Mod+O`          | Toggle All Spaces                        | Anywhere                                           | `global.toggle-spaces`       |
+| `Mod+N`          | New Workspace                            | Anywhere (not in inputs)                           | `global.new-space`           |
+| `Mod+?`          | Toggle Keyboard Shortcuts                | Anywhere                                           | `global.keyboard-shortcuts`  |
+| `Mod+F`          | Search                                   | Focused searchable panel                           | `global.search`              |
+| `Ctrl+Tab`       | Next Space                               | Anywhere in workspace                              | `global.next-space`          |
+| `Ctrl+Shift+Tab` | Previous Space                           | Anywhere in workspace                              | `global.previous-space`      |
+| `Mod+Shift+]`    | Next Space (alternate)                   | Anywhere in workspace                              | `global.next-space-alt`      |
+| `Mod+Shift+[`    | Previous Space (alternate)               | Anywhere in workspace                              | `global.previous-space-alt`  |
+| `Alt+Tab`        | Switch to Recent Agent (pending release) | macOS; `Super+Tab` on Linux; no default on Windows | `navigation.recent-agents`   |
+| `Mod+Shift+S`    | Set Workspace Aside                      | On a Home workspace row                            | `workspace.set-aside`        |
+| `Alt+Z`          | Toggle Word Wrap                         | In editor                                          | `editor.toggle-word-wrap`    |
+| `Mod+J`          | Toggle Quake Terminal Overlay            | Anywhere                                           |                              |
+| `Ctrl+\``        | Toggle Quake Terminal Overlay            | Anywhere (always Ctrl, even Mac)                   |                              |
+| `Ctrl+Shift+\``  | Create New Terminal                      | Anywhere (always Ctrl, even Mac)                   |                              |
+| `Escape`         | Close modal/dialog/cancel                | Various contexts                                   |                              |
+
+**Pending frontend release (not in current builds):** `navigation.recent-agents` is listed ahead of
+the cloudlands-fe change that adds it, so the consumer check can match its chord. Until that change ships
+in a release, the shortcut does nothing. Once released: hold its modifier to see the agents you opened
+most recently on this device, across every connection; press Tab again to move (Shift moves back),
+release to open, and press Esc to cancel. macOS uses `Option+Tab` (it reserves `Cmd+Tab`); Linux,
+including Intent OS, uses `Super+Tab`; Windows has no default because it owns `Alt+Tab` and `Win+Tab`.
 
 ---
 
