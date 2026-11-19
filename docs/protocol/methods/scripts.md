@@ -387,9 +387,13 @@ next time such a definition is saved through `script.create`.
 >   with it); a `script.create` upsert resets it. Starting a marked script clears it — the
 >   hydrated `previouslyRunning` (or `lost` reading) drops as the state flips to `running`
 >   (an auto-restart's respawn re-sets the marker).
-> - **Survives repeated daemon restarts** untouched: a marked service row keeps hydrating as
->   `idle` with `previouslyRunning: true`, and a marked command row as `exited` / `-1` /
->   `lost`, until the script is started or explicitly stopped.
+> - **Restores marked services at boot** (new in intentd, unreleased): every marked,
+>   unarchived `service` row starts again, whatever its `autoStart`. Only a failed restore
+>   leaves it `idle` with `previouslyRunning: true`. Command rows are never re-run.
+> - **Survives repeated daemon restarts** untouched while unconsumed: a service whose
+>   restore fails keeps hydrating as `idle` with `previouslyRunning: true`, and a marked
+>   command row as `exited` / `-1` / `lost`, until the script is started or explicitly
+>   stopped.
 > - **Dismiss:** `script.stop` on a non-running script that carries the marker clears it —
 >   in memory and, via the same best-effort persist as every other transition, on the row —
 >   and returns ok (instead of erroring), and **emits a `script:state` event** carrying the
