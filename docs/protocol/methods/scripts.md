@@ -644,6 +644,34 @@ upsert, add the existing `scriptId` and omit purpose only to retain its stored
 classification. These examples create definitions, not a successful test result.
 The generated MCP index remains pin-owned and is not edited for this preparation.
 
+#### autoStart: runs while the workspace is active
+
+*(new in intentd, unreleased; behavior only, no wire-shape change.)* A saved,
+unarchived script with `autoStart: true` (from `script.create` or the repository's
+`.intent/config.json` `scripts`) gets its home run started by the daemon, as an
+internal `script.start`, when the workspace becomes active with a ready checkout:
+
+| Trigger | Starts autoStart scripts |
+|---|---|
+| Local `workspace.create` setup stage ends `completed` (script exited `0`) or `skipped` (no effective script, `skipWorktree`) | Yes, after `workspace:setup:completed` |
+| Setup stage ends `failed` | No |
+| The workspace's [home](./nodes.md#workspace-homes) finishes its setup, or a home move to a set-up home | Yes (unchanged); the local setup stage of a workspace with a machine or cloud home starts nothing |
+| `workspace.unarchive`, `workspace.restore`, turn-start auto-unarchive, or a revive that flips the row | Yes, after the `workspace:updated` delta; an unarchive of an already Active row starts nothing |
+| `workspace.archive` | No (archive does not stop running scripts either) |
+| Daemon boot | No new start: only the was-running restore applies (see *Was-running marker*) |
+
+Rules:
+
+- The workspace is re-read when the start runs: nothing starts in an archived,
+  retired or deleted workspace, or one in a `workspace.delete` grace window.
+- `start` stays idempotent: a script already `starting`, `running` or `restarting`
+  is left as it is, so overlapping triggers never double-start.
+- Boot does not start an `autoStart` script that was not running when the daemon
+  stopped. A user `script.stop` (or a natural exit) is respected across restarts; the
+  next setup finish or unarchive starts it again.
+- Starts are best-effort: a failed start is logged and never fails the triggering
+  call, and one failure does not keep other scripts from starting.
+
 #### Saved scripts and one-off history (protocol-13 baseline)
 
 **Historical baseline.** The archive list/history UI and recovery enumeration
