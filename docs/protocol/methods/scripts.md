@@ -43,7 +43,7 @@ not remove the owner's definition or output.
 | script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } — stops an active run; resetting a finished script from `exited` to `idle` emits a `script:state` snapshot (§6.5; see the self-contained change extension below). On a **non-running** script that carries the was-running marker this is the **dismiss** affordance: it clears the marker (`previouslyRunning` on a service row, the hydrated `lost` reading on a command row; in memory plus a best-effort row write), emits the cleared runtime snapshot, and returns ok instead of erroring. Stopping an already idle, unmarked script is a no-op with no state event |
 | script.restart | workspaceId (req), scriptId (req) | { ok, scriptId } |
 | script.output | workspaceId (req), scriptId (req), maxLines? | output text of the latest run, read from its on-disk log (see *Script output persistence*): the newest `maxLines` lines (default 100, 1–10,000) under a `[... lines]` header, cut to fit 480,000 bytes (see *Bounded output reads*) |
-| script.status | workspaceId (req), scriptId (req) | { status, restartCount, pid?, exitCode?, startedAt?, stoppedAt?, error?, detectedUrl?, previouslyRunning?, ready?, readiness?, exitReason?, startedBy? } — the `ScriptRuntimeState` snapshot; `status` and `restartCount` are always present, every other field is **omitted when unset** (never `null` — a cleared `exitCode` is absent, so hooks test `exitCode !== undefined`); `status` is one of `idle \| starting \| running \| restarting \| exited`. `exited` **always** carries `exitCode` (new in intentd, unreleased): when the real status was not observable it is the sentinel `-1` together with an `error` naming the cause — see the total exit contract note below. `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) is the `script.start` launch window: set synchronously before `script.start` replies, with the previous run's terminal fields cleared, and held until the spawn's `running` (or `exited` on a launch failure), so a poll issued right after `start` never reads the pre-launch `idle` or a stale `exitCode`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running`. `previouslyRunning?: true` (new in intentd, within v5.1) marks a **service** script that was running when the daemon last stopped; a command script in the same situation hydrates as `exited` / `exitCode: -1` / `error` instead — see the was-running marker note below |
+| script.status | workspaceId (req), scriptId (req) | { status, restartCount, pid?, exitCode?, startedAt?, stoppedAt?, error?, detectedUrl?, servedPorts?, previouslyRunning?, ready?, readiness?, exitReason?, startedBy? } — the `ScriptRuntimeState` snapshot; `status` and `restartCount` are always present, every other field is **omitted when unset** (never `null` — a cleared `exitCode` is absent, so hooks test `exitCode !== undefined`); `status` is one of `idle \| starting \| running \| restarting \| exited`. `exited` **always** carries `exitCode` (new in intentd, unreleased): when the real status was not observable it is the sentinel `-1` together with an `error` naming the cause — see the total exit contract note below. `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) is the `script.start` launch window: set synchronously before `script.start` replies, with the previous run's terminal fields cleared, and held until the spawn's `running` (or `exited` on a launch failure), so a poll issued right after `start` never reads the pre-launch `idle` or a stale `exitCode`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running`. `previouslyRunning?: true` (new in intentd, within v5.1) marks a **service** script that was running when the daemon last stopped; a command script in the same situation hydrates as `exited` / `exitCode: -1` / `error` instead — see the was-running marker note below |
 | script.run | workspaceId (req), scriptId (req), maxLines?, timeoutSeconds? (alias timeout?) | { exitCode?, output, outputTruncated?, timedOut?, warning? } — `output` keeps the newest bytes that fit 480,000 bytes once JSON-escaped, and `outputTruncated: true` (absent otherwise) marks a cut (see *Bounded output reads*); `exitCode` follows the same total exit contract as the runtime state (new in intentd, unreleased): `-1` when the exit was unobservable — see the total exit contract note below |
 
 #### Script output persistence (new in intentd, unreleased)
@@ -210,7 +210,7 @@ is absent. Hosts without the capability serve the unpaged list and reject `limit
 | `id`, `workspaceId`, `name`, `mode`, `source`, `createdAt` | Required identity/display metadata |
 | `category?`, `autoStart?`, `updatedAt?`, `purpose?`, `remoteAuthor?`, `machineRuns?` | Preserve presence and value (`remoteAuthor` and `machineRuns` only with [`remoteScripts: 1`](#scripts-of-remote-agents-remotescripts-1); each machine run's `runtime` / `lastRun` bounded like the top-level ones) |
 | `commandPreview`, `commandTruncated` | Required display-only prefix ≤160 UTF-8 bytes and truncation boolean |
-| `runtime` | Preserve `status`, `restartCount`, optional `runId`, `pid`, `exitCode`, `startedAt`, `stoppedAt`, `detectedUrl`, `previouslyRunning`, `ready`, `readiness`, `exitReason`, `startedBy`; bound `error?` below |
+| `runtime` | Preserve `status`, `restartCount`, optional `runId`, `pid`, `exitCode`, `startedAt`, `stoppedAt`, `detectedUrl`, `servedPorts`, `previouslyRunning`, `ready`, `readiness`, `exitReason`, `startedBy`; bound `error?` below |
 | `lastRun?` | Preserve `runId?`, `outcome`, `exitCode?`, `startedAt?`, `stoppedAt`, `exitReason?`, `startedBy?`; bound `error?` below |
 
 Omit `archivedAt`, `command`, `env`, `cwd`, `healthUrl`, `readyPattern` and output.
@@ -1342,3 +1342,20 @@ the machine. Clients show the machine instead of an Open link for a machine run.
 
 Without `remoteScripts: 1`, a remote agent's `script.*` calls are refused with
 `remote-agent-unsupported:`, and no row carries `machineRuns` or `remoteAuthor`.
+
+### Served ports *(additive, `guestServicePreview: 1`)*
+
+`servedPorts?: number[]` on `ScriptRuntimeState` (in `script.status`, `script.list`
+runtime and `script:state`) lists the TCP ports that processes in a running
+**service** script's process tree listen on, in ascending order without
+duplicates. The daemon reads listening sockets of the service's process tree;
+output text never adds a port. Only listeners on `127.0.0.1`, `0.0.0.0` or `::`
+count. The daemon's own listener ports are never included.
+
+- The field is omitted for command scripts, when no port was found, and when
+  the status is not `running`. Stop, exit and restart clear it.
+- The daemon refreshes it while the service runs. Clients must not cache it as
+  an access grant; the guest tunnel checks it fresh on each `OPEN`
+  ([guest service preview](../01-transport.md#guest-service-preview-tunnel-additive-guestservicepreview-1)).
+- `detectedUrl` keeps its display meaning and grants no access.
+
