@@ -644,6 +644,47 @@ upsert, add the existing `scriptId` and omit purpose only to retain its stored
 classification. These examples create definitions, not a successful test result.
 The generated MCP index remains pin-owned and is not edited for this preparation.
 
+#### autoStart: runs while the workspace is active
+
+*(new in intentd, unreleased; behavior only, no wire-shape change.)* A saved,
+unarchived script with `autoStart: true` (from `script.create` or the repository's
+`.intent/config.json` `scripts`) gets its home run started by the daemon, as an
+internal `script.start`, when the workspace becomes active with a ready checkout:
+
+| Trigger | Starts autoStart scripts |
+|---|---|
+| Local `workspace.create` setup stage ends `completed` (script exited `0`) or `skipped` (no effective script, `skipIsolation`/`skipWorktree`, plain-folder workspace) | Yes, after `workspace:setup:completed` |
+| Setup stage ends `failed` | No |
+| The workspace's [home](./nodes.md#workspace-homes) finishes its setup, or a home move to a set-up home | Yes (unchanged); the local setup stage of a workspace with a machine or cloud home starts nothing |
+| `workspace.unarchive`, `workspace.restore` or turn-start auto-unarchive that flips the row Archived → Active | Yes, after the `workspace:updated` delta; an unarchive of an already Active row starts nothing |
+| Revive of a Retired workspace | No: its fresh checkout never ran setup |
+| `workspace.archive` (manual or auto-archive) | No: archive **stops** every running script of the workspace (below) |
+| Daemon boot | Yes, in an active workspace without a machine home, even after a user stop: see *Restores marked services at boot* under *Was-running marker*, the one boot policy |
+
+Rules:
+
+- Every daemon start (an `autoStart` trigger or the boot restore) re-reads the
+  workspace under the script's definition lock, just before launch: nothing starts
+  in an archived, retired or deleted workspace, or one in a `workspace.delete` grace
+  window. A daemon start racing an archive either launches before the archive commits
+  (and the archive then stops it) or launches nothing.
+- `start` stays idempotent: a script already `starting`, `running` or `restarting`
+  is left as it is, so overlapping triggers never double-start.
+- A user `script.stop` holds until the next trigger above (setup finish, unarchive
+  or daemon boot); turn `autoStart` off to keep a script stopped.
+- **Archive stops scripts.** After the archived row is persisted, and before the
+  repository archive script runs, the daemon stops each running or launching home
+  run with `script.stop` semantics: a command's `lastRun` is `cancelled` with
+  `error` `cancelled by workspace archive`, and the was-running marker is cleared.
+  Boot starts no script of an archived workspace, even when a marker survives (a
+  daemon stop mid-archive, a failed stop). Each script's stop first re-checks that
+  the row is still archived; once an unarchive has flipped it, the remaining
+  scripts are left running (an `autoStart` script stopped just before the flip is
+  started again by the unarchive). Machine runs of remote agents are not stopped. A
+  client may still start a script in an archived workspace.
+- Starts are best-effort: a failed start is logged and never fails the triggering
+  call, and one failure does not keep other scripts from starting.
+
 #### Saved scripts and one-off history (protocol-13 baseline)
 
 **Historical baseline.** The archive list/history UI and recovery enumeration
