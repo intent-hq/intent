@@ -133,7 +133,7 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
       "canBeDisabled": true,
       "supportsFastMode": false,
       "loginCommandHint": "auggie login",           // optional
-      "npxLoginCommandHint": "npx -y opencode-ai@1.19.6 auth login",  // optional — opencode only today
+      "npxLoginCommandHint": "npx -y opencode-ai@1.19.6 auth login",  // optional — providers that run from an npm package
       "loginDocsUrl": "https://docs.augmentcode.com/cli/overview",  // optional
       "authErrorPatterns": ["authentication required", "auggie login", "please run `auggie login`"],  // optional
       "visible": true,
