@@ -351,7 +351,9 @@ also use [Northflank](#cloud-machines-on-northflank), placement accepts the
 provider-neutral `target: "cloud"`, and `cloudMachines.list` returns
 `providerKinds`; it is advertised only together with `cloudMachineEntries: 1`.
 A backend that can also use [Agent37](#cloud-machines-on-agent37) lists
-`"agent37"` in `providerKinds`; there is no separate flag.
+`"agent37"` in `providerKinds`, and one that can use
+[Vercel Sandbox](#cloud-machines-on-vercel) lists `"vercel"`; there is no
+separate flag.
 
 ##### Machine methods: executor credentials
 
@@ -864,7 +866,7 @@ work never fails the create.
 
 A sandbox started for an agent that another agent creates (a sub-agent with
 `target: "e2b"` or `"cloud"`, or a top-level agent that an agent creates with
-one of them) runs in the E2B or Northflank project, or the Agent37 workspace, of its [entry](#named-e2b-entries),
+one of them) runs in the E2B, Northflank or Vercel project, or the Agent37 workspace, of its [entry](#named-e2b-entries),
 like every sandbox. Its
 `cloud.startedBy` is the person behind the creating agent's chain: the
 backend walks up from the creating agent (that agent first) and takes the
@@ -913,7 +915,7 @@ providers each machine offers follows
 | The Default | Yes | Its overrides are sent. With none, nothing is sent and the machine's own sign-in runs it, as in the next row. |
 | The Default | No | Nothing is sent. The machine's own sign-in runs it, if the provider is detected and not disabled there. A machine whose sign-in is `unknown` is still tried. On a `signed-out` or `auth-failed` one, admission [auto-picks](./provider-profiles.md#remote-auto-pick) the first marked profile of that provider; with none it is refused with `machine-not-signed-in`. |
 | A provider without profiles (for example Unsloth) | — | Allowed. Nothing is sent. The model must be on that machine's own list (`model-unavailable` otherwise). |
-| Anything, on a [cloud machine](#placement-on-e2b) (E2B, Northflank or Agent37) | — | Must send a `profileEnv` (`cloud-profile-required` otherwise, as today), and a profile or Default must also be marked. The machine's own sign-in never applies, because a cloud machine has no sign-in. A plain Default that cannot run there [auto-picks](./provider-profiles.md#remote-auto-pick) the first marked profile that sends a set variable. |
+| Anything, on a [cloud machine](#placement-on-e2b) (E2B, Northflank, Agent37 or Vercel) | — | Must send a `profileEnv` (`cloud-profile-required` otherwise, as today), and a profile or Default must also be marked. The machine's own sign-in never applies, because a cloud machine has no sign-in. A plain Default that cannot run there [auto-picks](./provider-profiles.md#remote-auto-pick) the first marked profile that sends a set variable. |
 
 A **machine sign-in launch** is a launch of the bare `codex` or `claude-code`
 reference that sends nothing: an unmarked Default, or a marked Default with no
@@ -1314,8 +1316,9 @@ A *cloud machine* is a remote machine that the backend starts itself, with a
 key that the backend owner saved in a [named entry](#named-e2b-entries). Each
 entry has a *cloud provider* (`provider`): an [E2B](https://e2b.dev) entry
 starts sandboxes, a [Northflank](#cloud-machines-on-northflank) entry
-starts Northflank services, and an [Agent37](#cloud-machines-on-agent37) entry
-starts Agent37 instances. This section calls each one a *sandbox* unless a
+starts Northflank services, an [Agent37](#cloud-machines-on-agent37) entry
+starts Agent37 instances, and a [Vercel](#cloud-machines-on-vercel) entry
+starts Vercel sandboxes. This section calls each one a *sandbox* unless a
 rule names the provider. Each
 sandbox runs a normal intentd daemon with a fresh identity and is used as an
 exposed machine over the unchanged
@@ -1336,16 +1339,16 @@ authority.
 
 | Method | Who | Params | Result |
 | --- | --- | --- | --- |
-| cloudMachines.configure | Owner | cloudMachineId? (the entry to update; omit to create one), name? (1-64 UTF-8 bytes; required to create a new entry), provider? (`CloudProviderKind`; default `"e2b"` on create; on update it must equal the entry's provider), apiKey? (secret: an E2B API key, a Northflank API token, or an Agent37 API key; required to create an entry unless `apiKeyFrom` is given), apiKeyFrom? (the `cloudMachineId` of another entry of the same provider whose saved key this entry copies), size? (one of the entry's `sizes`; default `"4x8"`), idlePauseMinutes? (1-1440, default 10), pausedDeleteDays? (1-30, default 7), validateOnly? (boolean, default false); E2B only: templateProject? (E2B project slug that publishes the templates; default Intent's E2B project); Northflank only ([settings](#northflank-entries)): projectId? (required to create), plans?, image?, diskGiB?; Agent37 only ([settings](#agent37-entries)): instanceType?, region?, diskGiB? | `{ provider: CloudMachineProvider }`; creates or updates one entry ([which entry](#named-e2b-entries)); with `apiKey` or `apiKeyFrom`, tests the key with one provider read before it saves anything; an omitted member keeps its saved value. A member of the other provider is `-32602` `invalid-params`. With `validateOnly: true` it saves nothing and emits no event ([validation](#cloud-machine-methods)) |
-| cloudMachines.list | Owner, members | — | `{ providers: CloudMachineProvider[], machines: RemoteMachine[], providerKinds?: CloudProviderKind[] }`; `providers` are the entries, in creation order; `machines` are the live cloud machines of every entry, each with `cloud`; `providerKinds` (only with `cloudMachineProviders: 1`) are the providers this backend can configure, in the order a client offers them, for example `["e2b", "northflank", "agent37"]`; a member sees only the machines of workspaces they can manage; never returns a key |
-| cloudMachines.remove | Owner | cloudMachineId? (the entry; default `"e2b"`), provider? (`CloudProviderKind`; when given, it must equal the entry's provider), stopAgents? (boolean, default false) | `{ ok: true, unconfirmedStops: string[] }`; removes one entry; with any sandbox of that entry (running or paused) and no `stopAgents: true` fails `-32602` `machine-in-use` with `runningAgents`; with `stopAgents: true` sends each agent on that entry's sandboxes a final stop, waits at most 90 s, then deletes those sandboxes (on Northflank, each service with its volume; on Agent37, each instance with its disk), their machine rows, the entry and its key ([removing an entry](#named-e2b-entries)); an id that names no entry is a no-op, and a `provider` that is not the entry's is `-32602` `invalid-params` |
+| cloudMachines.configure | Owner | cloudMachineId? (the entry to update; omit to create one), name? (1-64 UTF-8 bytes; required to create a new entry), provider? (`CloudProviderKind`; default `"e2b"` on create; on update it must equal the entry's provider), apiKey? (secret: an E2B API key, a Northflank API token, an Agent37 API key, or a Vercel access token; required to create an entry unless `apiKeyFrom` is given), apiKeyFrom? (the `cloudMachineId` of another entry of the same provider whose saved key this entry copies), size? (one of the entry's `sizes`; default `"4x8"`), idlePauseMinutes? (1-1440, default 10), pausedDeleteDays? (1-30, default 7), validateOnly? (boolean, default false); E2B only: templateProject? (E2B project slug that publishes the templates; default Intent's E2B project); Northflank only ([settings](#northflank-entries)): projectId? (required to create), plans?, image?, diskGiB?; Agent37 only ([settings](#agent37-entries)): instanceType?, region?, diskGiB?; Vercel only ([settings](#vercel-entries)): teamId? (required to create), projectId? (required to create), image? | `{ provider: CloudMachineProvider }`; creates or updates one entry ([which entry](#named-e2b-entries)); with `apiKey` or `apiKeyFrom`, tests the key with one provider read before it saves anything; an omitted member keeps its saved value. A member of the other provider is `-32602` `invalid-params`. With `validateOnly: true` it saves nothing and emits no event ([validation](#cloud-machine-methods)) |
+| cloudMachines.list | Owner, members | — | `{ providers: CloudMachineProvider[], machines: RemoteMachine[], providerKinds?: CloudProviderKind[] }`; `providers` are the entries, in creation order; `machines` are the live cloud machines of every entry, each with `cloud`; `providerKinds` (only with `cloudMachineProviders: 1`) are the providers this backend can configure, in the order a client offers them, for example `["e2b", "northflank", "agent37", "vercel"]`; a member sees only the machines of workspaces they can manage; never returns a key |
+| cloudMachines.remove | Owner | cloudMachineId? (the entry; default `"e2b"`), provider? (`CloudProviderKind`; when given, it must equal the entry's provider), stopAgents? (boolean, default false) | `{ ok: true, unconfirmedStops: string[] }`; removes one entry; with any sandbox of that entry (running or paused) and no `stopAgents: true` fails `-32602` `machine-in-use` with `runningAgents`; with `stopAgents: true` sends each agent on that entry's sandboxes a final stop, waits at most 90 s, then deletes those sandboxes (on Northflank, each service with its volume; on Agent37, each instance with its disk; on Vercel, each sandbox with its snapshots), their machine rows, the entry and its key ([removing an entry](#named-e2b-entries)); an id that names no entry is a no-op, and a `provider` that is not the entry's is `-32602` `invalid-params` |
 | cloudMachines.pause | Owner, starter | machineId (req) | `{ machine: RemoteMachine }`; pauses the sandbox now; while an agent on it has a running turn fails `-32602` `machine-in-use` with `runningAgents`; an already paused sandbox is returned unchanged |
 | cloudMachines.kill | Owner, starter | machineId (req) | `{ ok: true, unconfirmedStops: string[] }`; sends each agent on the sandbox a final stop (resuming a paused sandbox first), waits at most 90 s, then deletes the sandbox and its machine row even when stops are unconfirmed |
 
 - **Who.** *Owner* is the local UDS seat or a WSS connection with the owner
   token. *Members* are [shared-host members](./shared-host-membership.md#member-execution-and-safe-host-reads),
   who can also place agents on cloud machines: their agents spend the owner's
-  E2B, Northflank or Agent37 account, with no per-person cap. *Starter* is the principal in
+  E2B, Northflank, Agent37 or Vercel account, with no per-person cap. *Starter* is the principal in
   `cloud.startedBy`: the caller of the placing method, or for a placement made
   by an agent the person behind its chain
   ([who pays](#who-pays-for-a-sandbox-an-agent-starts)). Others get `-32003`.
@@ -1356,11 +1359,12 @@ authority.
   entry starts exists (E2B: the template
   `<templateProject>/intent-node-<size>:<intentdVersion>`; Northflank: the
   project, the plans and the image; Agent37: the
-  [template import](#agent37-entries)), then returns the entry as it would be
+  [template import](#agent37-entries); Vercel: the team, the project and the
+  [image](#vercel-entries)), then returns the entry as it would be
   saved, with `state: "ready"`. Any failed test is an error, never a result: a
   rejected key is `key-rejected`, a missing template or image
-  `template-missing`, a provider failure `api-error`, on Northflank also
-  `project-missing`, and on Northflank and Agent37 also `permission-denied`
+  `template-missing`, a provider failure `api-error`, on Northflank and Vercel also
+  `project-missing`, and on Northflank, Agent37 and Vercel also `permission-denied`
   (all `cloud-machine-unavailable`). A normal save runs the same tests first.
 - **Unknown machine.** A `machineId` that names no cloud machine is `-32602`
   `not-found` for `pause` and `kill`.
@@ -1374,7 +1378,9 @@ authority.
   sandboxes run in that project, under its plan and limits. A Northflank
   entry's key is an API token, and its services run in the entry's
   `projectId`. An Agent37 entry's key is an Agent37 API key (`sk_live_…`),
-  and its instances run in the Agent37 workspace that owns the key. All are
+  and its instances run in the Agent37 workspace that owns the key. A Vercel
+  entry's key is a Vercel access token with access to the entry's `teamId`,
+  and its sandboxes run in the entry's `projectId`. All are
   kept the same way, as `apiKey`. The backend keeps
   each entry's key in its secret store under `cloudMachines.<cloudMachineId>.apiKey`
   (`cloudMachines.e2b.apiKey` for the entry `"e2b"`). An entry holds only this
@@ -1385,14 +1391,14 @@ authority.
   [excluded from workspace routing](../workspace-routing.md#excluded-methods-and-variants).
 
 ```ts
-type CloudProviderKind = "e2b" | "northflank" | "agent37"; // open: clients skip an entry whose kind they do not know
+type CloudProviderKind = "e2b" | "northflank" | "agent37" | "vercel"; // open: clients skip an entry whose kind they do not know
 
 interface CloudMachineProvider {               // one named entry
-  id: string;                              // the cloudMachineId: "e2b", "e2b-<12 lowercase hex>", "northflank-<12 lowercase hex>" or "agent37-<12 lowercase hex>"
+  id: string;                              // the cloudMachineId: "e2b", "e2b-<12 lowercase hex>", "northflank-<12 lowercase hex>", "agent37-<12 lowercase hex>" or "vercel-<12 lowercase hex>"
   provider: CloudProviderKind;             // the cloud provider kind
   name: string;                            // the entry's name, for example "E2B" or "Team project"
   state: "ready" | "key-rejected" | "unreachable"; // result of the last provider call
-  template: string;                        // what the backend starts: the E2B template "<templateProject>/intent-node-<size>:<intentdVersion>", the Northflank image "<image>:<intentdVersion>", or the Agent37 template "intent-node-<intentdVersion, dots as hyphens>"
+  template: string;                        // what the backend starts: the E2B template "<templateProject>/intent-node-<size>:<intentdVersion>", the Northflank image "<image>:<intentdVersion>", the Agent37 template "intent-node-<intentdVersion, dots as hyphens>", or the Vercel image "<image>:<intentdVersion>"
   templateProject?: string;                // E2B only: project slug that publishes the templates
   agentProviders: string[];                // base provider ids whose CLIs the templates or image install, for example "claude-code"
   sizes: CloudMachineSizeInfo[];           // sizes this entry can start, smallest first
@@ -1403,6 +1409,7 @@ interface CloudMachineProvider {               // one named entry
   checkedAt?: string;                      // last successful provider call
   northflank?: NorthflankEntrySettings;    // Northflank only
   agent37?: Agent37EntrySettings;          // Agent37 only
+  vercel?: VercelEntrySettings;            // Vercel only
 }
 
 type CloudMachineSize = "2x4" | "4x8" | "8x16" | "16x32" | "4x16" | "4x32"; // <vCPU>x<GiB>; open: clients show an unknown size by its id
@@ -1435,8 +1442,9 @@ built it. The `plan` column of `sizes` describes E2B's plans; it does not depend
 on `templateProject`.
 
 The rules below are for E2B entries; Northflank sizes are in
-[Northflank entries](#northflank-entries), and Agent37 sizes in
-[Agent37 entries](#agent37-entries).
+[Northflank entries](#northflank-entries), Agent37 sizes in
+[Agent37 entries](#agent37-entries), and Vercel sizes in
+[Vercel entries](#vercel-entries).
 
 - **Published sizes only.** `sizes` lists only the sizes whose
   `<templateProject>/intent-node-<size>:<intentdVersion>` tag exists. The backend
@@ -1461,7 +1469,7 @@ The rules below are for E2B entries; Northflank sizes are in
 ###### Named E2B entries
 
 The owner can save several *entries*, of E2B or (with
-`cloudMachineProviders: 1`) Northflank or Agent37. Each entry has its own id, name,
+`cloudMachineProviders: 1`) Northflank, Agent37 or Vercel. Each entry has its own id, name,
 provider, key (so entries can use different projects), size,
 `idlePauseMinutes` and `pausedDeleteDays`, plus its provider's own settings.
 An entry's provider never changes. Every `CloudMachineProvider` row is
@@ -1473,7 +1481,8 @@ that keeps entries advertises `cloudMachineEntries: 1`. Clients send
   changes it: for E2B, `"e2b"` while no entry has that id, else
   `"e2b-<12 lowercase hex>"`; for Northflank, always
   `"northflank-<12 lowercase hex>"`; for Agent37, always
-  `"agent37-<12 lowercase hex>"`, so the id `"e2b"` always names an E2B
+  `"agent37-<12 lowercase hex>"`; for Vercel, always
+  `"vercel-<12 lowercase hex>"`, so the id `"e2b"` always names an E2B
   entry. Clients never parse the provider from an id; they read `provider`.
   A `cloudMachineId` that is not a string of at
   most 64 bytes is `-32602` `invalid-params`. A string that names no entry
@@ -1496,15 +1505,17 @@ that keeps entries advertises `cloudMachineEntries: 1`. Clients send
   Without both (the call an older
   client sends), the entry `"e2b"`; when it does not exist, the call creates it
   with the first free name of `"E2B"`, `"E2B 2"`, `"E2B 3"` and so on, so it
-  never fails on the name. `provider: "northflank"` or `"agent37"` without
+  never fails on the name. `provider: "northflank"`, `"agent37"` or `"vercel"` without
   `cloudMachineId` needs `name`, else `-32602` `invalid-params`. Creating needs `apiKey` or
   `apiKeyFrom`, else `cloud-machine-unavailable` reason `not-configured`, and a
-  Northflank entry also needs `projectId`, else `-32602` `invalid-params`. A
+  Northflank entry also needs `projectId`, and a Vercel entry `teamId` and
+  `projectId`, else `-32602` `invalid-params`. A
   `provider` that differs from the entry's on an update is `-32602`
   `invalid-params`. With `validateOnly`, a
   call that would create an entry runs every create check (name, limit,
   `apiKeyFrom`, key, template or image, on Northflank project and plans, and
-  on Agent37 type, region and the template import)
+  on Agent37 type, region and the template import, and on Vercel team,
+  project and image)
   and returns the row with `id: ""`.
 - **Copying a key.** `apiKeyFrom` names another entry of the same provider, on
   create or update; an entry of the other provider is `-32602` `invalid-params`. The
@@ -1533,7 +1544,7 @@ that keeps entries advertises `cloudMachineEntries: 1`. Clients send
   placements fall back to it ([placement on E2B](#placement-on-e2b)). It does
   not show the other entries, and it still lists and can kill the sandboxes of
   other E2B entries, because their machine rows keep `cloud.provider: "e2b"`.
-  It may list a Northflank or Agent37 machine as an E2B one; `cloudMachines.kill` still
+  It may list a Northflank, Agent37 or Vercel machine as an E2B one; `cloudMachines.kill` still
   works on it. When no entry `"e2b"` exists, it shows E2B as not configured.
   A client that knows `provider` skips an entry, and shows a machine row
   without provider details, when the provider is one it does not know.
@@ -1556,7 +1567,7 @@ interface RemoteMachine {
 interface CloudMachineState {
   provider: CloudProviderKind;
   cloudMachineId: string;                  // the entry the sandbox started from
-  sandboxId: string;                       // E2B's sandbox id, the Northflank service id, or the Agent37 instance id
+  sandboxId: string;                       // E2B's sandbox id, the Northflank service id, the Agent37 instance id, or the Vercel sandbox name
   volumeId?: string;                       // Northflank only: the service's volume id
   state: "running" | "pausing" | "paused" | "resuming" | "stopping";
   template: string;                        // the template or image this sandbox started from
@@ -1707,7 +1718,9 @@ message, a pending permission request, or a live script run on the machine
 machine follows it except where
 [Northflank pause and resume](#northflank-pause-and-resume) says otherwise, and
 an Agent37 machine except where
-[Agent37 sleep and wake](#agent37-sleep-and-wake) says otherwise.
+[Agent37 sleep and wake](#agent37-sleep-and-wake) says otherwise, and a
+Vercel machine except where [Vercel stop and resume](#vercel-stop-and-resume)
+says otherwise.
 
 | Event | Backend action |
 | --- | --- |
@@ -2128,6 +2141,180 @@ the more memory it has.
 **Version.** An instance keeps the template it started with. It wakes and
 binds while the nodeProtocol ranges overlap; otherwise it is deleted without a
 final stop, as on E2B.
+
+<a id="cloud-machines-on-vercel"></a>
+
+###### Cloud machines on Vercel
+
+A backend that lists `"vercel"` in `providerKinds` accepts entries with
+`provider: "vercel"`. Each sandbox is one persistent
+[Vercel Sandbox](https://vercel.com/docs/sandbox) in the entry's Vercel
+project, started from the published Intent node image. Everything above
+applies, with these differences:
+
+1. **Disk only.** A pause stops the sandbox, and Vercel saves its disk as a
+   snapshot. A resume starts a new session from that snapshot, without memory
+   or processes, as on Northflank ([stop and resume](#vercel-stop-and-resume)).
+2. **One image for every size.** The size picks the sandbox's vCPUs; Vercel
+   gives 2 GiB of memory for each vCPU.
+3. **Session cap.** One Vercel session runs at most the plan's maximum
+   (24 hours on Pro and Enterprise, 45 minutes on Hobby). The backend stops
+   and resumes the sandbox before the cap ([stop and resume](#vercel-stop-and-resume)).
+4. **Region.** The sandbox runs in the project's default sandbox region. The
+   entry does not set it.
+5. **Commands** in the sandbox go through Vercel's command API. The route to
+   the machine is the same tailcat route as on E2B; the sandbox opens no port,
+   and it never gets the token.
+
+REST calls go to `https://api.vercel.com` with the entry's token as a bearer
+token and `teamId` as a query parameter. The token is never logged, returned,
+sent to the sandbox or put in an error.
+
+<a id="vercel-entries"></a>
+
+###### Vercel entries
+
+```ts
+interface VercelEntrySettings {
+  teamId: string;                          // the Vercel team that owns the project, "team_…"
+  projectId: string;                       // the Vercel project the sandboxes run in, "prj_…"
+  image: string;                           // image reference without a tag; default "sutterhill/intent-images/intent-node"
+}
+```
+
+`cloudMachines.configure` takes these Vercel-only members:
+
+| Member | Rule |
+| --- | --- |
+| `teamId` | Required to create. `team_` and then 1-64 letters or digits. |
+| `projectId` | Required to create. `prj_` and then 1-64 letters or digits. Changing `teamId` or `projectId` while the entry has any sandbox is `-32602` `machine-in-use` with `runningAgents`. |
+| `image` | A Vercel Container Registry reference without tag or digest: `<team slug>/<project>/<repository>` for a public repository of any team, or `<repository>` for one in the entry's own project. Empty means the default. The backend appends `:<intentdVersion>`. |
+
+Intent publishes each release's node image (linux/amd64) to the public
+repository `sutterhill/intent-images/intent-node`, tagged with the intentd
+version, so the default needs no setup. Vercel needs a sign-in even for a
+public repository, so the image is not a plain public `docker pull`; Vercel
+sandboxes of every team can start it. A change of `image` or `size` applies to
+new sandboxes only.
+
+Vercel entries offer three sizes. `sizes` always lists the three, with no
+`plan` and no `deploymentPlan`:
+
+| Size | vCPU | Memory |
+| --- | --- | --- |
+| `2x4` | 2 | 4 GiB |
+| `4x8` (default) | 4 | 8 GiB |
+| `8x16` | 8 | 16 GiB |
+
+`16x32`, `4x16` and `4x32` are not offered, because Vercel's Pro plan allows
+at most 8 vCPUs and fixes 2 GiB per vCPU; they are `-32602` `invalid-params`
+on a Vercel entry. A plan that allows fewer vCPUs than the size refuses the
+create: `cloud-quota` `limit: "plan"`.
+
+`configure` with `apiKey`, `apiKeyFrom`, `teamId`, `projectId` or `image`, a
+create, and every `validateOnly` call test, in this order, before anything is
+saved:
+
+1. `GET /v2/sandboxes?project=<projectId>&limit=1`, which the reaper needs:
+   `403` with `invalidToken: true` is `key-rejected`; another `403` (the token
+   cannot reach the team) is `permission-denied` (action `list-sandboxes`);
+   `404` is `project-missing`.
+2. The image tag: `HEAD https://vcr.vercel.com/v2/<image>/manifests/<intentdVersion>`
+   with the team id and the token as basic credentials. `404` is
+   `template-missing`. A `401` or `403` (the registry does not answer this
+   team for another team's repository) passes the test, and so does a
+   `<repository>`-only image (its registry path needs the team slug and
+   project, which the entry does not hold); a missing image then fails the
+   first start with `template-missing`.
+
+All failures are `cloud-machine-unavailable`. The token needs to create,
+read, update, stop and delete sandboxes in the project and run commands in
+them; a token scoped to the team is enough. A token without one gets
+`permission-denied` when that call is refused, also later, at a start, with
+the refused call as `action` (`list-sandboxes`, `read-sandbox`,
+`create-sandbox`, `run-command`, `extend-timeout`, `stop`, `resume` or
+`delete`).
+
+###### Vercel sandboxes
+
+At `creating-sandbox`, the backend calls `POST /v3/sandboxes` with:
+
+- `projectId`: the entry's project;
+- `name`: `intent-<12 lowercase hex>`, random per sandbox; Vercel addresses a
+  sandbox by name in its project, so `sandboxId` is this name;
+- `image`: `<image>:<intentdVersion>`;
+- `persistent: true`, `keepLastSnapshots: { count: 1, deleteEvicted: true }`
+  and `snapshotExpiration` of 31 days, so a paused sandbox keeps exactly one
+  snapshot, and a sandbox whose backend went away is not kept for ever;
+- `resources: { vcpus }`: the size's vCPUs;
+- `timeout`: 30 minutes ([stop and resume](#vercel-stop-and-resume));
+- `tags`: the backend's metadata, five tags (Vercel keeps at most five):
+  `intentBackendId` (the backend's `backendId`), `workspaceId`, `agentId`,
+  `intentEntryId` and `intentdVersion`.
+
+It sends no `ports`, no `env` and no network policy, so the sandbox can reach
+the public internet (GitHub, the model providers and tailcat's relay) with
+Vercel's default `allow-all` policy. There is no `volumeId`. Vercel refusals
+map to:
+
+| Vercel answer | Error |
+| --- | --- |
+| `403` with `invalidToken: true` | `cloud-machine-unavailable` `key-rejected` |
+| Another `403` | `cloud-machine-unavailable` `permission-denied` |
+| `404` `not_found` for the image (`Image not found.`) | `cloud-machine-unavailable` `template-missing` |
+| `404` `not_found` for the project | `cloud-machine-unavailable` `project-missing` |
+| `400` naming `resources.vcpus` (more vCPUs than the plan allows) | `cloud-quota` `limit: "plan"`, not retryable |
+| `429` | `cloud-quota` `limit: "rate"` |
+| Any other `4xx` or `5xx` | `cloud-machine-unavailable` `api-error` with `status` |
+
+At `starting-daemon`, the backend starts `intentd serve` with the tunnel on
+and runs `executor.mint` over the sandbox's local socket, both as commands,
+as on E2B. Vercel does not run the image's entrypoint. Each command is
+`POST /v2/sandboxes/sessions/{sessionId}/cmd` with `command`, `args`, `cwd`,
+`env`, `wait: true` and `logs: true`; Vercel answers with newline-delimited
+JSON: the command, its `stdout` and `stderr` lines as the command writes
+them, then the finished command with its `exitCode`. An `error` line ends
+the command as failed. Every `POST` carries `Content-Type: application/json`,
+also with no body (Vercel answers `415` otherwise). A stopped session's
+commands are `410` `sandbox_stopped`. Commands run as the
+image's default user `user` (uid 1000, home `/home/user`), never with `sudo`:
+the image has no `sudo`, and nothing runs as root. intentd, tailcat, the
+provider CLIs and every agent command run as `user`.
+
+To delete a sandbox, the backend calls
+`DELETE /v2/sandboxes/{name}?projectId=<projectId>&deleteOrphanSnapshots=true`,
+which deletes its snapshots too; a `404` means it was already gone. The reaper
+lists `GET /v2/sandboxes?project=<projectId>&tags=intentBackendId:<backendId>`,
+page by page, and deletes each one without a machine row.
+
+<a id="vercel-stop-and-resume"></a>
+
+###### Vercel stop and resume
+
+A Vercel machine pauses and resumes from its disk only. Each session has a
+timeout; when it runs out, Vercel stops the sandbox with a snapshot, as a
+pause. The backend keeps the timeout ahead of now while it runs the sandbox,
+so the timeout only acts as a backstop for a backend that went away:
+
+| Event | Backend action |
+| --- | --- |
+| Sandbox running (busy or idle) | Every 10 minutes, and at each dial, when the session ends in less than 30 minutes, `POST /v2/sandboxes/sessions/{sessionId}/extend-timeout` with what is missing, in whole minutes, so the plan's cap is reached as late as possible. An extension is never sent twice. When the sandbox is already stopped, the backend marks the machine paused. |
+| `extend-timeout` refused with `400` `sandbox_timeout_invalid` (the session reached the plan's cap) | A clean stop and resume (the two rows below, back to back) at the first moment the sandbox is idle; the session still has at least 20 minutes then. A sandbox that stays busy until the session ends is stopped by Vercel with a snapshot, which cuts its running turn, as on a Northflank container restart; the next message resumes it. |
+| Sandbox idle for `idlePauseMinutes`, or `cloudMachines.pause` | `POST /v2/sandboxes/sessions/{sessionId}/stop`. Vercel saves the disk as a snapshot and stops the session, and answers once both are done (a few seconds); a stopped session answers the same again. The link drops; compute billing stops, and the snapshot is still billed. |
+| The backend is away for 30 minutes | The session times out and Vercel stops it with a snapshot. The backend sees it stopped when it comes back, and marks it paused. |
+| New message for an agent on a paused machine | `GET /v2/sandboxes/{name}?projectId=<projectId>&resume=true`, which starts a new session from the snapshot (about 2 s). The backend then starts intentd from the disk, with the same daemon id, certificate, tailcat key and executor credential, so the machine row and `nodeId` stay, and redials with a new generation. |
+| Agent ends for good, `cloudMachines.kill` or `remove`, or paused for `pausedDeleteDays` | As on E2B: resume when paused, final stop, then delete the sandbox and its snapshots. |
+| The sandbox, or its snapshot, is removed outside Intent | `cloud-machine-unavailable` reason `sandbox-lost`, as on E2B. |
+
+**What a resume keeps and loses** is the same as on
+[Northflank](#northflank-pause-and-resume), with the whole disk kept: files
+outside `/home/user` survive a resume too. The agents relaunch with
+[`resumedFromDisk`](../node-link.md#cloud-machines) and the same disk resume
+notice.
+
+**Version.** A sandbox keeps the image it started with (Vercel pins it by
+digest). It resumes and binds while the nodeProtocol ranges overlap; otherwise
+it is deleted without a final stop, as on E2B.
 
 ##### Node mode
 
@@ -2848,11 +3035,12 @@ interface CloudMachineUnavailableData {
 
 `not-configured` and `key-rejected` are `-32602` from placement and
 `cloudMachines.configure` (not retryable: the owner must save a working key).
-`project-missing` (the Northflank project does not exist or the token cannot
-see it) and `permission-denied` (the token lacks a Northflank permission;
+`project-missing` (the Northflank or Vercel project does not exist or the
+token cannot see it) and `permission-denied` (the token lacks a Northflank permission;
 `action` names the call: `read-project`, `list-services`, `create-tag`,
 `create-volume`, `create-service`, `exec`, `pause`, `resume` or `delete`; on
-Agent37 the calls of [Agent37 entries](#agent37-entries)) are
+Agent37 the calls of [Agent37 entries](#agent37-entries), and on Vercel the
+calls of [Vercel entries](#vercel-entries)) are
 `-32602` from `configure` and placement, and an agent's `placementError` when
 a start or resume is refused; they are not retryable.
 `entry-required` is `-32602` from placement only, and not retryable: the
@@ -2926,7 +3114,12 @@ Agent37, an empty wallet (`402`) is `limit: "plan"`, not retryable, and its
 message says to top up the Agent37 wallet; the workspace's awake memory limit
 (`409` `instance_limit_reached`) is `limit: "concurrency"`, retryable, and its
 message says to pause another Agent37 machine or raise the limit at Agent37; a
-`429` is `rate`.
+`429` is `rate`. On Vercel, a size above the plan's vCPU limit (`400` naming
+`resources.vcpus`) is `limit: "plan"`, not retryable, and its message says to
+pick a smaller size or change the Vercel plan; a refusal for the team's
+`429` (the request rate, or the team's concurrent sandboxes or vCPU
+allocation rate) is `rate`. The [session cap](#vercel-stop-and-resume) is
+not an error.
 
 ##### Link traffic capture
 
