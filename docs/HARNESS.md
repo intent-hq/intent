@@ -260,9 +260,9 @@ Land it in this order:
 Registry unit tests enforce that the current constant resolves, that rows
 are coherent (unique versions, wired doctrine, non-empty labels), and that
 unknown versions fall back to the latest. Compile-time checks fail the build
-when the guidance lists miss the current version. CI runs the target on a
-copy of the real files (`scripts/test-new-harness-version.py`), so a layout
-change that breaks it fails on that PR.
+when the guidance lists miss the current version. intentd's release-scripts
+CI job runs the target on a copy of the real files, so a layout change that
+breaks it fails on that PR.
 
 ## Frontend surface (`cloudlands-fe`)
 
