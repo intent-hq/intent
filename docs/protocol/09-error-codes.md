@@ -306,6 +306,15 @@ the agent's machine (not connected, below nodeProtocol 14, or no confirmation wi
 message or `data` ever contains the submitted value. The agent-facing
 `secret-unavailable` tool error is described in §5.56.
 
+### Unsloth model switch confirmation
+
+A user-origin `agent.sendMessage` whose turn would make the managed Unsloth server
+unload the model other agents use is refused with `-32602` and
+`error.data = { code: "unsloth-model-switch-confirmation-required", currentModel,
+requestedModel, agents }` before any state change. Resend with
+`messageMetadata.confirmUnslothModelSwitch: true` after the user confirms
+([§5.5](./methods/agents.md)).
+
 ### Prepared provider profile errors
 
 [§5.54](./methods/provider-profiles.md) uses `-32602` with these `error.data.code`

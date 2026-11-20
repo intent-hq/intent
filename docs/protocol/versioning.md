@@ -25,6 +25,13 @@ apps hide it against an 18.0 daemon. No store migration. The documented surface 
 **497 / 443 / 54** (dispatchable / router / fast path), four fast-path methods fewer, and
 the reverse-RPC list drops to five names.
 
+Also within 18.0 (additive refusal and reserved metadata key, no version bump):
+**Unsloth model switch confirmation**. A user-origin `agent.sendMessage` that would make
+the managed Unsloth server unload the model other local agents run on is refused with `-32602`
+`unsloth-model-switch-confirmation-required`, naming those agents; a resend with
+`messageMetadata.confirmUnslothModelSwitch: true` proceeds
+([§5.5](./methods/agents.md)). Older daemons never refuse, so clients need no gate.
+
 Also within 18.0 (additive event field, no version bump): **clone download counters**.
 `git:clone:progress` `receiving` frames carry an optional `transfer { receivedObjects,
 totalObjects, receivedBytes?, bytesPerSecond? }` parsed from git's progress line, and a
