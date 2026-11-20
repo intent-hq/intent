@@ -1347,15 +1347,24 @@ Without `remoteScripts: 1`, a remote agent's `script.*` calls are refused with
 
 `servedPorts?: number[]` on `ScriptRuntimeState` (in `script.status`, `script.list`
 runtime and `script:state`) lists the TCP ports that processes in a running
-**service** script's process tree listen on, in ascending order without
-duplicates. The daemon reads listening sockets of the service's process tree;
-output text never adds a port. Only listeners on `127.0.0.1`, `0.0.0.0` or `::`
-count. The daemon's own listener ports are never included.
+**service** script's process tree serve on IPv4 loopback, in ascending order
+without duplicates. The daemon reads listening sockets; output text never adds a
+port. The guest tunnel connects to `127.0.0.1:<port>`, so a port counts only when
+the socket that accepts that connection belongs to the service's process tree:
+
+- If any IPv4 listener on `127.0.0.1` or `0.0.0.0` exists for the port, every
+  such listener must belong to the service's process tree. A listener of any
+  other process excludes the port.
+- With no IPv4 listener, a `::` listener in the tree counts only when the daemon
+  verifies that the socket is dual-stack (`IPV6_V6ONLY` off). An IPv6-only
+  socket, or one whose mode cannot be read, does not count.
+- The daemon's own listener ports are never included.
 
 - The field is omitted for command scripts, when no port was found, and when
   the status is not `running`. Stop, exit and restart clear it.
 - The daemon refreshes it while the service runs. Clients must not cache it as
-  an access grant; the guest tunnel checks it fresh on each `OPEN`
+  an access grant; the guest tunnel repeats the ownership check above on each
+  `OPEN` instead of trusting a cached list
   ([guest service preview](../01-transport.md#guest-service-preview-tunnel-additive-guestservicepreview-1)).
 - `detectedUrl` keeps its display meaning and grants no access.
 
