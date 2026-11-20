@@ -209,21 +209,60 @@ unchanged; that is what they exist to prove.
 ### Minting a new harness version
 
 A new version is warranted when doctrine text or the feature defaults a
-version's doctrine assumes change materially. The mechanical steps:
+version's doctrine assumes change materially. Start every bump with the make
+target, from `packages/intentd` in a monorepo checkout:
 
-1. Bump `CURRENT_HARNESS_VERSION` in `intent-core` (`model.rs`).
-2. Copy and edit each changed resource set under its new version. Unchanged
-   instruction bodies or specialist bundles can reuse the prior version. Add
-   the new `InstructionSet` static in `instructions.rs`.
-3. Add a `harness/v<N>.rs` module that reuses the prior system-text surfaces
-   and overrides only what changed.
-4. Add the version's `HarnessEntry` row to the `REGISTRY` (oldest first).
-5. Add goldens for the new version; the prior version's goldens stay
-   untouched — they pin the old doctrine forever.
+```bash
+make new-harness-version FROM=3.15 TO=3.16    # DRY_RUN=1 lists the files only
+```
+
+`FROM` must be the current version. The target registers `TO` as an exact
+copy of `FROM` and writes nothing unless every edit applies. It edits:
+
+1. `intent-core/src/model.rs`: `CURRENT_HARNESS_VERSION`, and `TO` appended to
+   `REPOSITORY_GUIDANCE_HARNESS_VERSIONS` and
+   `REPOSITORY_MONITOR_GUIDANCE_HARNESS_VERSIONS`.
+2. `intent-core/src/prompt_breakdown.rs`: `harness_records_prompt_breakdown`
+   admits `TO`, and its test asserts it.
+3. `intent-services/src/context_budget.rs`: `PREVIOUS` becomes `FROM`.
+4. `intent-services/src/harness/mod.rs`: the `pub(crate) mod v<TO>;` line and
+   the `REGISTRY` row (oldest first).
+5. `harness/v<FROM>.rs`: its test stops pinning `FROM` as the current version.
+6. `harness/v<TO>.rs` (new): reuses every `FROM` surface; its test pins `TO`
+   as current.
+7. This repo's [protocol/methods/agents.md](./protocol/methods/agents.md)
+   (Prompt breakdown section): both lists of versions that record a
+   breakdown. A standalone intentd clone skips this edit and says so.
+
+Then make the version's own change by hand:
+
+1. Copy and edit each changed resource set under the new version
+   (`resources/agent-instructions/<ver>/`, `resources/specialists/<ver>/`).
+   Unchanged instruction bodies or specialist bundles reuse the prior
+   version. Add a new `InstructionSet` static in `instructions.rs` or bundle
+   const in `specialists.rs` only for a changed set.
+2. In `harness/v<TO>.rs`, override only what changed and replace the matching
+   "unchanged" assertion in its test with one that pins the change.
+3. Pin new text surfaces in goldens. The prior version's goldens stay
+   untouched; they pin the old doctrine forever.
+4. If the change is user-facing, update the assistant app guide in the same
+   intentd PR.
+5. The bump keeps `FROM`'s repository guidance and prompt breakdown
+   admissions. To drop either, edit those lists by hand: it is a per-version
+   decision, not a routine edit.
+
+Land it in this order:
+
+1. A monorepo docs PR with the `agents.md` change merges first.
+2. Then the intentd PR. Run `make check` and `make test-select
+   E='test(harness)'` before opening it.
 
 Registry unit tests enforce that the current constant resolves, that rows
 are coherent (unique versions, wired doctrine, non-empty labels), and that
-unknown versions fall back to the latest.
+unknown versions fall back to the latest. Compile-time checks fail the build
+when the guidance lists miss the current version. intentd's release-scripts
+CI job runs the target on a copy of the real files, so a layout change that
+breaks it fails on that PR.
 
 ## Frontend surface (`cloudlands-fe`)
 

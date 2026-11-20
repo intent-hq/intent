@@ -680,8 +680,12 @@ Rules:
   daemon stop mid-archive, a failed stop). Each script's stop first re-checks that
   the row is still archived; once an unarchive has flipped it, the remaining
   scripts are left running (an `autoStart` script stopped just before the flip is
-  started again by the unarchive). Machine runs of remote agents are not stopped. A
-  client may still start a script in an archived workspace.
+  started again by the unarchive). Then each live machine run of a remote agent
+  (`machineRuns`) is stopped as `script.stop` with `remoteAgentId` stops it, under
+  the same re-check: its entry stays with `runtime.status` `idle`. A machine that
+  does not acknowledge the stop within the bounded wait is logged and its run is
+  settled on the daemon; the archive does not fail. A client may still start a
+  script in an archived workspace.
 - Starts are best-effort: a failed start is logged and never fails the triggering
   call, and one failure does not keep other scripts from starting.
 
@@ -1228,6 +1232,12 @@ live machine run of the script (`scriptStop` to each machine), settles each
 unfinished one as `cancelled` with an error naming the replacement or removal,
 exactly as for the home run, and drops all `machineRuns` entries. Later starts
 use the new definition. Archive and restore change no run.
+
+**Archiving the workspace.** `workspace.archive` stops every live machine run of
+the workspace as the app's `script.stop({ remoteAgentId })` does, while the row
+is still archived (see "Archive stops scripts" under
+[`autoStart`](#autostart-runs-while-the-workspace-is-active)). Ended runs keep their
+entries and `lastRun`.
 
 A machine run follows the usual runtime contract: `starting` before the
 `script.start` reply, `running` when the machine reports the process (`pid` is

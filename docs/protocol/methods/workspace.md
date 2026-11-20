@@ -1088,7 +1088,8 @@ workspace's guests and open invites, which archive removes:
   update).
 - **Running scripts are stopped.** After the hook and monitor sweeps, and before the
   repository archive script runs, every running script of the workspace is stopped with
-  `script.stop` semantics while the row stays archived; unarchive starts the saved
+  `script.stop` semantics while the row stays archived, including remote agents'
+  machine runs on their machines; unarchive starts the saved
   `autoStart` scripts again (see [scripts.md "autoStart"](./scripts.md#autostart-runs-while-the-workspace-is-active)).
 - **Active PR monitors are cancelled** *([intent-hq/intentd#1067](https://github.com/intent-hq/intentd/pull/1067); monorepo#1828)*.
   Every ACTIVE PR monitor in the workspace (§5.42) goes through the same core cancel
