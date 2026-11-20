@@ -173,6 +173,7 @@ into wire methods.
 | `mcp.servers.toggle` | Exclude | — | Global variant without `workspaceId`; never inject a workspace override. |
 | `rules.list`, `rules.get`, `mcp.servers.list` | Exclude | — | Global settings variants, including the frontend rules `"global"` placeholder. |
 | `plugin.list` | Exclude | — | Daemon-wide plugin inventory; plugins have no workspace scope. |
+| `backends.report`, `backends.relayCall`, `agent.rpcMethods` | Exclude | — | Daemon-wide Assistant backend registry, relay and method classes; no workspace scope. |
 | `agent.importableSessions.list` | Exclude | — | Host-wide inventory of the sessions in the daemon host's provider stores; it has no workspace scope. |
 | `unsloth.status`, `unsloth.stop` | Exclude | — | Shared daemon process management. |
 | `workspace.list`, `workspace.findByPullRequest`, `workspace.subscribe`, `workspace.unsubscribe`, `agent.listActive`, `agent.listInterrupted`, `agent.memoryUsage`, `agent.resolveInterrupted`, `stats.getUsage`, `stats.getRateHistory`, `crossWorkspace.listSiblings` | Exclude | — | Global discovery, combined views or cross-backend batch operations require aggregation policy. |

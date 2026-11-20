@@ -58,6 +58,7 @@ const PREPARED_RPC_BINDINGS = [
   '  ws.rpc.methods({ prefix?, class? }?) → { count, methods }',
   '  ws.rpc.call(method, params?, { backend?, title? }?) → result',
   '  ws.rpc.batch([{ method, params?, backend? }], { title? }?) → { ok, status, proposalId, calls }',
+  '  ws.rpc.backends() → { backends }',
 ].join('\n');
 
 // Docs-first contract: only this canonical proposal may mention these helpers
