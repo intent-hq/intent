@@ -52,6 +52,14 @@ const PREPARED_SECRET_BINDINGS = [
 const PREPARED_MACHINE_MODELS_BINDING =
   '  ws.agent.machineModels(nodeId?, { provider?, model? }?) → { machines }';
 
+// Prepared Assistant generic RPC bindings (docs lead the intentd change).
+const PREPARED_RPC_BINDINGS = [
+  '  ws.rpc.info() → { backend, daemonVersion, protocolVersion, source, protocolDocs, docsNote, cli }',
+  '  ws.rpc.methods({ prefix?, class? }?) → { count, methods }',
+  '  ws.rpc.call(method, params?, { backend?, title? }?) → result',
+  '  ws.rpc.batch([{ method, params?, backend? }], { title? }?) → { ok, status, proposalId, calls }',
+].join('\n');
+
 // Docs-first contract: only this canonical proposal may mention these helpers
 // before they ship. Once help declares one, its real signature takes precedence.
 export const PREPARED_BINDINGS = new Map([
@@ -76,6 +84,8 @@ export const PREPARED_BINDINGS = new Map([
   ['docs/protocol/07-agent-streaming.md', PREPARED_SECRET_BINDINGS],
   ['docs/protocol/methods/nodes.md', PREPARED_MACHINE_MODELS_BINDING],
   ['docs/protocol/model-platform-routing.md', PREPARED_MACHINE_MODELS_BINDING],
+  ['docs/protocol/methods/agents.md', PREPARED_RPC_BINDINGS],
+  ['docs/protocol/05-method-catalog.md', PREPARED_RPC_BINDINGS],
   ['docs/protocol/methods/scripts.md', [
     '  ws.script.listPage({ archive?, limit?, cursor? }?) → { view, scripts, nextCursor? }',
     '  ws.script.get(scriptId) → script',
