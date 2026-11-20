@@ -285,6 +285,15 @@ ws.primitive.addPatch(noteId, filePath, diff, description) → { ok, primitiveId
 ws.primitive.addReference(noteId, semanticId, description, snapshot?) → { ok, primitiveId, noteId }
 ```
 
+### ws.rpc
+
+```text
+ws.rpc.batch([{ method, params?, backend? }], { title? }?) → { ok, status: "pending-approval", proposalId, calls }
+ws.rpc.call(method, params?, { backend?, title? }?) → { ok, backend, method, result } | { ok: false, error: { code, message, data? } } | { ok, status: "pending-approval", proposalId }
+ws.rpc.info() → { backend, daemonVersion, protocolVersion, source, protocolDocs, docsNote, cli }
+ws.rpc.methods({ prefix?, class? }?) → { count, methods: [{ method, class, summary, doc? }] }
+```
+
 ### ws.script
 
 ```text

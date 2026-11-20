@@ -23,6 +23,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | agent.sendQueuedMessagesNow | agentId (req), workspaceId (req), messageIds (req, nonempty array of distinct nonempty strings) | `{ success: true, queued, messageIds, turnId?, quarantined? }`. Explicitly sends exactly the selected ready entries as one batch in existing queue order, with at most one keep-alive preemption. Validates the whole selection under the queue lock before dequeue or preemption: missing/stale/foreign IDs, duplicates, editing entries, unexpired holds, imported unbound human instructions and script-monitor wake entries (`messageMetadata.type: "script_monitor_wake"` with `monitorId` and without `remoteAgentId`; a [machine-run wake](./scripts.md#wakes-of-machine-run-monitors) is an ordinary entry) return `-32602` without sending any selected entry. Script-monitor wakes retain their individual monitor admission and lifecycle fence. Guest collaborators may select only entries visible in their `agent.getQueue`; original authorship, attachments and per-entry transcript rows are preserved. Unselected and later-arriving entries remain queued. `queued: false` carries the head entry’s `turnId`; all row echoes share it and precede the single shrunk `agent:queue:updated`, with one `agent:queue:processing` event. `queued: true` omits `turnId`: a startup/slot race restores the complete batch at the queue front; a partial transcript persistence failure parks the agent in Error and restores the batch in order, retaining entry IDs and skipping already-persisted rows on retry. Quarantine returns `queued: true, quarantined: true` without popping or preempting. `messageIds` always lists the selected IDs in queue order. A repeated request after delivery returns `-32602`; clients must refresh the queue rather than retry blindly. Requires the runtime agent manager; store-only configurations return unsupported without changing the queue. |
 | agent.dismissQuestions *(v2.8; model notice added within v4.3, intentd#892)* | agentId (req), messageId (req), workspaceId (req) | { success: true, dismissedQuestionsMessageId } — details below the table. |
 | agent.resolveProposal *(v8.7, [intentd#1581](https://github.com/intent-hq/intentd/pull/1581))* | agentId (req), proposalId (req), outcome (req: `"applied"` \| `"dismissed"`), detail?, workspaceId (req) | { success: true, proposalId, outcome } — details below the table. |
+| agent.resolveRpcProposal *(prepared, Assistant RPC)* | agentId (req), proposalId (req), decision (req: `"approve"` \| `"reject"`), workspaceId (req) | { success: true, proposalId, outcome, items, expired? } — owner only; details below the table. |
 | agent.markSeen *(v4.5)* | agentId (req), messageId (req), workspaceId (req) | { success: true, lastSeenMessageId } — details below the table. |
 | agent.editAndRegenerate | agentId (req), messageId (req), content (req), workspaceId (req), imageBlocks? *(stored block references with the capped-block-read capability)*, fileBlocks? *(attachment references only since v10.0; see the file-block contract on `agent.sendMessage`)*, model? | { success, queued: false, messageId, truncatedCount } — details below the table. |
 | agent.queueMessage | agentId (req), content (req), messageId? *(submission correlation v1, below)*, imageBlocks?, fileBlocks? *(attachment references only since v10.0; an inline-`data` entry is `-32602` naming the index BEFORE enqueueing — see the file-block contract on `agent.sendMessage`)*, messageMetadata?, workspaceId? | { success, queuedMessage, turnId } — details below the table. |
@@ -513,6 +514,23 @@ No method, event or error number is added; the method catalog is unchanged.
   A re-proposed id re-enters the pending list as a fresh card and its earlier outcome (and created-workspace link) is dropped; its re-resolution records a new outcome and notice.
   Validation: the `proposalId` is matched VERBATIM against the recorded pending entries (recording preserves `applyToolCallId` / `preview.title` exactly as proposed, so no normalization); an empty/whitespace-only `proposalId` or one exceeding 256 bytes is `-32602`, an `outcome` other than the two literals is `-32602`, and `detail` is trimmed (empty collapses to absent) and capped at 2000 bytes (`-32602` past it — it is appended verbatim to the applied notice, so it is bounded against oversized payloads riding into the transcript).
   An id that was never pending and never resolved, a nonexistent `agentId`, or a workspace mismatch is a not-found error
+
+**`agent.resolveRpcProposal` details.**
+
+- Approves or rejects an Assistant `rpc-call` proposal (see "Assistant RPC proposals" below). Only a
+  connection bound to the host owner may call it (`-32003` otherwise, including every agent path); it is
+  on the agent-forbidden list, so the Assistant can never approve its own calls.
+- `decision: "approve"` runs the calls the daemon holds for this proposal, in order, as the owner, and
+  stops at the first failure. Each `items[]` entry is `{ index, backend, method, status, result?, error? }`
+  with `status` one of `done`, `failed`, `unknown` (no reply before the per-call timeout; it may have run)
+  or `skipped`. The proposal is then resolved `applied` exactly like `agent.resolveProposal`, and the
+  applied notice's detail carries a bounded per-call report (results are shortened to fit 12,000 bytes).
+- `decision: "reject"` runs nothing and resolves the proposal `dismissed` (`items: []`).
+- The held calls, not the transcript card, are what runs: a card that the daemon does not hold (for
+  example after a daemon restart) resolves `dismissed` with `expired: true` and runs nothing.
+- A second approval while the calls run is `-32005` (`current.state: "running"`). An approval before the
+  proposing turn ended is `-32005` (`current.state: "turn-in-progress"`); retry after the turn ends.
+  An already resolved id echoes its outcome. An unknown id is a not-found error.
 
 **`agent.markSeen` details.**
 
@@ -2635,6 +2653,34 @@ Session-metadata tracking for the **proposal resource blocks** an agent's turns 
 - **Transcript-swap reconciliation.** `agent.replaceMessages` re-mints row ids, leaving surviving entries' `messageId`s dangling by construction; `agent.editAndRegenerate` truncation keeps the kept prefix's ids (suffix-only delete, intentd#1757) but may have truncated a carrying row away. After either swap the list is rebuilt against the post-swap transcript: each pending entry is remapped to the **newest** assistant row still carrying its proposal block (under stable ids a surviving entry maps onto itself), and an entry whose block no longer exists anywhere in the transcript is dropped. Resolution state is preserved — entries the list no longer holds are never re-added, even when their blocks survive the swap.
 - **Durability.** Writes are atomic single-key `json_set` updates (sibling metadata keys preserved), serialized per agent on the same mutation lock as the question markers. Best-effort: a persist failure is logged and never fails the turn.
 - **Resolution.** `agent.resolveProposal` (method table above) moves an entry out of the list into the `proposalResolutions` map (`proposalId -> "applied" | "dismissed"`, capped at 100 entries, oldest evicted) and notifies the model on both outcomes. A card Apply of a `workspace-create` proposal is resolved by the daemon itself when the client passes `workspace.create { origin: { kind: "proposal", agentId, proposalId } }` (see "Proposal origin" in [workspace.md](./workspace.md), [intent-hq/intent#8086](https://github.com/intent-hq/intent/issues/8086)): the create runs this path requesting `applied`, so the notice does not depend on the proposing conversation being open in any client. Such a create reports `proposalOrigin` on its result, and the client then skips its own post-apply call — which it keeps only for daemons that return no `proposalOrigin`. Besides the client-driven Apply, the proposing agent itself is a second resolver of its own pending list: on the user's explicit chat instruction, `ws.workspace.applyProposal` (MCP-only; see "Agent apply" in [workspace.md](./workspace.md)) creates the `workspace-create` proposal's workspace under the stored idempotency key and then calls this same path requesting `applied`, so the `agent:updated` emit and the `proposal_resolved` notice are identical to a card Apply. Because the resolver echoes an already-persisted outcome instead of rewriting it, a card resolution that landed from the UI while the create was in flight is kept and reported as the binding's `outcome`: a concurrent non-applied resolution (`dismissed`) comes back with the created workspace retained and a `resolveWarning` saying the workspace exists, while a concurrent UI `applied` comes back as `applied` with no warning. There is **no delivery hold**: unlike pending questions, pending proposals do not park automatic deliveries — the proposing agent keeps working.
+
+#### Assistant RPC proposals (`rpc-call`, prepared)
+
+The Assistant agent (top-level agent in the `__chief__` workspace only) has an MCP-only `ws.rpc` tool that
+calls any daemon JSON-RPC method as the owner through an in-process connection with UDS semantics.
+Each method has an agent class: `read` (runs at once), `mutating` (needs approval; unknown names too),
+`forbidden-to-agent` (refused even with approval: credential and access administration, anything that
+answers an approval, permission, question or secret request, `settings.update` / `settings.reset`, and
+owner surfaces with their own agent tools) or `unsupported-on-agent-path` (`client.hello`,
+subscriptions, `drafts.*`, presence and invite fast paths). The class comes from intentd's catalog and
+its golden `agent_rpc_classes.txt`.
+
+A mutating `ws.rpc.call` or any `ws.rpc.batch` does not run. The daemon holds the calls and the tool
+result carries a proposal resource block of kind `rpc-call`:
+
+```json
+{ "kind": "rpc-call", "applyToolCallId": "rpc-6f1c…",
+  "preview": { "title": "Archive stale workspaces", "summary": "On Studio, in order. Stops at the first failure.", "applyLabel": "Approve" },
+  "payload": { "operation": "rpc.call", "proposalId": "rpc-6f1c…",
+    "calls": [ { "index": 0, "backend": { "id": "local", "name": "Studio", "local": true },
+                 "method": "workspace.archive", "class": "mutating",
+                 "summary": "Archives a workspace.", "params": { "workspaceId": "ws-1" } } ] } }
+```
+
+It is recorded in `pendingProposals` like any proposal. Clients render every call with its backend,
+method, summary and full params, grouped by backend, and resolve it only with
+`agent.resolveRpcProposal` (never `agent.resolveProposal`). A client that does not know the kind tells
+the user to approve on a desktop app. `ws.app.proposal.show` refuses this kind.
 
 ```json
 // → resolve a pending proposal after the client-side Apply succeeded

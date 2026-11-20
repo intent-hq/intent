@@ -43,6 +43,10 @@ adds two owner-only router methods, `agent.importableSessions.list` and
 `agent.importSession`, which bring an existing provider session on the daemon host
 into a workspace as a new agent with its history.
 
+The prepared [Assistant RPC approvals](./methods/agents.md#assistant-rpc-proposals-rpc-call-prepared)
+add one owner-only router method, `agent.resolveRpcProposal`, which runs or rejects the calls the
+Assistant's MCP-only `ws.rpc` tool holds for approval.
+
 The [PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup)
 adds one read-only router method, `workspace.findByPullRequest`.
 `prWorkspaceLookup: 1` gates support.
@@ -125,9 +129,9 @@ The [Agent Plugins contract (§5.57)](./methods/plugins.md) adds five
 administrator-only router methods that install, update, remove, enable and list
 app-wide plugins; `agentPlugins: 1` gates support.
 
-The documented surface reserves **505 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The documented surface reserves **506 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
 
-- **Router methods:** 451 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 452 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 54 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 0; use canonical Git read names
 
@@ -148,12 +152,12 @@ methods and four socket-private control notifications. Their individual hello
 capabilities gate support; catalog entries do not grant permission or establish
 which desktop release contains the feature. All existing methods remain present.
 
-### Router methods by namespace (451 total)
+### Router methods by namespace (452 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
 | accept-changes | 7 | addRemote, execute, getStatus, mergePR, prepare, reconcile, release — the "accept the agent's work" pipeline (§5.18; `workspaceId` req) |
-| agent | 54 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getCreationPreferences, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, importSession, importableSessions.list, list, listActive, listInterrupted, listUserMessages, markSeen, memoryUsage, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, resolveProposal, respondPermission, restore, retire, retry, sendMessage, sendQueuedMessageNow, sendQueuedMessagesNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate, workers.list, workers.stop |
+| agent | 55 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getCreationPreferences, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, importSession, importableSessions.list, list, listActive, listInterrupted, listUserMessages, markSeen, memoryUsage, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, resolveProposal, resolveRpcProposal, respondPermission, restore, retire, retry, sendMessage, sendQueuedMessageNow, sendQueuedMessagesNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate, workers.list, workers.stop |
 | client | 1 | list — live hello'd connections grouped by logical `clientId` (§5.17; v9.9, daemon-global result; optional routing-only `workspaceId`). The handshake itself (`client.hello`) is a fast-path method, below |
 | cloudMachines | 5 | configure, kill, list, pause, remove — E2B, Northflank and Agent37 cloud machines (§5.50) from named entries, daemon-global; configure/remove owner-only, list owner and members, pause/kill owner or starter |
 | comment | 6 | add, delete, getThread, list, resolveThread, respond |
