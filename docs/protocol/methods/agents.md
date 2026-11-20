@@ -2719,7 +2719,9 @@ otherwise the remote daemon's `agent.rpcMethods` class, otherwise mutating; remo
 `rpc-call` card, whose calls carry their backend. Before a card is shown, every remote backend in it must have
 an online relay. Relay failures use `data.code` `unknown-backend`, `no-relay-online` (the message names the
 reporting machines to open), `relay-disconnected` (the call may have run; a batch reports the item `unknown`
-and skips the rest) and `relay-timeout`.
+and skips the rest), `relay-timeout`, and the app-reported `relay-unreachable` (the app could not
+reach the backend; nothing was sent) and `relay-outcome-unknown` (sent, but no reply; reported
+`unknown` like a disconnect).
 
 ```json
 // → resolve a pending proposal after the client-side Apply succeeded
