@@ -75,7 +75,7 @@ There are already many ways to run coding agents, and most of them tie you to on
 | PR Reviewer | Reviews pull requests with high-confidence, actionable feedback |
 | UI Designer | Builds accessible, production-ready interfaces |
 | Vulnerability Scanner | Finds real, exploitable security vulnerabilities |
-| Maintenance Coordinator | Keeps a steady stream of reviewed, green PRs for bugs, dependency and security updates, and CI failures |
+| Maintainer | Keeps a steady stream of reviewed, green PRs for bugs, dependency and security updates, and CI failures |
 
 Write your own specialists in Settings and choose which one starts a workspace or takes each delegated task.
 
