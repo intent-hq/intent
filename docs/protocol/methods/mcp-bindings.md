@@ -288,10 +288,11 @@ ws.primitive.addReference(noteId, semanticId, description, snapshot?) → { ok, 
 ### ws.rpc
 
 ```text
+ws.rpc.backends() → { backends: [{ id, name, local, reachable?, daemonVersion?, reporters?: [{ clientId, device, online, lastSeenAt }] }] }
 ws.rpc.batch([{ method, params?, backend? }], { title? }?) → { ok, status: "pending-approval", proposalId, calls }
 ws.rpc.call(method, params?, { backend?, title? }?) → { ok, backend, method, result } | { ok: false, error: { code, message, data? } } | { ok, status: "pending-approval", proposalId }
-ws.rpc.info() → { backend, daemonVersion, protocolVersion, source, protocolDocs, docsNote, cli }
-ws.rpc.methods({ prefix?, class? }?) → { count, methods: [{ method, class, summary, doc? }] }
+ws.rpc.info({ backend? }?) → { backend, daemonVersion, protocolVersion, source, protocolDocs, docsNote, cli }
+ws.rpc.methods({ prefix?, class?, backend? }?) → { backend, count, methods: [{ method, class, summary, doc? }] }
 ```
 
 ### ws.script
