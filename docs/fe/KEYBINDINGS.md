@@ -69,6 +69,7 @@ including Intent OS, uses `Super+Tab`; Windows has no default because it owns `A
 | `Mod+\`            | Create Column to the Right                         | Including editors and terminals; disabled at four columns   | `panel.create-column-right`       |
 | `Mod+Shift+M`      | Toggle Panel Zoom/Maximize                         | In panel                                                    | `panel.maximize`                  |
 | `Mod+Shift+C`      | Copy Browser URL                                   | In browser panel                                            | `panel.copy-browser-url`          |
+| `Mod+Shift+Enter`  | Open Tab in Own Window / Move Back                 | In panel or tab window (Labs: browser pages in main)        | `panel.tab-window`                |
 
 Numbered workspace navigation uses **1** for Home, **2–8** for the first seven workspace tabs,
 and **9** for the last workspace tab. With the device rail hidden, `Mod+1-9` also selects Home
