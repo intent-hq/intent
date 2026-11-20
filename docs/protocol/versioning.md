@@ -1452,6 +1452,28 @@ the method and event catalogs and the surface counts are unchanged, and no
 `AgentLite` or `Workspace` field is added. The public protocol version is
 unchanged.
 
+**Vercel cloud machines — `"vercel"` in `providerKinds` (additive).**
+`CloudProviderKind` adds `"vercel"`, so an entry's `provider` (and
+`cloud.provider`, and `provider` on the three cloud error datas) can be
+`"vercel"`. A [Vercel entry](./methods/nodes.md#cloud-machines-on-vercel)
+starts one persistent Vercel Sandbox per sandbox, in the entry's team and
+project, from the Intent node image that Intent publishes to a public Vercel
+Container Registry repository (or the entry's `image`). New optional members:
+`cloudMachines.configure` `provider: "vercel"` and the Vercel-only `teamId`,
+`projectId` and `image` (`apiKey` and `apiKeyFrom` carry the Vercel access
+token); `CloudMachineProvider.vercel` (`teamId`, `projectId`, `image`). Vercel
+entries offer the existing sizes `"2x4"`, `"4x8"` and `"8x16"`; no size or
+error reason is added. A Vercel machine pauses with a stop that keeps only the
+disk, so every resume relaunches the agents with the disk resume notice, as on
+Northflank; the backend also stops and resumes it at the plan's session cap.
+The backend advertises Vercel only by listing it in `providerKinds`, which
+needs `cloudMachineProviders: 1`; no flag is added. Clients that do not know
+`"vercel"` skip its entries and show its machine rows without provider
+details, as for any unknown kind. No method or event is added or renamed, so
+the method and event catalogs and the surface counts are unchanged, and no
+`AgentLite` or `Workspace` field is added. The public protocol version is
+unchanged.
+
 **Secrets for remote agents — nodeProtocol 14 (additive result fields and error code; no method-catalog change, so no version bump).**
 A remote top-level agent can now request and use secrets
 ([§5.56 remote agents](./methods/secrets.md#remote-agents)). Its
