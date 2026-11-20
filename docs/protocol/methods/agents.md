@@ -528,6 +528,8 @@ No method, event or error number is added; the method catalog is unchanged.
 - `decision: "reject"` runs nothing and resolves the proposal `dismissed` (`items: []`).
 - The held calls, not the transcript card, are what runs: a card that the daemon does not hold (for
   example after a daemon restart) resolves `dismissed` with `expired: true` and runs nothing.
+- One approval run is bounded at 10 minutes and each call at 120 seconds; calls past the run bound are
+  `skipped`. Clients should wait at least 11 minutes for the reply.
 - A second approval while the calls run is `-32005` (`current.state: "running"`). An approval before the
   proposing turn ended is `-32005` (`current.state: "turn-in-progress"`); retry after the turn ends.
   An already resolved id echoes its outcome. An unknown id is a not-found error.
@@ -2659,7 +2661,8 @@ Session-metadata tracking for the **proposal resource blocks** an agent's turns 
 The Assistant agent (top-level agent in the `__chief__` workspace only) has an MCP-only `ws.rpc` tool that
 calls any daemon JSON-RPC method as the owner through an in-process connection with UDS semantics.
 Each method has an agent class: `read` (runs at once), `mutating` (needs approval; unknown names too),
-`forbidden-to-agent` (refused even with approval: credential and access administration, anything that
+`forbidden-to-agent` (refused even with approval: credential and access administration, including
+reads that return live invite links or stored OAuth records, anything that
 answers an approval, permission, question or secret request, `settings.update` / `settings.reset`, and
 owner surfaces with their own agent tools) or `unsupported-on-agent-path` (`client.hello`,
 subscriptions, `drafts.*`, presence and invite fast paths). The class comes from intentd's catalog and
@@ -2679,7 +2682,8 @@ result carries a proposal resource block of kind `rpc-call`:
 
 It is recorded in `pendingProposals` like any proposal. Clients render every call with its backend,
 method, summary and full params, grouped by backend, and resolve it only with
-`agent.resolveRpcProposal` (never `agent.resolveProposal`). A client that does not know the kind tells
+`agent.resolveRpcProposal`. `agent.resolveProposal` refuses `outcome: "applied"` for such an id
+(`-32602`, nothing runs); `dismissed` drops the held calls. A client that does not know the kind tells
 the user to approve on a desktop app. `ws.app.proposal.show` refuses this kind.
 
 ```json
