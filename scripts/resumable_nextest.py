@@ -51,6 +51,11 @@ not unique coverage totals. A completed shortcut revalidates its execution sourc
 and records that source on the report, including each selection's evidence owner.
 No later invocation repairs unfinished receipts; only tree expiry removes them.
 
+`--features LIST` (make test-select / test-stress FEATURES=...) builds the one
+`--filterset` selection with those Cargo features, e.g. `intent-store/postgres`
+for the feature-gated Postgres store tests; without it they compile to empty
+binaries and the filter matches nothing, which fails the run.
+
 `--stress-count N` (make test-stress) hands one `--filterset` to
 scripts/nextest_stress.py: the same fixtures and Cargo outputs, N iterations with
 retries off, an optional `--load 1` CPU + fsync load confined to `--load-cores`
@@ -672,9 +677,10 @@ def transfer_fixture_identity(repo_root: Path) -> dict[str, str]:
 def tree_key(repo_root: Path, intentd_dir: Path, output_args: list[str] | None = None,
              fixture_identity: dict[str, str] | None = None,
              transfer_identity: dict[str, str] | None = None,
-             *, child_env: dict[str, str] | None = None) -> str:
+             *, child_env: dict[str, str] | None = None,
+             features: list[str] | None = None) -> str:
     inputs = tree_inputs(repo_root, intentd_dir, output_args, fixture_identity,
-                         transfer_identity, child_env=child_env)
+                         transfer_identity, child_env=child_env, features=features)
     encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 
@@ -682,7 +688,8 @@ def tree_key(repo_root: Path, intentd_dir: Path, output_args: list[str] | None =
 def tree_inputs(repo_root: Path, intentd_dir: Path, output_args: list[str] | None = None,
                 fixture_identity: dict[str, str] | None = None,
                 transfer_identity: dict[str, str] | None = None,
-                *, child_env: dict[str, str] | None = None) -> dict[str, object]:
+                *, child_env: dict[str, str] | None = None,
+                features: list[str] | None = None) -> dict[str, object]:
     """Everything a pass depends on; [`tree_key`] hashes it."""
     intentd_dir = intentd_dir.resolve()
     test_env = nextest_env() if child_env is None else child_env
@@ -723,6 +730,13 @@ def tree_inputs(repo_root: Path, intentd_dir: Path, output_args: list[str] | Non
     # for sandboxed runs so ordinary records keep their existing keys.
     # INTENT_GATE_HERMETIC is internal: only the Makefile's HERMETIC wrapper
     # sets it. A run that skipped the sandbox self-check is a different mode.
+    # FEATURES=... builds other test executables (a feature can add, remove or
+    # change tests), and the tree's passed.jsonl is shared by every selection,
+    # so feature builds get a tree of their own: their passes never credit a
+    # default run, or the reverse. Added only with features, so default
+    # records keep their existing keys.
+    if features:
+        inputs["cargo-features"] = features
     if os.environ.get("INTENT_GATE_HERMETIC") == "1":
         inputs["hermetic"] = {
             "HIDE_NODE": os.environ.get("HIDE_NODE") == "1",
@@ -1707,10 +1721,54 @@ def apply_storage_policy(output_args: list[str], label: str) -> None:
 
 
 def whole_workspace(selections: list[list[str]]) -> bool:
-    """Whether every selection resolves features like a full `--workspace` build."""
+    """Whether every selection resolves features like a full `--workspace` build.
+
+    Extra Cargo features (FEATURES=...) build different test executables, so
+    such a run must keep the default build's executables, as a package scope does.
+    """
     return all("--workspace" in selection and not any(
-        arg in ("-p", "--package") or arg.startswith(("--package=", "-p"))
+        arg in ("-p", "--package", "-F", "--features", "--all-features")
+        or arg.startswith(("--package=", "-p", "--features=", "-F"))
         for arg in selection) for selection in selections)
+
+
+# Cargo feature names (optionally `package/feature`), separated by commas or spaces.
+FEATURES_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_+./-]*(?:[ ,]+[A-Za-z0-9_][A-Za-z0-9_+./-]*)*")
+
+
+def cargo_features(value: str) -> str:
+    """--features: one Cargo feature list, normalized to comma-separated."""
+    value = value.strip(" ,")
+    if not FEATURES_RE.fullmatch(value):
+        raise argparse.ArgumentTypeError(
+            f"expected Cargo features such as 'intent-store/postgres', got {value!r}")
+    return ",".join(part for part in re.split(r"[ ,]+", value) if part)
+
+
+def selection_features(selections: list[list[str]]) -> list[str]:
+    """The Cargo feature arguments of every selection, normalized for the tree key."""
+    found: set[str] = set()
+    for selection in selections:
+        args = iter(selection)
+        for arg in args:
+            if arg in ("--features", "-F"):
+                found.update(f"feature:{name}" for name in re.split(r"[ ,]+", next(args, "")) if name)
+            elif arg.startswith(("--features=", "-F")):
+                value = arg.split("=", 1)[1] if arg.startswith("--features=") else arg[2:].removeprefix("=")
+                found.update(f"feature:{name}" for name in re.split(r"[ ,]+", value) if name)
+            elif arg in ("--all-features", "--no-default-features"):
+                found.add(arg)
+    return sorted(found)
+
+
+def filterset_selection(filterset: str, features: str | None = None) -> list[str]:
+    """The one workspace selection for --filterset, with --features when asked."""
+    return ["--workspace", *(["--features", features] if features else []), "-E", filterset]
+
+
+NO_MATCH_HINT = ("check the filter (test names include their module path, "
+                 "e.g. test(=module::name) or test(/name$/)); a test behind a Cargo "
+                 "feature needs it enabled, e.g. FEATURES=intent-store/postgres")
 
 
 def open_paths(candidates: list[Path]) -> set[str] | None:
@@ -1902,8 +1960,9 @@ def run_nextest(args: argparse.Namespace) -> int:
         return failure_exit_code(error)
     print(f"[{label}] {timeout_description(env)}", flush=True)
     apply_storage_policy(output_args, label)
+    features = selection_features(plans)
     key = tree_key(repo_root, intentd_dir, output_args, fixture_identity,
-                   transfer_identity=transfer_identity, child_env=env)
+                   transfer_identity=transfer_identity, child_env=env, features=features)
     run_dir = cache_dir / key
     run_dir.mkdir(parents=True, exist_ok=True)
     os.utime(run_dir)
@@ -1930,6 +1989,7 @@ def run_nextest(args: argparse.Namespace) -> int:
     results: list[dict[str, object]] = []
     resumed: set[tuple[str, str]] = set()
     run_record = {
+        "cargo_features": features,
         "receipt_schema": 3, "attempt_id": profile, "kind": "execution",
         "label": label, "base": args.base, "plans": [" ".join(plan) for plan in plans],
         "tree_key": key, "plan_key": plan_identity,
@@ -2154,6 +2214,10 @@ def run_nextest(args: argparse.Namespace) -> int:
                     if no_fail_fast:
                         command.append("--no-fail-fast")
                     policy = no_tests_args(resumed, inventories[index - 1])
+                    if getattr(args, "require_runnable", False) and policy == ["--no-tests", "warn"]:
+                        # test-select/test-stress name what to run: a filter that
+                        # selects only #[ignore] tests ran nothing and fails.
+                        policy = []
                     command.extend(policy)
                     outcomes: dict[str, str] = {}
                     suite_ignored: dict[str, int] = {}
@@ -2181,10 +2245,20 @@ def run_nextest(args: argparse.Namespace) -> int:
                         count = sum(1 for meta in inventories[index - 1].values() if meta["active"])
                         print(f"[{label}] WARNING: selection {index} matched only skipped/ignored tests "
                               f"({count}); passed with no tests run", file=sys.stderr, flush=True)
+                    executed = any(outcome in ("ok", "failed") for outcome in outcomes.values())
+                    if status == 0 and not policy and not executed and not runnable(inventories[index - 1]):
+                        # nextest fails an empty run by default, but NEXTEST_NO_TESTS or a
+                        # profile can relax that; an empty selection is never a pass here.
+                        status = 4
+                        result["exit_code"] = status
+                        save_receipt()
                     if status != 0 and not any(meta["active"] for meta in inventories[index - 1].values()):
                         print(f"[{label}] ERROR: selection {index} matched no tests: {shlex.join(selection)}; "
-                              "check the filter (test names include their module path, "
-                              "e.g. test(=module::name) or test(/name$/))",
+                              f"{NO_MATCH_HINT}", file=sys.stderr, flush=True)
+                    elif status != 0 and not policy and not runnable(inventories[index - 1]):
+                        count = sum(1 for meta in inventories[index - 1].values() if meta["active"])
+                        print(f"[{label}] ERROR: selection {index} matched only skipped/ignored tests ({count}), "
+                              f"so nothing ran: {shlex.join(selection)}; {NO_MATCH_HINT}",
                               file=sys.stderr, flush=True)
                     if status != 0:
                         if not no_fail_fast:
@@ -2343,6 +2417,13 @@ def main() -> int:
         help="run one nextest filterset across the workspace (make test-select E=EXPR); "
         "the same as --plan '--workspace -E EXPR', so it cannot be combined with --plan",
     )
+    parser.add_argument(
+        "--features",
+        type=cargo_features,
+        metavar="LIST",
+        help="Cargo features for the --filterset build (make test-select/test-stress FEATURES=...), "
+        "e.g. 'intent-store/postgres'; needs --filterset",
+    )
     parser.add_argument("--base", metavar="REF", help="base ref recorded in run.json")
     parser.add_argument(
         "--stress-count",
@@ -2369,6 +2450,8 @@ def main() -> int:
     args = parser.parse_args()
     stall_options = args.stall != "0" or args.stall_ms is not None or args.stall_every_ms is not None
     load_options = args.load != "0" or args.load_cpus is not None or args.load_cores is not None
+    if args.features is not None and args.filterset is None:
+        parser.error("--features needs --filterset")
     if args.stress_count is None and (load_options or stall_options):
         parser.error("--load, --load-cpus, --load-cores and the --stall options need --stress-count")
     if args.stress_count is not None:
@@ -2396,7 +2479,10 @@ def main() -> int:
         if not args.filterset.strip():
             parser.error("--filterset needs a nextest filterset expression, e.g. 'test(/name/)'")
         # Quote into the one plan string so split_plans() restores it exactly.
-        args.plan = [shlex.join(["--workspace", "-E", args.filterset])]
+        args.plan = [shlex.join(filterset_selection(args.filterset, args.features))]
+    # Only a named selection (test-select) must run something; test-changed
+    # plans may legitimately map to a crate whose tests are all #[ignore].
+    args.require_runnable = args.filterset is not None
     try:
         return run_nextest(args)
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:

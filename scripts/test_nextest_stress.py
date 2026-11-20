@@ -61,6 +61,19 @@ OUTPUT = """\
 """
 
 
+def listing(**tests):
+    """A `cargo nextest list --message-format json` listing of one suite."""
+    return json.dumps({"rust-suites": {"probe": {
+        "binary-id": "probe", "package-name": "probe", "binary-name": "probe",
+        "testcases": tests}}})
+
+
+MATCHED = {"ignored": False, "filter-match": {"status": "matches"}}
+UNMATCHED = {"ignored": False, "filter-match": {"status": "mismatch", "reason": "expression"}}
+IGNORED = {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}}
+ONE_TEST = listing(one=MATCHED, other=UNMATCHED)
+
+
 def tally(text):
     result = stress.StressTally()
     for line in text.splitlines(keepends=True):
@@ -582,6 +595,8 @@ with open(os.environ["FAKE_CARGO_LOG"], "a") as log:
                           "affinity": sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None}) + "\\n")
 if sys.argv[2:4] == ["run", "--help"]:
     print(os.environ.get("FAKE_CARGO_HELP", "--retries <N>\\n--stress-count <COUNT>"))
+elif sys.argv[2] == "list":
+    print(os.environ["FAKE_CARGO_LISTING"])
 elif sys.argv[2] == "run":
     import subprocess, time
     time.sleep(float(os.environ.get("FAKE_CARGO_SLEEP", "0")))
@@ -625,26 +640,30 @@ class RunStressTests(unittest.TestCase):
             return {**os.environ, "FIXTURE": "set"}, None, None, []
         return SimpleNamespace(
             prepare_test_env=prepare_test_env, TIMEOUT_MULTIPLIER_ENV=gate.TIMEOUT_MULTIPLIER_ENV,
+            filterset_selection=gate.filterset_selection, inventory=gate.inventory,
+            NO_MATCH_HINT=gate.NO_MATCH_HINT,
             isolated_output_args=lambda *_: ["--target-dir", str(self.root / "target")],
             acquire_gate_lock=lambda _o: None, release_gate_lock=gate.release_gate_lock,
             apply_storage_policy=lambda *_: None, timeout_description=gate.timeout_description,
             run=gate.run, terminate_on_signal=gate.terminate_on_signal,
             failure_exit_code=gate.failure_exit_code, Terminated=gate.Terminated)
 
-    def run_stress(self, output, exit_code=0, help_text=None, sleep=0, test_code="", **overrides):
+    def run_stress(self, output, exit_code=0, help_text=None, sleep=0, test_code="", listed=ONE_TEST,
+                   **overrides):
         args = SimpleNamespace(label="test-stress", repo_root=str(self.root),
                                intentd_dir="packages/intentd", cache_dir=str(self.cache),
                                filterset="test(/it's $/)", stress_count=3, load="0",
                                load_cpus=None, load_cores=None, stall="0", stall_ms=None, stall_every_ms=None,
-                               build_jobs="2", test_threads="5")
+                               build_jobs="2", test_threads="5", features=None)
         vars(args).update(overrides)
         stdout = io.StringIO()
         fake = {"FAKE_CARGO_OUTPUT": output, "FAKE_CARGO_EXIT": str(exit_code),
-                "FAKE_CARGO_SLEEP": str(sleep), "FAKE_CARGO_TEST": test_code}
+                "FAKE_CARGO_SLEEP": str(sleep), "FAKE_CARGO_TEST": test_code, "FAKE_CARGO_LISTING": listed}
         if help_text is not None:
             fake["FAKE_CARGO_HELP"] = help_text
+        self.stderr = io.StringIO()
         with mock.patch.dict(os.environ, fake), \
-                contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(io.StringIO()):
+                contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(self.stderr):
             status = stress.run_stress(args, self.fake_gate())
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         return status, stdout.getvalue(), calls
@@ -663,6 +682,7 @@ class RunStressTests(unittest.TestCase):
                             ("--build-jobs", "2"), ("--test-threads", "5"), ("--status-level", "pass")):
             self.assertEqual(run[run.index(flag) + 1], value, flag)
         self.assertIn("--no-fail-fast", run)
+        self.assertEqual(run[run.index("--no-tests") + 1], "fail")
         self.assertEqual(calls[2]["fixture"], "set")
         self.assertIn("[test-stress] stress: 3/3 iterations (3 failed), 2 tests, LOAD=0, STALL=0: "
                       "3 passed, 3 failed; failures: src/lib.rs:1 ×2, TIMEOUT ×1", stdout)
@@ -674,6 +694,42 @@ class RunStressTests(unittest.TestCase):
         self.assertIn("panicked at src/lib.rs", (records[0] / "output.log").read_text())
         self.assertEqual(sorted(p.name for p in self.cache.iterdir()), ["stress"],
                          "stress runs never write resume journals or completion markers")
+
+    def test_a_filter_selecting_no_runnable_test_fails_before_the_run(self):
+        # Regression: the Postgres store tests are behind intent-store/postgres,
+        # so without FEATURES their filter matched nothing and the run "passed".
+        for name, listed in (("nothing matched", listing(other=UNMATCHED)),
+                             ("only ignored tests", listing(skipped=IGNORED, other=UNMATCHED)),
+                             ("empty binary", listing())):
+            with self.subTest(name):
+                self.log.unlink(missing_ok=True)
+                status, stdout, calls = self.run_stress("", listed=listed)
+                self.assertEqual(status, stress.NO_TESTS_EXIT)
+                self.assertEqual([call["argv"][1] for call in calls], ["run", "list"])
+                self.assertEqual(calls[-1]["argv"][1:3], ["list", "--workspace"], "nothing ran after the listing")
+                self.assertIn("matched no runnable tests, so there is nothing to stress", self.stderr.getvalue())
+                self.assertIn("FEATURES=intent-store/postgres", self.stderr.getvalue())
+                self.assertIn("0 passed, 0 failed; ERROR: exited 4", stdout)
+
+    def test_features_reach_the_listing_and_the_run(self):
+        text = "".join(f"        PASS [   0.002s] [{i}/3] (1/1) probe one\n" for i in (1, 2, 3))
+        status, stdout, calls = self.run_stress(text, features="intent-store/postgres")
+        self.assertEqual(status, 0, stdout)
+        expected = ["--workspace", "--features", "intent-store/postgres", "-E", "test(/it's $/)"]
+        self.assertEqual(self.prepared, [expected])
+        self.assertEqual(calls[1]["argv"][2:7], expected)
+        self.assertEqual(calls[2]["argv"][2:7], expected)
+        self.assertIn("[test-stress] selected 1 test\n", stdout)
+
+    def test_a_clean_exit_without_any_status_line_is_not_a_pass(self):
+        # The listing found a test, so this is not an empty selection: the
+        # status lines went unrecognised, which gets its own exit code.
+        status, stdout, _ = self.run_stress("", exit_code=0)
+        self.assertEqual(status, stress.UNPARSED_EXIT, stdout)
+        self.assertNotEqual(stress.UNPARSED_EXIT, stress.NO_TESTS_EXIT)
+        self.assertIn("ERROR: nextest exited 0 but no test status line was recognised "
+                      "(new nextest output format?)", stdout)
+        self.assertNotIn("without a test failure", stdout)
 
     def test_a_parsed_failure_makes_the_exit_non_zero(self):
         status, _, _ = self.run_stress(OUTPUT, exit_code=0)
@@ -821,6 +877,10 @@ class ArgumentTests(unittest.TestCase):
         self.assertEqual((args.stress_count, args.load, args.load_cpus, args.load_cores, args.filterset),
                          (20, "1", 8, "4", "test(/a/)"))
         self.assertEqual((args.stall, args.stall_ms, args.stall_every_ms), ("0", None, None))
+        self.assertIsNone(args.features)
+        _, run_stress, _ = self.main("--filterset", "test(/a/)", "--stress-count", "2",
+                                     "--features", "intent-store/postgres")
+        self.assertEqual(run_stress.call_args.args[0].features, "intent-store/postgres")
         _, run_stress, _ = self.main("--filterset", "test(/a/)", "--stress-count", "2", "--load-cores", "all")
         self.assertEqual(run_stress.call_args.args[0].load_cores, "all")
         _, run_stress, _ = self.main("--filterset", "test(/a/)", "--stress-count", "2")

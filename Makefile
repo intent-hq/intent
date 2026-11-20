@@ -1035,8 +1035,20 @@ fe-verify-changed: ensure-fe-submodule ensure-fe-toolchain ## Run only the front
 # hand-off below, so E reaches nextest byte-for-byte. E must come from the make
 # command line (a stray exported E is not a selection) and is unexported, so it
 # never reaches Cargo or test processes.
+# FEATURES=<Cargo features> (test-select and test-stress) builds the selection
+# with them, e.g. FEATURES=intent-store/postgres for the Postgres store tests,
+# which compile to empty binaries without it. A filter that selects no runnable
+# test fails either target; the runner validates the list. Like E, only a
+# make-line or makefile FEATURES counts: an exported one is ignored.
 TEST_SELECT_E = $(subst ','\'',$(value E))
-unexport E
+ifneq ($(findstring environment,$(origin FEATURES)),)
+FEATURES :=
+endif
+# Commas become spaces, so FEATURES=' , ' is no features rather than a bad list.
+COMMA := ,
+TEST_SELECT_FEATURES_LIST = $(strip $(subst $(COMMA), ,$(FEATURES)))
+TEST_SELECT_FEATURES = $(if $(TEST_SELECT_FEATURES_LIST), --features '$(subst ','\'',$(TEST_SELECT_FEATURES_LIST))')
+unexport E FEATURES
 ifneq ($(filter test-select test-stress,$(MAKECMDGOALS)),)
 ifneq ($(origin E),command line)
 $(error make $(firstword $(filter test-select test-stress,$(MAKECMDGOALS))) needs E='<nextest filterset>' on the make command line, e.g. make $(firstword $(filter test-select test-stress,$(MAKECMDGOALS))) E='test(/repository_selection/)')
@@ -1046,14 +1058,14 @@ $(error make $(firstword $(filter test-select test-stress,$(MAKECMDGOALS))) need
 endif
 endif
 
-test-select: ensure-intentd-submodule | check-transfer-fixture ## Run only the Rust tests matching E='<nextest filterset>' through the make test runner (fixtures, records; RESUME=1, NO_FAIL_FAST=1, HERMETIC=1 as for test)
+test-select: ensure-intentd-submodule | check-transfer-fixture ## Run only the Rust tests matching E='<nextest filterset>' through the make test runner (fixtures, records; FEATURES=<crate/feature> enables Cargo features; RESUME=1, NO_FAIL_FAST=1, HERMETIC=1 as for test)
 	@python3 scripts/check_watch_capacity.py --quiet
 	@cargo nextest --version >/dev/null 2>&1 || { \
 		echo "[test-select] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
 		exit 1; \
 	}
 	@$(HERMETIC_PREFLIGHT)
-	@$(RUST_TEST_RUNNER) --label test-select --filterset '$(TEST_SELECT_E)'
+	@$(RUST_TEST_RUNNER) --label test-select --filterset '$(TEST_SELECT_E)'$(TEST_SELECT_FEATURES)
 
 # Repeat the tests matching E COUNT times with retries off (nextest
 # --stress-count), optionally under a built-in load, to prove a flake or its fix
@@ -1117,14 +1129,14 @@ endif
 endif
 endif
 
-test-stress: ensure-intentd-submodule | check-transfer-fixture ## Repeat the Rust tests matching E='<filterset>' COUNT times (default 100) with retries off, LOAD=1 adds CPU + disk load pinned to LOAD_CORES CPUs, STALL=1 freezes tests at random (STALL_MS, STALL_EVERY_MS); prints passes, failures and panic locations
+test-stress: ensure-intentd-submodule | check-transfer-fixture ## Repeat the Rust tests matching E='<filterset>' COUNT times (default 100) with retries off (FEATURES=<crate/feature> enables Cargo features; fails when E selects nothing), LOAD=1 adds CPU + disk load pinned to LOAD_CORES CPUs, STALL=1 freezes tests at random (STALL_MS, STALL_EVERY_MS); prints passes, failures and panic locations
 	@python3 scripts/check_watch_capacity.py --quiet
 	@cargo nextest --version >/dev/null 2>&1 || { \
 		echo "[test-stress] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
 		exit 1; \
 	}
 	@$(HERMETIC_PREFLIGHT)
-	@$(RUST_TEST_RUNNER) --label test-stress --filterset '$(TEST_SELECT_E)' \
+	@$(RUST_TEST_RUNNER) --label test-stress --filterset '$(TEST_SELECT_E)'$(TEST_SELECT_FEATURES) \
 		--stress-count '$(COUNT)' --load '$(strip $(LOAD))'$(if $(strip $(LOAD_CPUS)), --load-cpus '$(strip $(LOAD_CPUS))')$(if $(strip $(LOAD_CORES)), --load-cores '$(strip $(LOAD_CORES))') \
 		--stall '$(strip $(STALL))'$(if $(strip $(STALL_MS)), --stall-ms '$(strip $(STALL_MS))')$(if $(strip $(STALL_EVERY_MS)), --stall-every-ms '$(strip $(STALL_EVERY_MS))')
 
