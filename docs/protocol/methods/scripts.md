@@ -370,7 +370,9 @@ next time such a definition is saved through `script.create`.
 > stops the daemon and kills every running script, and boot hydration previously loaded all
 > persisted definitions as plain `idle` — so clients could not tell which scripts were live
 > before the shutdown. The daemon persists a was-running marker on the script row
-> (stored-on-write) and surfaces it **by mode**: a `service` row hydrates as `idle` with the
+> (stored-on-write). A marked `service` is started again at boot (see *Restores marked
+> services at boot* below); the marker is surfaced **by mode** when it is not consumed: a
+> `service` row whose restore fails hydrates as `idle` with the
 > optional `previouslyRunning: true` field on `ScriptRuntimeState` — served by
 > `script.status`, the runtime part of `script.list` entries, and `script:state` events
 > (§6.5) — and a `command` row (new in intentd, unreleased) hydrates as `exited` + `exitCode: -1` +
@@ -384,12 +386,28 @@ next time such a definition is saved through `script.create`.
 > - **Set by every successful start/restart**, in both modes (new in intentd, unreleased —
 >   previously `service`-mode only). `previouslyRunning` stays service-only on the wire.
 > - **Cleared** on a user `script.stop`, on natural exit, and on `script.remove` (the row goes
->   with it); a `script.create` upsert resets it. Starting a marked script clears it — the
+>   with it); a `script.create` upsert resets it, except an `autoStart`-only upsert (below). Starting a marked script clears it — the
 >   hydrated `previouslyRunning` (or `lost` reading) drops as the state flips to `running`
 >   (an auto-restart's respawn re-sets the marker).
-> - **Survives repeated daemon restarts** untouched: a marked service row keeps hydrating as
->   `idle` with `previouslyRunning: true`, and a marked command row as `exited` / `-1` /
->   `lost`, until the script is started or explicitly stopped.
+> - **An `autoStart`-only upsert keeps the run** (new in intentd, unreleased; advertised as
+>   `server.capabilities.scriptAutoStartInPlace: 1`, see [client.hello](./client-hello.md)): a
+>   `script.create` upsert whose definition differs from the stored one only in
+>   `autoStart` updates it in place. A live run, its marker and `lastRun` are kept, and
+>   `script:changed` reports `updated`. An empty `env` and an empty or `"."` `cwd` count as
+>   unset. Any other difference still replaces the run.
+> - **Restores marked services at boot** (new in intentd, unreleased): every marked,
+>   unarchived `service` row in an unarchived workspace starts again, whatever its
+>   `autoStart`. Only a failed restore leaves it `idle` with `previouslyRunning: true`.
+>   Command rows are never re-run. A saved `autoStart` service in an unarchived workspace
+>   also starts at boot, even when it was not running (a user stop does not prevent it).
+>   This includes `autoStart` rows seeded from the repository's `.intent/config.json`.
+>   In a workspace whose scripts run on a home, only marked services restart at boot; its
+>   other `autoStart` scripts start when the home's checkout finishes setup. A stop,
+>   `autoStart` toggle-off or archive that lands before the boot start wins.
+> - **Survives repeated daemon restarts** untouched while unconsumed: a service whose
+>   restore fails keeps hydrating as `idle` with `previouslyRunning: true`, and a marked
+>   command row as `exited` / `-1` / `lost`, until the script is started or explicitly
+>   stopped.
 > - **Dismiss:** `script.stop` on a non-running script that carries the marker clears it —
 >   in memory and, via the same best-effort persist as every other transition, on the row —
 >   and returns ok (instead of erroring), and **emits a `script:state` event** carrying the
