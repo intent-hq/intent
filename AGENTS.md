@@ -5,16 +5,16 @@ Instructions for AI agents working in this monorepo.
 **Assistant app guide:** When adding, changing, moving, renaming, or removing a
 user-facing feature, update the affected section of
 [`packages/intentd/crates/intent-services/resources/assistant-app-guide.md`](packages/intentd/crates/intent-services/resources/assistant-app-guide.md)
-in the same change (coordinate the companion intentd change for frontend work).
-Keep this single bundled guide concise; replace obsolete paths, labels, and prerequisites.
-Keep the guide and user-facing help focused on features ready for users. Do not promote
-unfinished, experimental, Labs-only, internal, or unreleased features as normal options;
-code or tool availability is not proof of readiness. When explicitly asked about such
-a feature, or assigned to develop or test it, discuss it honestly and label its status.
-Update the guide and its source pointers when readiness or UI behavior changes.
-Before opening a PR, record the affected guide section (and companion intentd PR
-for frontend changes), or explain why the change has no user-help impact. Coordinate
-companion releases; this checkpoint does not require simultaneous cross-repo merges.
+in the same change; for frontend work, the intentd guide PR merges after the frontend PR.
+Keep it concise and replace obsolete text. Describe how the app behaves now, with no app
+version numbers (`check-app-guide-sources` rejects `vX.Y.Z`): each desktop release bundles
+the guide it pins, so older builds keep matching text. Write "older versions may differ"
+where useful. Merged behavior described this way is not unreleased and needs no version
+qualification. Do not promote unfinished, experimental, Labs-only, or internal features
+as normal options; code availability is not proof of readiness. When asked about such a
+feature, or assigned to develop or test it, discuss it honestly and label its status.
+Before opening a PR, record the affected guide section (and companion intentd PR), or
+explain why the change has no user-help impact.
 
 ## Repository Structure
 

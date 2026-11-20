@@ -28,6 +28,11 @@
 // `Sources (Labs device rail, paths relative to ...)`). `--format-only <file>`
 // runs only that parse, with no git: intentd's pr-static job calls it when the
 // guide changes.
+//
+// The same parse rejects an exact app version (`v2.359.0`, `v2.358.x`) in the
+// prose outside comments: the guide ships inside each release, so it describes
+// current behavior. Versioned wording cost intentd#3544 two review rounds and
+// intentd#3564 a follow-up PR. Third-party versions (`agy` 1.5.0) have no `v`.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
@@ -45,6 +50,7 @@ export const SKIPPED = { 'packages/ios': 'ios' };
 const COMMENT = /<!--([\s\S]*?)-->/g;
 const SOURCES = /^\s*Sources?\b/i;
 const HEADER = /^\s*Sources\s*(?:\(paths relative to ([^)\s]+)\))?\s*:/;
+const APP_VERSION = /\bv\d+\.\d+\.(?:\d+|x)\b/g;
 
 export function expandBraces(text) {
   const open = text.indexOf('{');
@@ -175,6 +181,12 @@ export function parseGuide(text) {
       }
     }
   }
+  const prose = text.replace(COMMENT, comment => comment.replace(/[^\n]/g, ' '));
+  for (const match of prose.matchAll(APP_VERSION)) {
+    const line = prose.slice(0, match.index).split('\n').length;
+    problems.push({ line, message: `exact app version '${match[0]}': describe how the app behaves now` });
+  }
+  problems.sort((a, b) => a.line - b.line);
   return { comments, citations, problems };
 }
 
@@ -292,6 +304,7 @@ export function checkFormat(file) {
 }
 
 const FORMAT_HINT = "hint: a Sources comment starts with 'Sources:' or 'Sources (paths relative to packages/<component>):'; put any other words after the colon, e.g. '<!-- Sources (paths relative to packages/cloudlands-fe): src/a.ts (Labs device rail). -->'.";
+const VERSION_HINT = "hint: describe how the app behaves now, without app version numbers; write 'older versions may differ' where that helps. Each release bundles its own guide, and a frontend change's guide PR merges after the frontend PR.";
 const MISSING_HINT = 'hint: point the comment at the file that implements the behavior, or remove the guide text that describes code the component does not have (fix it in intentd, then let auto-bump-submodules advance the pin).';
 
 function main() {
@@ -316,8 +329,9 @@ function main() {
     for (const warning of result.warnings) console.log(`::warning::app-guide-sources: ${warning}`);
     if (result.errors.length > 0) {
       for (const error of result.errors) console.error(error);
-      console.error(`app-guide-sources: ${result.errors.length} Sources problem(s) among ${result.scope}`);
+      console.error(`app-guide-sources: ${result.errors.length} guide problem(s) among ${result.scope}`);
       if (result.errors.some(error => error.includes('malformed Sources comment'))) console.error(FORMAT_HINT);
+      if (result.errors.some(error => error.includes('exact app version'))) console.error(VERSION_HINT);
       if (result.errors.length > result.formatErrors) console.error(MISSING_HINT);
       return 1;
     }
