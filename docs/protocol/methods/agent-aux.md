@@ -636,7 +636,17 @@ The ungrouped watch stays armed — same id — and still delivers the genuine c
 Grouped (`after_all`) memberships are likewise untouched — the child still does not count as settled, the group stays open until its genuine settlement, and group settlement semantics are unchanged.
 Ask-registered completion-only watches (the chief `ws.app.agents.ask` shape) never receive an advisory: they defer silently, waiting strictly for terminal settlement, and neither consult nor write the once-per-period marker (this holds for watches the ask path CREATES — an `ask` that finds an existing ungrouped watch for the same parent/child pair reuses it as-is, so a prior `ws.agent.watch` on the same target keeps its advisory eligibility).
 **Once per waiting period**: delivery persists a marker (the `advisory_wake_delivery` table, keyed by parent + child; excluded from workspace transfer like its completion-marker counterpart) so subsequent monitoring idles in the SAME continuous waiting period defer silently exactly as before (the marker read fails closed: on a read error the advisory is skipped and the watch stays armed — see **Ordering & failure semantics** below).
-The period ends — and the marker clears — when the child starts a REAL turn (a best-effort by-child clear at turn start: a child that leaves monitoring-idle — user message, hook dispatch — and later stalls monitoring-idle again opens a NEW waiting period, so the still-armed watch hears a fresh advisory instead of parking in silence indefinitely) and, as a backstop, when the child's genuine completion/failure/deletion settles (a by-child clear in the non-interim settlement pass — watch or no watch, so no parent can leak a marker that would suppress a later period's advisory; the per-watch clears remain as idempotent covers: terminal wake delivery for ungrouped watches, the settlement record for grouped memberships — which can precede the aggregated seal wake).
+The period ends when the child starts a delivery-driven turn: a user or agent message,
+hook dispatch, or PR- or script-monitor wake clears the marker best-effort. A later
+monitoring idle opens a new period and can advise the still-armed watch again.
+An agent-initiated harness-wake turn is the child's own out-of-turn continuation;
+it keeps the period and both the in-memory and persisted markers. Its
+`agent:idle` with `reason: "harness_wake_complete"` does not send another advisory.
+Genuine completion, failure, or deletion also clears markers by child during
+non-interim settlement, even without a watch, so no parent can retain a marker
+that suppresses a later period. The per-watch clears remain idempotent covers:
+terminal wake delivery for ungrouped watches, and the settlement record for
+grouped memberships, which can precede the aggregated seal wake.
 Grouped and ungrouped advisories share the marker — a parent hears at most one advisory per (parent, child) waiting period regardless of watch shape.
 **Ordering & failure semantics**: the advisory wake is durably queued under its stable message identity first; the shared period marker is then recorded best-effort — no watch is retired on either branch, so no retirement transaction exists.
 Within one period a delivery retry replays the SAME idle event and dedups on the identical stable identity; a crash or failure after the wake persists but before the marker write means the next idle's fresh event id re-sends one duplicate advisory — the accepted worst case.
