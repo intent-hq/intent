@@ -524,7 +524,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	fmt clippy shear check-windows check-macos lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell lint-workflows bash3 check clean clean-dev \
 	sweep sweep-all sweep-gates seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
-	sandbox-status sandbox-stop sandbox-shot \
+	sandbox-status sandbox-stop sandbox-shot sandbox-seed \
 	run-fe-local uds-to-unauthed-wss-bridge dev-web-live dev dev-prod \
 	ios-open ios-info ios-build-ios ios-build-visionos ios-test dist-mac
 
@@ -1368,6 +1368,9 @@ sandbox-status: ## Show live sandbox state (SANDBOX_JSON=1 for JSON)
 
 sandbox-stop: ## Stop sandboxes in this worktree (optionally MODE=ui|app|stack)
 	@MODE="$(MODE)" scripts/dev-sandbox.sh stop
+
+sandbox-seed: ## Seed the running stack sandbox with a workspace whose Spec has sample links (SEED_JSON=1 for JSON)
+	@SEED_JSON="$(SEED_JSON)" node scripts/sandbox-seed.mjs
 
 # Only command-line values count, so an exported THEME or WIDTH in the caller's
 # shell never changes a capture. Self-test: scripts/test_sandbox_shot_target.py.

@@ -125,6 +125,19 @@ return ws.browser.exec([
 ]);
 ```
 
+To check notes or links in a fresh `make dev-sandbox-stack` (with or without
+`MOCK_AGENT=1`), run `make sandbox-seed` after the health wait. It creates (or reuses) a
+plain-folder workspace whose Spec holds sample external, note, file and workspace links,
+and prints the `?note=spec` URL to open. The folder lives under
+`~/.cache/intent-sandbox-seed/` because a plain folder must be outside any git
+repository. `SEED_JSON=1` prints `{workspaceId, noteId, linkedNoteId, url}`. The target
+seeds only the stack daemon; app mode uses your installed daemon, which it never writes.
+
+If a note or Browser panel shows "Content type not yet implemented", the page loaded two
+copies of the tab registry: something rewrote the generated Paraglide files after Vite
+started. `dev:web` now generates them before Vite starts; on an older frontend branch,
+restart the sandbox once.
+
 `listTabs("mine")` reuses only your own tabs; another agent's tab at the same URL
 refuses `evaluate` and `screenshot` (`not-owner`). While the first hydration runs, `evaluate` returns `false` (or the tab is still
 mounting); retry from a background hook rather than reopening the tab. For a note, read
