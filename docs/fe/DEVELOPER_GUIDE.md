@@ -147,7 +147,11 @@ instead: `editor` (or `read-only`) means the note is loaded, `loading` means ret
 `ws.note.saveAsset` and record it in the evidence table from the root
 [`Prove`](../../AGENTS.md#prove) step. The browser tool cannot click, so to exercise a link
 inside the chat, call `element.click()` on that anchor through `evaluate`; this runs the
-app's real click handler, unlike calling the link handler directly.
+app's real click handler, unlike calling the link handler directly. A note link sits in
+the editor, which reacts to the full press: dispatch `pointerdown`, `mousedown`,
+`pointerup`, `mouseup` and `click` on the anchor (with `metaKey: true, ctrlKey: true`
+for ⌘-click). A ⌘-clicked web link opens a Browser panel whose page area stays blank in
+the web sandbox; the page itself renders only in Electron.
 
 ### Remote Sandbox Internals
 
