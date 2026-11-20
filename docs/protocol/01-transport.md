@@ -135,8 +135,10 @@ reachable while a running service of the workspace serves it.
   only if the guest is a current member of that workspace; otherwise `403`.
   The connection is bound to that workspace for its lifetime.
 - **Every `OPEN` is checked fresh.** The daemon accepts the port only when the
-  guest is still a member, the workspace is not archived, and the port is in the
-  `servedPorts` of a script of that workspace whose status is `running`. A
+  guest is still a member, the workspace is not archived, and a running service
+  script of that workspace owns the socket that accepts `127.0.0.1:<port>`, by
+  the [`servedPorts`](./methods/scripts.md#served-ports-additive-guestservicepreview-1)
+  ownership rule evaluated at that `OPEN`. A
   refused port answers `OPEN_ERR` with the message `not-shared`; the connection
   stays open.
 - **Revocation.** When a service stops or exits, or a port leaves its
