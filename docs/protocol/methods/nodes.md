@@ -2229,8 +2229,9 @@ All failures are `cloud-machine-unavailable`. The token needs to create,
 read, update, stop and delete sandboxes in the project and run commands in
 them; a token scoped to the team is enough. A token without one gets
 `permission-denied` when that call is refused, also later, at a start, with
-the refused call as `action` (`list-sandboxes`, `create-sandbox`,
-`run-command`, `extend-timeout`, `stop`, `resume` or `delete`).
+the refused call as `action` (`list-sandboxes`, `read-sandbox`,
+`create-sandbox`, `run-command`, `extend-timeout`, `stop`, `resume` or
+`delete`).
 
 ###### Vercel sandboxes
 
@@ -2245,7 +2246,9 @@ At `creating-sandbox`, the backend calls `POST /v3/sandboxes` with:
   snapshot, and a sandbox whose backend went away is not kept for ever;
 - `resources: { vcpus }`: the size's vCPUs;
 - `timeout`: 30 minutes ([stop and resume](#vercel-stop-and-resume));
-- `tags`: `intent-node` and `intent-backend` (the backend's `backendId`).
+- `tags`: the backend's metadata, five tags (Vercel keeps at most five):
+  `intentBackendId` (the backend's `backendId`), `workspaceId`, `agentId`,
+  `intentEntryId` and `intentdVersion`.
 
 It sends no `ports`, no `env` and no network policy, so the sandbox can reach
 the public internet (GitHub, the model providers and tailcat's relay) with
@@ -2266,9 +2269,12 @@ At `starting-daemon`, the backend starts `intentd serve` with the tunnel on
 and runs `executor.mint` over the sandbox's local socket, both as commands,
 as on E2B. Vercel does not run the image's entrypoint. Each command is
 `POST /v2/sandboxes/sessions/{sessionId}/cmd` with `command`, `args`, `cwd`,
-`env` and `wait: true`; Vercel answers with newline-delimited JSON: the
-command, its `stdout` and `stderr` lines, then the finished command with its
-`exitCode`. An `error` line ends the command as failed. Commands run as the
+`env`, `wait: true` and `logs: true`; Vercel answers with newline-delimited
+JSON: the command, its `stdout` and `stderr` lines as the command writes
+them, then the finished command with its `exitCode`. An `error` line ends
+the command as failed. Every `POST` carries `Content-Type: application/json`,
+also with no body (Vercel answers `415` otherwise). A stopped session's
+commands are `410` `sandbox_stopped`. Commands run as the
 image's default user `user` (uid 1000, home `/home/user`), never with `sudo`:
 the image has no `sudo`, and nothing runs as root. intentd, tailcat, the
 provider CLIs and every agent command run as `user`.
@@ -2276,7 +2282,7 @@ provider CLIs and every agent command run as `user`.
 To delete a sandbox, the backend calls
 `DELETE /v2/sandboxes/{name}?projectId=<projectId>&deleteOrphanSnapshots=true`,
 which deletes its snapshots too; a `404` means it was already gone. The reaper
-lists `GET /v2/sandboxes?project=<projectId>&tags=intent-backend:<backendId>`,
+lists `GET /v2/sandboxes?project=<projectId>&tags=intentBackendId:<backendId>`,
 page by page, and deletes each one without a machine row.
 
 <a id="vercel-stop-and-resume"></a>
@@ -2290,9 +2296,9 @@ so the timeout only acts as a backstop for a backend that went away:
 
 | Event | Backend action |
 | --- | --- |
-| Sandbox running (busy or idle) | Every 10 minutes, when the session ends in less than 20 minutes, `POST /v2/sandboxes/sessions/{sessionId}/extend-timeout` with 30 more minutes. When the sandbox is already stopped, the backend marks the machine paused. |
-| `extend-timeout` refused with `400` `sandbox_timeout_invalid` (the session reached the plan's cap) | A clean stop and resume (the two rows below, back to back) at the first moment the sandbox is idle, and at the latest 2 minutes before the session ends. A turn that still runs then is cut, as on a Northflank container restart. |
-| Sandbox idle for `idlePauseMinutes`, or `cloudMachines.pause` | `POST /v2/sandboxes/sessions/{sessionId}/stop`. Vercel saves the disk as a snapshot (a few seconds) and stops the session; the backend waits for `stopped`. The link drops; compute billing stops, and the snapshot is still billed. |
+| Sandbox running (busy or idle) | Every 10 minutes, when the session ends in less than 30 minutes, `POST /v2/sandboxes/sessions/{sessionId}/extend-timeout` with 30 more minutes. When the sandbox is already stopped, the backend marks the machine paused. |
+| `extend-timeout` refused with `400` `sandbox_timeout_invalid` (the session reached the plan's cap) | A clean stop and resume (the two rows below, back to back) at the first moment the sandbox is idle; the session still has at least 20 minutes then. A sandbox that stays busy until the session ends is stopped by Vercel with a snapshot, which cuts its running turn, as on a Northflank container restart; the next message resumes it. |
+| Sandbox idle for `idlePauseMinutes`, or `cloudMachines.pause` | `POST /v2/sandboxes/sessions/{sessionId}/stop`. Vercel saves the disk as a snapshot and stops the session, and answers once both are done (a few seconds); a stopped session answers the same again. The link drops; compute billing stops, and the snapshot is still billed. |
 | The backend is away for 30 minutes | The session times out and Vercel stops it with a snapshot. The backend sees it stopped when it comes back, and marks it paused. |
 | New message for an agent on a paused machine | `GET /v2/sandboxes/{name}?projectId=<projectId>&resume=true`, which starts a new session from the snapshot (about 2 s). The backend then starts intentd from the disk, with the same daemon id, certificate, tailcat key and executor credential, so the machine row and `nodeId` stay, and redials with a new generation. |
 | Agent ends for good, `cloudMachines.kill` or `remove`, or paused for `pausedDeleteDays` | As on E2B: resume when paused, final stop, then delete the sandbox and its snapshots. |
