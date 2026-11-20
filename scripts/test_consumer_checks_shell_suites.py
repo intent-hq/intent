@@ -8,8 +8,13 @@ reusable consumer-checks workflow now runs it (and intentd's own suite) on the
 intentd PR when scripts/changed-tests.sh or scripts/with-test-policy.sh
 change. intentd#2896 then broke scripts/test_rust_test_policy.py the same way
 (intent#8277, ejected 31 times), so the workflow also runs that test when a
-file scripts/rust_test_policy_manifest.py lists changes. These tests keep
-those steps in place and exercise the selection.
+file scripts/rust_test_policy_manifest.py lists changes. intentd#3103 then made
+prepare-acp-callback-fixture.py load a sibling download_retry.py that the
+callback fixture tests in scripts/test_resumable_nextest.py did not copy;
+CI skipped them without intentd, so they failed only on local Linux x64
+runs. The workflow also runs those tests when a file
+scripts/callback_fixture_manifest.py lists changes. These tests keep those
+steps in place and exercise the selection.
 """
 from pathlib import Path
 import os
@@ -114,6 +119,9 @@ class WorkflowShape(unittest.TestCase):
             'REQUIRE_BASH3=1 bash packages/intentd/scripts/test-changed-tests.sh || status=1',
             # intentd#2896 broke this one only in the queue (intent#8277).
             'python3 -S -B scripts/test_rust_test_policy.py || status=1',
+            # intentd#3103 broke these with a new sibling load.
+            'python3 -S -B scripts/test_resumable_nextest.py CallbackFixtureManifestTests '
+            'CallbackValidatorTests CallbackValidatorPortabilityTests || status=1',
             'exit "$status"',
         ])
 
@@ -123,6 +131,8 @@ class WorkflowShape(unittest.TestCase):
         self.assertIn('intent#7900', header)
         self.assertIn('intent#8277', header)
         self.assertIn('scripts/rust_test_policy_manifest.py', header)
+        self.assertIn('scripts/callback_fixture_manifest.py', header)
+        self.assertIn('intentd#3103', header)
         self.assertIn('intent#7191', header)
 
     def test_monorepo_shell_tests_run_this_test(self):
@@ -138,7 +148,7 @@ class WorkflowShape(unittest.TestCase):
 
 GIT_ENV = {**{k: v for k, v in os.environ.items()
               if k not in ('GITHUB_OUTPUT', 'SELF_TEST', 'COMPONENT', 'INTENTD_DIR',
-                           'RUST_TEST_POLICY_MANIFEST')},
+                           'RUST_TEST_POLICY_MANIFEST', 'CALLBACK_FIXTURE_MANIFEST')},
            'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_NOSYSTEM': '1',
            'GIT_AUTHOR_NAME': 'fixture', 'GIT_AUTHOR_EMAIL': 'fixture@example.invalid',
            'GIT_COMMITTER_NAME': 'fixture', 'GIT_COMMITTER_EMAIL': 'fixture@example.invalid'}
@@ -201,13 +211,15 @@ class Selection(unittest.TestCase):
         return mono
 
     def select(self, mono, base='', test='', component='intentd', self_test=None, bash='bash',
-               manifest=None):
+               manifest=None, callback_manifest=None):
         output = self.temp / 'github-output'
         output.write_text('')
         env = {**GIT_ENV, 'GITHUB_OUTPUT': str(output), 'COMPONENT': component,
                'BASE_SHA': base, 'TEST_SHA': test}
         if manifest is not None:
             env['RUST_TEST_POLICY_MANIFEST'] = str(manifest)
+        if callback_manifest is not None:
+            env['CALLBACK_FIXTURE_MANIFEST'] = str(callback_manifest)
         if self_test is not None:
             env['SELF_TEST'] = self_test
         result = subprocess.run([bash, str(SELECT)], cwd=mono, env=env, capture_output=True, text=True)
@@ -275,6 +287,42 @@ class Selection(unittest.TestCase):
         self.assertEqual(values['selected'], 'true')
         self.assertIn('::notice::', stdout)
         self.assertIn('could not list the rust-test-policy files', values['reason'])
+
+    def test_callback_fixture_siblings_select_and_new_ones_are_watched(self):
+        # The intentd#3103 shape: the prepare script starts loading a sibling.
+        prepare = 'scripts/prepare-acp-callback-fixture.py'
+        base, merge = self.pr({prepare: 'R = Path(__file__).with_name("download_retry.py")\n',
+                               'scripts/download_retry.py': 'RETRY_DELAYS = ()\n'})
+        values, _ = self.select(self.checkout(), base, merge)
+        self.assertEqual(values['selected'], 'true')
+        self.assertEqual(values['reason'], f'this change touches scripts/download_retry.py {prepare}')
+        git(self.origin, 'merge', '-q', '--ff-only', 'pr')
+        git(self.origin, 'branch', '-q', '-D', 'pr')
+        # A later change to only the sibling selects too.
+        base, merge = self.pr({'scripts/download_retry.py': 'RETRY_DELAYS = (1,)\n'})
+        values, _ = self.select(self.checkout(), base, merge)
+        self.assertEqual(values['selected'], 'true')
+        self.assertEqual(values['reason'], 'this change touches scripts/download_retry.py')
+        git(self.origin, 'branch', '-q', '-D', 'pr')
+        # The in-place fixture builder's own sibling loads are watched as well.
+        base, merge = self.pr({'scripts/test-prepare-acp-callback-fixture.py':
+                               'H = Path(__file__).with_name("fixture_helper.py")\n',
+                               'scripts/fixture_helper.py': ''})
+        git(self.origin, 'merge', '-q', '--ff-only', 'pr')
+        git(self.origin, 'branch', '-q', '-D', 'pr')
+        base, merge = self.pr({'scripts/fixture_helper.py': 'changed\n'})
+        values, _ = self.select(self.checkout(), base, merge)
+        self.assertEqual(values['selected'], 'true')
+        self.assertEqual(values['reason'], 'this change touches scripts/fixture_helper.py')
+
+    def test_failed_callback_manifest_selects_with_a_notice(self):
+        base, merge = self.pr({'README.md': 'changed\n'})
+        broken = self.temp / 'broken-manifest.py'
+        broken.write_text('raise SystemExit(2)\n')
+        values, stdout = self.select(self.checkout(), base, merge, callback_manifest=broken)
+        self.assertEqual(values['selected'], 'true')
+        self.assertIn('::notice::', stdout)
+        self.assertIn('could not list the callback fixture files', values['reason'])
 
     def test_deleting_a_watched_script_selects(self):
         main = git(self.origin, 'rev-parse', 'main')

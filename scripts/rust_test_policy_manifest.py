@@ -14,7 +14,7 @@ decide when an intentd PR runs the test in monorepo-consumer-checks.
 
 Followed: literal ``scripts/<name>`` references, and inside scripts/ a sibling
 named relative to the script's directory (``"$script_dir/x.sh"``,
-``"$(dirname "$0")/x.py"``). Full-line ``#`` comments are ignored so prose
+``"$(dirname "$0")/x.py"``, ``Path(__file__).with_name("x.py")``). Full-line ``#`` comments are ignored so prose
 mentions do not widen the list. A computed name such as the root Makefile's
 ``./scripts/$@.sh`` is not followed: add such a helper to ENTRYPOINTS. The
 watch list also keeps references whose file is missing, so deleting a helper
@@ -54,6 +54,8 @@ _COMPONENT_REFERENCE = re.compile(r"(?<![\w.-])scripts/" + _NAME)
 # "$script_dir/x.sh", "${here}/x.py" or "$(dirname "${BASH_SOURCE[0]}")/x.py".
 _SIBLING_REFERENCE = re.compile(
     r"(?:\$\{?\w+\}?|\))\"?/([A-Za-z0-9_][A-Za-z0-9_.-]*\.(?:sh|py|mjs|cjs|js|json))(?![\w.-])")
+# Inside scripts/: a Python sibling, as Path(__file__).with_name("x.py").
+_PYTHON_SIBLING_REFERENCE = re.compile(r"with_name\(\s*[\"']" + _NAME + r"[\"']\s*\)")
 _ROOT_REFERENCE = re.compile(r"INTENTD_DIR\)?\"?/scripts/" + _NAME)
 
 
@@ -69,18 +71,16 @@ def _references(text: str, *patterns: re.Pattern[str]) -> set[str]:
     return {"scripts/" + name for name in names if name[-1:].isalnum()}
 
 
-def _scan(component: Path, repo_root: Path) -> tuple[set[str], set[str]]:
-    """(files that exist and are copied, every path referenced on the way)."""
-    pending = list(ENTRYPOINTS)
-    for name in ROOT_LAUNCHERS:
-        path = repo_root / name
-        if path.is_file():
-            pending += sorted(_references(path.read_text(errors="replace"), _ROOT_REFERENCE))
+def reference_closure(component: Path, entrypoints, stubbed=frozenset()) -> tuple[set[str], set[str]]:
+    """(entrypoints and the component files they reach that exist, every path
+    referenced on the way, existing or not). ``stubbed`` paths are not followed
+    and are left out of both sets. scripts/callback_fixture_manifest.py shares it."""
+    pending = list(entrypoints)
     referenced = set(pending)
     found: set[str] = set()
     while pending:
         relative = pending.pop()
-        if relative in found or relative in STUBBED:
+        if relative in found or relative in stubbed:
             continue
         path = component / relative
         if not path.is_file():
@@ -88,11 +88,21 @@ def _scan(component: Path, repo_root: Path) -> tuple[set[str], set[str]]:
         found.add(relative)
         patterns = [_COMPONENT_REFERENCE]
         if relative.startswith("scripts/"):
-            patterns.append(_SIBLING_REFERENCE)
+            patterns += [_SIBLING_REFERENCE, _PYTHON_SIBLING_REFERENCE]
         refs = _references(path.read_text(errors="replace"), *patterns)
         referenced |= refs
         pending += sorted(refs)
-    return found, referenced - STUBBED
+    return found, referenced - stubbed
+
+
+def _scan(component: Path, repo_root: Path) -> tuple[set[str], set[str]]:
+    """(files that exist and are copied, every path referenced on the way)."""
+    entrypoints = list(ENTRYPOINTS)
+    for name in ROOT_LAUNCHERS:
+        path = repo_root / name
+        if path.is_file():
+            entrypoints += sorted(_references(path.read_text(errors="replace"), _ROOT_REFERENCE))
+    return reference_closure(component, entrypoints, STUBBED)
 
 
 def component_files(component: Path, repo_root: Path = ROOT) -> list[str]:
