@@ -37,7 +37,7 @@ over it. Both are **daemon-global**: they take no params and no `workspaceId` (l
   the raw `sysinfo` convention (100 = one full core) and is `0.0` when the pid is unknown or the
   sample failed.
 - `attachedAgentCount` — the number of currently-tracked agents spawned with the `unsloth`
-  provider, counted **regardless of `running`** (a stopped-but-attached state is possible
+  provider (keyed on the provider selection, not the `opencode` command it launches), counted **regardless of `running`** (a stopped-but-attached state is possible
   mid-restart). When no server is up the result degrades to
   `{ running: false, attachedAgentCount }`; a daemon whose agent manager is not attached
   (composition-root wiring — e.g. a bare test harness, or a daemon that has never spawned any
