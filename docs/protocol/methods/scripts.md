@@ -653,29 +653,35 @@ internal `script.start`, when the workspace becomes active with a ready checkout
 
 | Trigger | Starts autoStart scripts |
 |---|---|
-| Local `workspace.create` setup stage ends `completed` (script exited `0`) or `skipped` (no effective script, `skipWorktree`) | Yes, after `workspace:setup:completed` |
+| Local `workspace.create` setup stage ends `completed` (script exited `0`) or `skipped` (no effective script, `skipIsolation`/`skipWorktree`, plain-folder workspace) | Yes, after `workspace:setup:completed` |
 | Setup stage ends `failed` | No |
 | The workspace's [home](./nodes.md#workspace-homes) finishes its setup, or a home move to a set-up home | Yes (unchanged); the local setup stage of a workspace with a machine or cloud home starts nothing |
-| `workspace.unarchive`, `workspace.restore`, turn-start auto-unarchive, or a revive that flips the row | Yes, after the `workspace:updated` delta; an unarchive of an already Active row starts nothing |
+| `workspace.unarchive`, `workspace.restore` or turn-start auto-unarchive that flips the row Archived → Active | Yes, after the `workspace:updated` delta; an unarchive of an already Active row starts nothing |
+| Revive of a Retired workspace | No: its fresh checkout never ran setup |
 | `workspace.archive` (manual or auto-archive) | No: archive **stops** every running script of the workspace (below) |
-| Daemon boot | No new start: only the was-running restore applies (see *Was-running marker*) |
+| Daemon boot | Yes, in an active workspace without a machine home, even after a user stop: see *Restores marked services at boot* under *Was-running marker*, the one boot policy |
 
 Rules:
 
-- The workspace is re-read when the start runs: nothing starts in an archived,
-  retired or deleted workspace, or one in a `workspace.delete` grace window.
+- Every daemon start (an `autoStart` trigger or the boot restore) re-reads the
+  workspace under the script's definition lock, just before launch: nothing starts
+  in an archived, retired or deleted workspace, or one in a `workspace.delete` grace
+  window. A daemon start racing an archive either launches before the archive commits
+  (and the archive then stops it) or launches nothing.
 - `start` stays idempotent: a script already `starting`, `running` or `restarting`
   is left as it is, so overlapping triggers never double-start.
-- Boot does not start an `autoStart` script that was not running when the daemon
-  stopped. A user `script.stop` (or a natural exit) is respected across restarts; the
-  next setup finish or unarchive starts it again.
+- A user `script.stop` holds until the next trigger above (setup finish, unarchive
+  or daemon boot); turn `autoStart` off to keep a script stopped.
 - **Archive stops scripts.** After the archived row is persisted, and before the
   repository archive script runs, the daemon stops each running or launching home
   run with `script.stop` semantics: a command's `lastRun` is `cancelled` with
-  `error` `cancelled by workspace archive`, and the was-running marker is cleared, so boot never restores a script of an
-  archived workspace. Stopping ends once the row is no longer archived (an
-  unarchive that wins the race keeps its scripts). Machine runs of remote agents
-  are not stopped. A client may still start a script in an archived workspace.
+  `error` `cancelled by workspace archive`, and the was-running marker is cleared.
+  Boot starts no script of an archived workspace, even when a marker survives (a
+  daemon stop mid-archive, a failed stop). Each script's stop first re-checks that
+  the row is still archived; once an unarchive has flipped it, the remaining
+  scripts are left running (an `autoStart` script stopped just before the flip is
+  started again by the unarchive). Machine runs of remote agents are not stopped. A
+  client may still start a script in an archived workspace.
 - Starts are best-effort: a failed start is logged and never fails the triggering
   call, and one failure does not keep other scripts from starting.
 
