@@ -82,8 +82,10 @@ async function listAll(call, method, params, key) {
   return rows;
 }
 
-export async function seed({ call, folder }) {
-  fs.mkdirSync(folder, { recursive: true });
+export async function seed({ call, folder: requested }) {
+  fs.mkdirSync(requested, { recursive: true });
+  // The daemon stores the canonical path; match it so a symlinked cache reuses the workspace.
+  const folder = fs.realpathSync(requested);
   fs.writeFileSync(path.join(folder, 'README.md'), '# Sandbox seed\n\nTarget of the file link in the Spec.\n');
 
   const workspaces = await listAll(call, 'workspace.list', {}, 'workspaces');
