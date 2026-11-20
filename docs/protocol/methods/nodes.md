@@ -2222,8 +2222,10 @@ saved:
 2. The image tag: `HEAD https://vcr.vercel.com/v2/<image>/manifests/<intentdVersion>`
    with the team id and the token as basic credentials. `404` is
    `template-missing`. A `401` or `403` (the registry does not answer this
-   team for another team's repository) passes the test; a missing image then
-   fails the first start with `template-missing`.
+   team for another team's repository) passes the test, and so does a
+   `<repository>`-only image (its registry path needs the team slug and
+   project, which the entry does not hold); a missing image then fails the
+   first start with `template-missing`.
 
 All failures are `cloud-machine-unavailable`. The token needs to create,
 read, update, stop and delete sandboxes in the project and run commands in
@@ -2296,7 +2298,7 @@ so the timeout only acts as a backstop for a backend that went away:
 
 | Event | Backend action |
 | --- | --- |
-| Sandbox running (busy or idle) | Every 10 minutes, when the session ends in less than 30 minutes, `POST /v2/sandboxes/sessions/{sessionId}/extend-timeout` with 30 more minutes. When the sandbox is already stopped, the backend marks the machine paused. |
+| Sandbox running (busy or idle) | Every 10 minutes, and at each dial, when the session ends in less than 30 minutes, `POST /v2/sandboxes/sessions/{sessionId}/extend-timeout` with what is missing, in whole minutes, so the plan's cap is reached as late as possible. An extension is never sent twice. When the sandbox is already stopped, the backend marks the machine paused. |
 | `extend-timeout` refused with `400` `sandbox_timeout_invalid` (the session reached the plan's cap) | A clean stop and resume (the two rows below, back to back) at the first moment the sandbox is idle; the session still has at least 20 minutes then. A sandbox that stays busy until the session ends is stopped by Vercel with a snapshot, which cuts its running turn, as on a Northflank container restart; the next message resumes it. |
 | Sandbox idle for `idlePauseMinutes`, or `cloudMachines.pause` | `POST /v2/sandboxes/sessions/{sessionId}/stop`. Vercel saves the disk as a snapshot and stops the session, and answers once both are done (a few seconds); a stopped session answers the same again. The link drops; compute billing stops, and the snapshot is still billed. |
 | The backend is away for 30 minutes | The session times out and Vercel stops it with a snapshot. The backend sees it stopped when it comes back, and marks it paused. |
