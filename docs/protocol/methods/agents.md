@@ -2692,7 +2692,7 @@ the user to approve on a desktop app. `ws.app.proposal.show` refuses this kind.
 Owner desktop apps tell the daemon which other backends they hold credentials for; the daemon relays
 the Assistant's `ws.rpc` calls for those backends through one of those apps. The daemon never sees a token.
 
-**`backends.report`** (client→daemon router method, owner-only; `-32003` for any other principal; needs a
+**`backends.report`** (client→daemon fast-path method, owner-only; `-32003` for any other principal; needs a
 prior `client.hello`). Params `{ backends: [{ name, host, hosts?, port, fingerprint?, tcAddress?, connected?, daemonVersion? }] }`,
 the app's full list (it replaces that app's previous report). A report whose entries carry any key matching
 `token`, `secret`, `password` or `credential` (any case) is refused with `-32602` and nothing is stored.

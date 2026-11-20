@@ -44,8 +44,9 @@ adds two owner-only router methods, `agent.importableSessions.list` and
 into a workspace as a new agent with its history.
 
 The prepared [Assistant remote backends](./methods/agents.md#assistant-remote-backends-prepared)
-add two router methods (`backends.report`, owner-only; `agent.rpcMethods`, read) and one daemon→client
-reverse RPC (`backends.relayCall`), gated by the hello capability `capabilities.backendRelay: 1`.
+add one router method (`agent.rpcMethods`, read), one owner-only fast-path method (`backends.report`,
+keyed by the connection's hello identity) and one daemon→client reverse RPC (`backends.relayCall`),
+gated by the hello capability `capabilities.backendRelay: 1`.
 
 The prepared [Assistant RPC approvals](./methods/agents.md#assistant-rpc-proposals-rpc-call-prepared)
 add one owner-only router method, `agent.resolveRpcProposal`, which runs or rejects the calls the
@@ -135,8 +136,8 @@ app-wide plugins; `agentPlugins: 1` gates support.
 
 The documented surface reserves **508 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
 
-- **Router methods:** 454 methods dispatched via the main router (`router::dispatch`)
-- **Fast-path methods:** 54 methods intercepted before the router for performance or per-connection state
+- **Router methods:** 453 methods dispatched via the main router (`router::dispatch`)
+- **Fast-path methods:** 55 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 0; use canonical Git read names
 
 Additionally, the protocol includes:
@@ -156,13 +157,12 @@ methods and four socket-private control notifications. Their individual hello
 capabilities gate support; catalog entries do not grant permission or establish
 which desktop release contains the feature. All existing methods remain present.
 
-### Router methods by namespace (454 total)
+### Router methods by namespace (453 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
 | accept-changes | 7 | addRemote, execute, getStatus, mergePR, prepare, reconcile, release — the "accept the agent's work" pipeline (§5.18; `workspaceId` req) |
 | agent | 56 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getCreationPreferences, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, importSession, importableSessions.list, list, listActive, listInterrupted, listUserMessages, markSeen, memoryUsage, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, resolveProposal, resolveRpcProposal, respondPermission, restore, retire, retry, rpcMethods, sendMessage, sendQueuedMessageNow, sendQueuedMessagesNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate, workers.list, workers.stop |
-| backends | 1 | report — an owner desktop app reports the backends it holds credentials for, so the Assistant can call them through that app ([Assistant remote backends](./methods/agents.md#assistant-remote-backends-prepared)) |
 | client | 1 | list — live hello'd connections grouped by logical `clientId` (§5.17; v9.9, daemon-global result; optional routing-only `workspaceId`). The handshake itself (`client.hello`) is a fast-path method, below |
 | cloudMachines | 5 | configure, kill, list, pause, remove — E2B, Northflank, Agent37 and Vercel cloud machines (§5.50) from named entries, daemon-global; configure/remove owner-only, list owner and members, pause/kill owner or starter |
 | comment | 6 | add, delete, getThread, list, resolveThread, respond |
@@ -220,11 +220,11 @@ which desktop release contains the feature. All existing methods remain present.
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9 and the `browser.*` tab-registry methods are in §5.45.
 
-### Fast-path methods (54 total)
+### Fast-path methods (55 total)
 
-The following 54 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task. The retired `invite.redeem` is not dispatchable at the current pin; `/invite` serves only inspect, accept, challenge and prove.
+The following 55 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task. The retired `invite.redeem` is not dispatchable at the current pin; `/invite` serves only inspect, accept, challenge and prove.
 
-agent.workers.subscribe, browser.closeTab, browser.exec, browser.listTabs, browser.navigateTab, browser.removeTab, browser.syncTabs, browser.upsertTab, client.hello, drafts.clear, drafts.get, drafts.set, events.fence, events.subscribe, events.unsubscribe, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.invite.create, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.prepareProviderAdapters, host.providerAuthStatus, host.providerDiscovery, host.providerTestPrompt, host.status, host.toolAvailability, invite.accept, invite.challenge, invite.inspect, invite.prove, note.presence.update, pairing.getInfo, pairing.getSelfInfo, presence.update, server.pairingInfo, server.rotateToken, system.gitCredential, system.requestUpdate, system.shutdown, system.startupStatus, system.status, workspace.invite.create
+agent.workers.subscribe, backends.report, browser.closeTab, browser.exec, browser.listTabs, browser.navigateTab, browser.removeTab, browser.syncTabs, browser.upsertTab, client.hello, drafts.clear, drafts.get, drafts.set, events.fence, events.subscribe, events.unsubscribe, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.invite.create, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.prepareProviderAdapters, host.providerAuthStatus, host.providerDiscovery, host.providerTestPrompt, host.status, host.toolAvailability, invite.accept, invite.challenge, invite.inspect, invite.prove, note.presence.update, pairing.getInfo, pairing.getSelfInfo, presence.update, server.pairingInfo, server.rotateToken, system.gitCredential, system.requestUpdate, system.shutdown, system.startupStatus, system.status, workspace.invite.create
 
 The multiplayer methods (presence §5.47, invites §5.48) are fast-path because they act on per-connection state: `presence.update` sets the connection's **own** focus set and typing target (member workspaces only; transient, never persisted; returns the connection's opaque typing source handle) and `note.presence.update` the caller's own caret on a note it holds a `note.presence.subscribe` lease for (coalesced daemon-side, never persisted) — both feed the `presence:changed` / `note:presence` events (§6.5);
 `workspace.invite.create` (owner/member under §5.49; requires a connected owner forge — GitHub or GitLab — else `-32603 { code: "github-identity-required" }`, or `github-unreachable` when neither is connected and one cannot be reached; the legacy owner-only policy without `hostMembership: 1`; optional `pinLogin` with its v10.8 `pinProvider` / `pinHost`, `expiresInSecs` default 7 days) mints an invite the transport wraps into the `intent://invite?…` link, and the four `invite.*` methods are the unauthenticated join served on the `/invite` endpoint only: `invite.inspect` previews an open `(inviteId, secret)` → `{ workspaceId, workspaceTitle, hostname, prettyHostname, pinIdentity }`, with the required `pinIdentity` triple or explicit `null` (10.8; see [Selecting the guest identity](./methods/multiplayer.md#selecting-the-guest-identity) for the triple shape, legacy pins, and older-daemon omission rules);
