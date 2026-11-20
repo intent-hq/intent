@@ -607,6 +607,115 @@ class CallbackPreflightTests(unittest.TestCase):
                 self.assertFalse(gate.needs_callback_fixture(plans))
 
 
+INTENTD = SCRIPT.parents[1] / "packages/intentd"
+
+
+def callback_fixture_manifest():
+    # Loaded on use: test_default_bytecode_preflight_preserves_changed_plan_and_resume
+    # runs a copy of this module from a directory without its siblings.
+    path = SCRIPT.with_name("callback_fixture_manifest.py")
+    spec = importlib.util.spec_from_file_location("callback_fixture_manifest", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def copy_callback_scripts(component, entrypoints):
+    for relative in callback_fixture_manifest().component_files(INTENTD, entrypoints):
+        target = component / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(INTENTD / relative, target)
+
+
+class CallbackFixtureManifestTests(unittest.TestCase):
+    """The intentd files the callback fixture tests copy are derived, not hand-kept.
+
+    intentd#3103 made prepare-acp-callback-fixture.py load a sibling
+    download_retry.py; the hand-kept copy list missed it, so four tests here
+    failed on every Linux x64 checkout with intentd while CI (no submodules)
+    skipped them.
+    """
+
+    def setUp(self):
+        self.manifest = callback_fixture_manifest()
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.component = Path(temp.name) / "intentd"
+        self.files({
+            "scripts/prepare-acp-callback-fixture.py": (
+                '_spec = importlib.util.spec_from_file_location(\n'
+                '    "download_retry", Path(__file__).with_name("download_retry.py"))\n'
+                '# Path(__file__).with_name("commented.py") is prose, not a load.\n'),
+            "scripts/download_retry.py": "DATA = Path(__file__).with_name( 'retry-data.json' )\n",
+            "scripts/retry-data.json": "{}\n",
+            "scripts/changed-tests.sh": 'policy=("$BASH" "$repo_root/scripts/with-test-policy.sh")\n',
+            "scripts/with-test-policy.sh": 'exec "$@"\n',
+            "scripts/test-prepare-acp-callback-fixture.py": (
+                'SPEC = Path(__file__).with_name("prepare-acp-callback-fixture.py")\n'
+                'HELPER = Path(__file__).with_name("test-only.py")\n'),
+            "scripts/test-only.py": "",
+            "scripts/commented.py": "",
+            "scripts/unrelated.py": "",
+        })
+
+    def files(self, files):
+        for relative, content in files.items():
+            path = self.component / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+
+    def test_copies_python_siblings_transitively(self):
+        self.assertEqual(self.manifest.component_files(self.component, self.manifest.PREPARE), [
+            "scripts/download_retry.py", "scripts/prepare-acp-callback-fixture.py",
+            "scripts/retry-data.json"])
+        self.assertEqual(self.manifest.component_files(self.component), [
+            "scripts/changed-tests.sh", "scripts/download_retry.py",
+            "scripts/prepare-acp-callback-fixture.py", "scripts/retry-data.json",
+            "scripts/with-test-policy.sh"])
+
+    def test_watch_list_adds_the_in_place_fixture_builder(self):
+        watched = self.manifest.watched_files(self.component)
+        for relative in ("scripts/test-prepare-acp-callback-fixture.py", "scripts/test-only.py",
+                         "scripts/download_retry.py", "scripts/changed-tests.sh"):
+            self.assertIn(relative, watched)
+        self.assertNotIn("scripts/commented.py", watched)
+        self.assertNotIn("scripts/unrelated.py", watched)
+
+    def test_deleted_but_loaded_sibling_stays_watched(self):
+        (self.component / "scripts/download_retry.py").unlink()
+        self.assertNotIn("scripts/download_retry.py", self.manifest.component_files(self.component))
+        self.assertIn("scripts/download_retry.py", self.manifest.watched_files(self.component))
+
+    def test_new_sibling_load_is_copied_and_watched(self):
+        self.files({"scripts/prepare-acp-callback-fixture.py":
+                    'X = Path(__file__).with_name("new_helper.py")\n',
+                    "scripts/new_helper.py": ""})
+        self.assertIn("scripts/new_helper.py", self.manifest.component_files(self.component))
+        self.assertIn("scripts/new_helper.py", self.manifest.watched_files(self.component))
+
+    def test_cli_prints_one_path_per_line(self):
+        script = str(SCRIPT.with_name("callback_fixture_manifest.py"))
+        for flag, expected in (((), self.manifest.component_files),
+                               (("--watched",), self.manifest.watched_files)):
+            with self.subTest(flag=flag):
+                result = subprocess.run([sys.executable, "-I", "-B", script,
+                                         "--component", str(self.component), *flag],
+                                        capture_output=True, text=True, timeout=20)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), expected(self.component))
+        result = subprocess.run([sys.executable, "-I", "-B", script,
+                                 "--component", str(self.component / "missing")],
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("is not a directory", result.stderr)
+
+    @unittest.skipUnless((INTENTD / "scripts/download_retry.py").is_file(),
+                         "the pinned intentd predates intentd#3103")
+    def test_pinned_component_copies_the_download_retry_sibling(self):
+        self.assertIn("scripts/download_retry.py",
+                      self.manifest.component_files(INTENTD, self.manifest.PREPARE))
+
+
 class CallbackValidatorTests(unittest.TestCase):
     """Exercise the component verifier with its own synthetic fixture builder."""
 
@@ -690,9 +799,7 @@ class CallbackValidatorTests(unittest.TestCase):
         # The child interpreter does not inherit the in-process platform mock.
         if self.host_machine not in ("x86_64", "amd64"):
             self.skipTest("canonical fixture CLI needs a Linux x64 host")
-        scripts = self.component / "scripts"
-        scripts.mkdir()
-        shutil.copy(SCRIPT.parents[1] / "packages/intentd/scripts/prepare-acp-callback-fixture.py", scripts)
+        copy_callback_scripts(self.component, callback_fixture_manifest().PREPARE)
         config = self.component / "crates/intent-acp/tests/fixtures"
         config.mkdir(parents=True)
         shutil.copy(self.fixture.descriptor_path, config / "claude-callback-adapter.json")
@@ -726,9 +833,7 @@ class CallbackValidatorTests(unittest.TestCase):
         if self.host_machine not in ("x86_64", "amd64"):
             self.skipTest("canonical fixture CLI needs a Linux x64 host")
         scripts = self.component / "scripts"
-        scripts.mkdir()
-        for name in ("prepare-acp-callback-fixture.py", "changed-tests.sh"):
-            shutil.copy(SCRIPT.parents[1] / "packages/intentd/scripts" / name, scripts)
+        copy_callback_scripts(self.component, callback_fixture_manifest().ENTRYPOINTS)
         config = self.component / "crates/intent-acp/tests/fixtures"
         config.mkdir(parents=True)
         shutil.copy(self.fixture.descriptor_path, config / "claude-callback-adapter.json")

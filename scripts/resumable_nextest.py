@@ -356,7 +356,14 @@ def load_callback_validator(intentd_dir: Path):
     # Preflight must not create an untracked scripts/__pycache__ in intentd:
     # changed-test planning treats it as a build-wide change. Execute source
     # directly, preserving module metadata without reading or writing bytecode.
-    exec(compile(path.read_bytes(), str(path), "exec"), module.__dict__)
+    # Its own sibling loads (download_retry.py since intentd#3103) use the
+    # normal loader, so suppress their bytecode writes as well.
+    saved = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        exec(compile(path.read_bytes(), str(path), "exec"), module.__dict__)
+    finally:
+        sys.dont_write_bytecode = saved
     return module
 
 
