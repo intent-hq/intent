@@ -24,6 +24,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | agent.dismissQuestions *(v2.8; model notice added within v4.3, intentd#892)* | agentId (req), messageId (req), workspaceId (req) | { success: true, dismissedQuestionsMessageId } — details below the table. |
 | agent.resolveProposal *(v8.7, [intentd#1581](https://github.com/intent-hq/intentd/pull/1581))* | agentId (req), proposalId (req), outcome (req: `"applied"` \| `"dismissed"`), detail?, workspaceId (req) | { success: true, proposalId, outcome } — details below the table. |
 | agent.resolveRpcProposal *(prepared, Assistant RPC)* | agentId (req), proposalId (req), decision (req: `"approve"` \| `"reject"`), workspaceId (req) | { success: true, proposalId, outcome, items, expired? } — owner only; details below the table. |
+| agent.rpcMethods *(prepared, Assistant RPC)* | workspaceId? | { count, methods: [{ method, class, summary, doc? }] } — this daemon's agent classes for `ws.rpc` (read). Lets another backend's Assistant read them through the relay. |
 | agent.markSeen *(v4.5)* | agentId (req), messageId (req), workspaceId (req) | { success: true, lastSeenMessageId } — details below the table. |
 | agent.editAndRegenerate | agentId (req), messageId (req), content (req), workspaceId (req), imageBlocks? *(stored block references with the capped-block-read capability)*, fileBlocks? *(attachment references only since v10.0; see the file-block contract on `agent.sendMessage`)*, model? | { success, queued: false, messageId, truncatedCount } — details below the table. |
 | agent.queueMessage | agentId (req), content (req), messageId? *(submission correlation v1, below)*, imageBlocks?, fileBlocks? *(attachment references only since v10.0; an inline-`data` entry is `-32602` naming the index BEFORE enqueueing — see the file-block contract on `agent.sendMessage`)*, messageMetadata?, workspaceId? | { success, queuedMessage, turnId } — details below the table. |
@@ -2685,6 +2686,40 @@ method, summary and full params, grouped by backend, and resolve it only with
 `agent.resolveRpcProposal`. `agent.resolveProposal` refuses `outcome: "applied"` for such an id
 (`-32602`, nothing runs); `dismissed` drops the held calls. A client that does not know the kind tells
 the user to approve on a desktop app. `ws.app.proposal.show` refuses this kind.
+
+#### Assistant remote backends (prepared)
+
+Owner desktop apps tell the daemon which other backends they hold credentials for; the daemon relays
+the Assistant's `ws.rpc` calls for those backends through one of those apps. The daemon never sees a token.
+
+**`backends.report`** (client→daemon fast-path method, owner-only; `-32003` for any other principal; needs a
+prior `client.hello`). Params `{ backends: [{ name, host, hosts?, port, fingerprint?, tcAddress?, connected?, daemonVersion? }] }`,
+the app's full list (it replaces that app's previous report). A report whose entries carry any key matching
+`token`, `secret`, `password` or `credential` (any case) is refused with `-32602` and nothing is stored.
+Result `{ accepted }`. The app sends it after `client.hello` and whenever its list or a backend's connection
+state changes. The daemon keeps one list per reporting `clientId` in memory with no expiry: it survives the
+app disconnecting and is lost only on daemon restart.
+
+Backend identity follows the [Keychain machine identity](../backend-keychain.md#payload-and-identity):
+`fp:<trimmed uppercase fingerprint>`, otherwise `addr:<trimmed lowercase host>:<port>`, otherwise
+`tc:<tcAddress>` for a tunnel-only entry. Entries from several apps with the same identity are one backend.
+The entry whose fingerprint equals this daemon's own certificate fingerprint is the local backend (`local`).
+
+**`backends.relayCall`** (daemon→client reverse RPC). Params `{ backendId, method, params, timeoutMs }`.
+The app resolves its stored connection for `backendId` by the same identity, calls `method` with its own
+credential, and replies `{ result }` or `{ error: { code, message, data? } }` (the remote daemon's error
+unchanged). The daemon sends it only to online owner connections whose hello advertised
+`capabilities.backendRelay: 1` and whose `clientId` reported the backend, preferring the most recently
+active one.
+
+**Agent path.** `ws.rpc.backends()` lists the merged backends from memory (no client round trip), each with
+its reporters (`{ clientId, device, online, lastSeenAt }`). `ws.rpc.call(method, params, { backend })` and
+batch items with `backend` relay as above. Classification follows the local daemon when it knows the method,
+otherwise the remote daemon's `agent.rpcMethods` class, otherwise mutating; remote mutations use the same
+`rpc-call` card, whose calls carry their backend. Before a card is shown, every remote backend in it must have
+an online relay. Relay failures use `data.code` `unknown-backend`, `no-relay-online` (the message names the
+reporting machines to open), `relay-disconnected` (the call may have run; a batch reports the item `unknown`
+and skips the rest) and `relay-timeout`.
 
 ```json
 // → resolve a pending proposal after the client-side Apply succeeded
