@@ -3,18 +3,18 @@
 Instructions for AI agents working in this monorepo.
 
 **Assistant app guide:** When adding, changing, moving, renaming, or removing a
-user-facing feature, update the affected section of
+user-facing feature, or changing its readiness, update the affected section of
 [`packages/intentd/crates/intent-services/resources/assistant-app-guide.md`](packages/intentd/crates/intent-services/resources/assistant-app-guide.md)
 in the same change; for frontend work, the intentd guide PR merges after the frontend PR.
-Keep it concise and replace obsolete text. Describe how the app behaves now, with no app
-version numbers (`check-app-guide-sources` rejects `vX.Y.Z`): each desktop release bundles
-the guide it pins, so older builds keep matching text. Write "older versions may differ"
-where useful. Merged behavior described this way is not unreleased and needs no version
-qualification. Do not promote unfinished, experimental, Labs-only, or internal features
-as normal options; code availability is not proof of readiness. When asked about such a
-feature, or assigned to develop or test it, discuss it honestly and label its status.
-Before opening a PR, record the affected guide section (and companion intentd PR), or
-explain why the change has no user-help impact.
+Keep it concise. Describe how the app behaves now, with no app version numbers
+(`check-app-guide-sources` rejects them): each desktop release bundles the guide it pins,
+and merged behavior described this way is not unreleased. A remote daemon can be newer
+than the desktop, so write "older versions may differ" where behavior changed recently.
+Do not promote unfinished, experimental, Labs-only, or internal features as normal
+options; code availability is not proof of readiness. When asked about such a feature,
+or assigned to develop or test it, discuss it honestly and label its status. Before
+opening a PR, record the affected guide section (and companion intentd PR), or explain
+why the change has no user-help impact.
 
 ## Repository Structure
 

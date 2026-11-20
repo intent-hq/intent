@@ -117,6 +117,22 @@ test('parseGuide rejects exact app versions in prose only', () => {
   ]);
 });
 
+test('parseGuide catches app versions without a lowercase v prefix', () => {
+  const guide = [
+    'Desktop 2.359.0 and later; app version 2.360.1; Intent builds 2.361.0.',
+    'V2.362.0, v2.363.X and v2.364.* also count.',
+    'Node.js 22.22.2+, `agy` 1.5.0, harness v3.15 and release-plz 0.3.1 do not.',
+  ].join('\n');
+  assert.deepEqual(parseGuide(guide).problems.map(p => `${p.line} ${p.message.match(/'([^']+)'/)[1]}`), [
+    '1 Desktop 2.359.0',
+    '1 app version 2.360.1',
+    '1 builds 2.361.0',
+    '2 V2.362.0',
+    '2 v2.363.X',
+    '2 v2.364.*',
+  ]);
+});
+
 // A monorepo with two component repos recorded as gitlinks, the way the
 // docs-check job and the upstream consumer job see them.
 function fixture(t, { guide, intentdFiles = [], feFiles = [] }) {
@@ -185,6 +201,19 @@ test('upstream mode warns for a missing frontend path and fails for a missing in
   const failed = checkAt(intentdMiss.root, '--upstream');
   assert.equal(failed.status, 1, failed.stdout + failed.stderr);
   assert.match(failed.stderr, /:3: error: packages\/intentd\/crates\/x\/gone\.rs is missing at intentd/);
+});
+
+// An intentd PR branched before the guide dropped its versions must not fail
+// the consumer job: pr-static gates guide edits, and the pin stays strict.
+test('an app version warns in upstream mode and fails at the pins', t => {
+  const fx = fixture(t, { guide: `${GOOD}Desktop v2.334.5 and later show prompts.\n`, ...GOOD_FILES });
+  const warned = checkAt(fx.root, '--upstream');
+  assert.equal(warned.status, 0, warned.stdout + warned.stderr);
+  assert.match(warned.stdout, /::warning::app-guide-sources: .*assistant-app-guide\.md:3: exact app version 'v2\.334\.5'/);
+  const failed = checkAt(fx.root);
+  assert.equal(failed.status, 1, failed.stdout + failed.stderr);
+  assert.match(failed.stderr, /assistant-app-guide\.md:3: error: exact app version 'v2\.334\.5'/);
+  assert.doesNotMatch(failed.stderr, /point the comment at the file/);
 });
 
 test('reads the pinned commit, not the working tree or a newer checkout HEAD', t => {

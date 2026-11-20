@@ -29,10 +29,13 @@
 // runs only that parse, with no git: intentd's pr-static job calls it when the
 // guide changes.
 //
-// The same parse rejects an exact app version (`v2.359.0`, `v2.358.x`) in the
-// prose outside comments: the guide ships inside each release, so it describes
-// current behavior. Versioned wording cost intentd#3544 two review rounds and
-// intentd#3564 a follow-up PR. Third-party versions (`agy` 1.5.0) have no `v`.
+// The same parse rejects an exact app version (`v2.359.0`, `v2.358.x`,
+// `Desktop 2.359.0`) in the prose outside comments: the guide ships inside
+// each release, so it describes current behavior. Versioned wording cost
+// intentd#3544 two review rounds and intentd#3564 a follow-up PR. Third-party
+// versions (`agy` 1.5.0) pass. `--upstream` only warns about them: an intentd
+// PR branched before a guide fix did not cause them, pr-static gates guide
+// edits, and the pinned (auto-bump) run stays strict.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
@@ -50,7 +53,7 @@ export const SKIPPED = { 'packages/ios': 'ios' };
 const COMMENT = /<!--([\s\S]*?)-->/g;
 const SOURCES = /^\s*Sources?\b/i;
 const HEADER = /^\s*Sources\s*(?:\(paths relative to ([^)\s]+)\))?\s*:/;
-const APP_VERSION = /\bv\d+\.\d+\.(?:\d+|x)\b/g;
+const APP_VERSION = /\bv\d+\.\d+\.(?:\d+\b|x\b|\*)|\b(?:desktop|app|intent|builds?|releases?)(?:\s+version)?\s+\d+\.\d+\.\d+\b/gi;
 
 export function expandBraces(text) {
   const open = text.indexOf('{');
@@ -184,7 +187,7 @@ export function parseGuide(text) {
   const prose = text.replace(COMMENT, comment => comment.replace(/[^\n]/g, ' '));
   for (const match of prose.matchAll(APP_VERSION)) {
     const line = prose.slice(0, match.index).split('\n').length;
-    problems.push({ line, message: `exact app version '${match[0]}': describe how the app behaves now` });
+    problems.push({ line, version: true, message: `exact app version '${match[0]}': describe how the app behaves now` });
   }
   problems.sort((a, b) => a.line - b.line);
   return { comments, citations, problems };
@@ -253,15 +256,22 @@ export function check({ root, upstream = false }) {
   const text = git(['cat-file', 'blob', `${revisions[GUIDE_COMPONENT]}:${GUIDE_PATH}`], path.join(root, guideDir));
   const { comments, citations, problems } = parseGuide(text);
   const guide = `${guideDir}/${GUIDE_PATH}`;
-  const errors = problems.map(({ line, message }) => `${guide}:${line}: error: ${message}`);
-  let formatErrors = problems.length;
-  const checkedOut = readGuide(path.join(root, guide), { optional: true });
-  if (checkedOut !== null && checkedOut !== text) {
-    const local = parseGuide(checkedOut).problems;
-    formatErrors += local.length;
-    errors.push(...local.map(({ line, message }) => `${guide}:${line}: error: ${message} (checked-out file)`));
-  }
+  const errors = [];
   const warnings = [];
+  let formatErrors = 0;
+  const report = (found, suffix = '') => {
+    for (const { line, message, version } of found) {
+      if (upstream && version) {
+        warnings.push(`${guide}:${line}: ${message}${suffix}; intentd PRs that edit the guide and the auto/submodule-bump PR fail on it`);
+      } else {
+        formatErrors += 1;
+        errors.push(`${guide}:${line}: error: ${message}${suffix}`);
+      }
+    }
+  };
+  report(problems);
+  const checkedOut = readGuide(path.join(root, guide), { optional: true });
+  if (checkedOut !== null && checkedOut !== text) report(parseGuide(checkedOut).problems, ' (checked-out file)');
   const checked = new Set();
   let skipped = 0;
   for (const cite of citations) {
@@ -304,7 +314,7 @@ export function checkFormat(file) {
 }
 
 const FORMAT_HINT = "hint: a Sources comment starts with 'Sources:' or 'Sources (paths relative to packages/<component>):'; put any other words after the colon, e.g. '<!-- Sources (paths relative to packages/cloudlands-fe): src/a.ts (Labs device rail). -->'.";
-const VERSION_HINT = "hint: describe how the app behaves now, without app version numbers; write 'older versions may differ' where that helps. Each release bundles its own guide, and a frontend change's guide PR merges after the frontend PR.";
+const VERSION_HINT = "hint: describe how the app behaves now, without app version numbers, and merge the guide PR after the frontend PR it describes. A remote daemon can be newer than the desktop, so write 'older versions may differ' where behavior changed recently.";
 const MISSING_HINT = 'hint: point the comment at the file that implements the behavior, or remove the guide text that describes code the component does not have (fix it in intentd, then let auto-bump-submodules advance the pin).';
 
 function main() {
