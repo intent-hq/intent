@@ -123,3 +123,34 @@ close affected tunnels on removal/revocation; a concurrent upgrade cannot outliv
 that boundary. The existing loopback target restriction, frame protocol, credits,
 TLS fingerprint pinning and stream limits are unchanged. Invitation envelopes stay
 tunnel-only; personal `intent://pair` payloads retain direct/tunnel route support.
+
+### Guest service preview tunnel *(additive, `guestServicePreview: 1`)*
+
+A workspace guest (Manager or Participant) may reach the servers of that
+workspace's running service scripts. No sharing step exists: a port is
+reachable while a running service of the workspace serves it.
+
+- **Upgrade.** A workspace guest connects to `/tunnel?workspaceId=<id>`. Without
+  `workspaceId`, the upgrade stays `403`. With it, the daemon admits the guest
+  only if the guest is a current member of that workspace; otherwise `403`.
+  The connection is bound to that workspace for its lifetime.
+- **Every `OPEN` is checked fresh.** The daemon accepts the port only when the
+  guest is still a member, the workspace is not archived, and a running service
+  script of that workspace owns the socket that accepts `127.0.0.1:<port>`, by
+  the [`servedPorts`](./methods/scripts.md#served-ports-additive-guestservicepreview-1)
+  ownership rule evaluated at that `OPEN`. A
+  refused port answers `OPEN_ERR` with the message `not-shared`; the connection
+  stays open.
+- **Revocation.** When a service stops or exits, or a port leaves its
+  `servedPorts`, the daemon closes established guest streams on that port with
+  the final `CLOSE`. Member removal or credential revocation closes the whole
+  connection, as for host members.
+- **Owner and host members** are unchanged: they keep unrestricted loopback
+  reach and ignore `workspaceId`.
+- **Unchanged limits.** The IPv4 loopback target, frame protocol, credits, stream
+  caps and per-guest connection seats apply as above.
+
+Clients require exact integer `server.capabilities.guestServicePreview: 1`
+(also returned by `system.capabilities`) before they send `workspaceId`. Without
+it, a guest receives the existing `403` and the client shows the
+owner-or-host-member message.

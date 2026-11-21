@@ -42,6 +42,13 @@ workspace role. Missing, malformed or unknown capability values hide role
 mutation controls. Refresh on each admitted connection; older remote hosts are
 not upgraded by installing a newer desktop client.
 
+**Guest service preview.** Exact integer
+`server.capabilities.guestServicePreview: 1`, also returned by
+`system.capabilities`, gates the [guest service preview tunnel](../01-transport.md#guest-service-preview-tunnel-additive-guestservicepreview-1)
+and [`servedPorts`](./scripts.md#served-ports-additive-guestservicepreview-1).
+It is support discovery, not caller authority. Without exact `1`, a guest client
+does not send `workspaceId` on `/tunnel`.
+
 **Submission correlation.**
 `server.capabilities.submissionCorrelation: 1` gates the complete
 [optimistic submission contract](./agents.md#submission-correlation-and-optimistic-display-additive-extension):
