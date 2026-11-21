@@ -104,7 +104,8 @@ splash remains; do not restart. Keep the tab open for HMR.
 ### Prove
 
 Capture a named preview with `make sandbox-shot PREVIEW=<id> STATE=<state>` (`THEME`, `WIDTH`, `OUT`);
-use `ws.browser.screenshot` only for the full app. Append evidence to the task note:
+use `ws.browser.screenshot` only for the full app (`make sandbox-seed` gives a stack sandbox a
+note with sample links; cloudlands-fe#4851 shipped without them). Append evidence to the task note:
 
 | Claim | Command | Result | Artifact |
 |---|---|---|---|
