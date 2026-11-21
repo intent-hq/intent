@@ -704,6 +704,12 @@ armed:
   a network clone the monotonic clamp lifts a later milestone into the 85+ tail
   automatically); an `isNewRepo` `direct` create emits `checkout` (branch checkout) at a
   nominal 50; every mode ends with `finalizing 95` before the row insert.
+- **Placed initial agent.** When the create's initial agent is placed on a machine (every
+  initial agent on an orchestrator, or an explicit remote placement), the daemon emits
+  `agent` ("Starting agent on <machine name>...") at a nominal 97 after the row insert,
+  before it pins the agent's start commit and starts it on its machine, so a slow start
+  is not shown as "Finalizing workspace...". Creates without a placed initial agent never
+  emit it.
 - **Exactly one terminal done.** The create wrapper owns the terminal frame: exactly one
   `git:clone:done` per create — `{ ok: true }` after the final `complete 100` on any
   successful create, `{ ok: false, error, errorCode? }` on any failure (sanitized detail,
