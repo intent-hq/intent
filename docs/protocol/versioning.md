@@ -32,6 +32,12 @@ the managed Unsloth server unload the model other local agents run on is refused
 `messageMetadata.confirmUnslothModelSwitch: true` proceeds
 ([§5.5](./methods/agents.md)). Older daemons never refuse, so clients need no gate.
 
+Also within 18.0 (additive event value, no version bump): **initial agent create step**.
+A `workspace.create` with a `progressId` whose initial agent is placed on a machine emits a
+`git:clone:progress` frame with the new phase `agent` at 97 ("Starting agent on <machine
+name>...") between `finalizing` and `complete` ([§6.5](./06-events.md)). Older clients show
+their generic label for an unknown phase; older daemons never send it.
+
 Also within 18.0 (additive event field, no version bump): **clone download counters**.
 `git:clone:progress` `receiving` frames carry an optional `transfer { receivedObjects,
 totalObjects, receivedBytes?, bytesPerSecond? }` parsed from git's progress line, and a
