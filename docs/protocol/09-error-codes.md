@@ -246,7 +246,10 @@ the other reasons (`api-error`, `template-missing`, `bootstrap-failed`,
 `placementError.code`. With [Agent37 entries](./methods/nodes.md#cloud-machines-on-agent37)
 (`"agent37"` in `providerKinds`), `provider` can be `"agent37"`, and
 `cloud-machine-unavailable` adds the `-32603` reason `no-capacity` (Agent37 had
-no room in the entry's region; retryable). With [Vercel entries](./methods/nodes.md#cloud-machines-on-vercel)
+no room in the entry's region; retryable). On every provider,
+`cloud-machine-unavailable` adds the `-32603` reason `relay-unreachable` (the
+self-hosted relay in `server.tunnel.derpUrl` could not be used from the
+sandbox; retryable; data adds `relayUrl`). With [Vercel entries](./methods/nodes.md#cloud-machines-on-vercel)
 (`"vercel"` in `providerKinds`), `provider` can be `"vercel"`, with no new
 reason: a missing Vercel project is `project-missing` and a token that cannot
 reach the team is `permission-denied`. No error carries a provider key or token.

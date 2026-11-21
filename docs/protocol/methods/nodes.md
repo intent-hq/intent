@@ -1577,6 +1577,7 @@ interface CloudMachineState {
   workspaceId: string;
   startedAt: string;
   runningSeconds: number;                  // seconds not paused since start, for cost estimates
+  relayUrl?: string;                       // the self-hosted relay map URL the sandbox's tunnel uses; absent: tailcat's default relay
 }
 ```
 
@@ -1750,6 +1751,17 @@ never falls back to another tag: a missing tag fails the start with
 `cloud-machine-unavailable` reason `template-missing`. A paused sandbox keeps the
 version it started with; it resumes and binds while the nodeProtocol ranges
 overlap.
+
+**Relay.** A sandbox's tunnel uses this backend's own
+[`server.tunnel.derpUrl`](./settings.md) (a self-hosted relay); empty uses
+tailcat's default relay, as before. The backend applies the setting at each
+sandbox start and resume, so a change reaches a running or paused sandbox at
+its next resume; the sandbox's `tcAddress` then changes. `cloud.relayUrl`
+reports the relay in use. When the setting is set, the sandbox never falls
+back to the default relay: if it cannot fetch the relay map or reach the
+relay, the start fails with `cloud-machine-unavailable` reason
+`relay-unreachable` and the sandbox is deleted, and a resume fails with the same
+reason and the sandbox stays paused.
 
 A sub-agent on the sandbox keeps it live like the agent it was started for. The sandbox is
 deleted when the agent it was started for (`cloud.agentId`) ends for good;
@@ -3025,11 +3037,13 @@ interface CloudMachineUnavailableData {
   cloudMachineId?: string;           // the entry, when one was named or resolved
   reason: "not-configured" | "key-rejected" | "entry-required" | "api-error"
         | "template-missing" | "bootstrap-failed" | "sandbox-lost"
-        | "project-missing" | "permission-denied" | "no-capacity" | string; // open enum
+        | "project-missing" | "permission-denied" | "no-capacity"
+        | "relay-unreachable" | string;   // open enum
   retryable: boolean;
   status?: number;                   // the provider's HTTP status, when it answered
   entries?: { cloudMachineId: string; name: string; provider: CloudProviderKind }[]; // only with "entry-required"
   action?: string;                   // only with "permission-denied": the refused call, for example "create-service"
+  relayUrl?: string;                 // only with "relay-unreachable": the relay map URL the sandbox could not use
 }
 ```
 
@@ -3058,7 +3072,10 @@ provider removed a sandbox, or its Northflank volume, that had an agent) and
 `no-capacity` (Agent37 had no room for the entry's instance type and size in
 its region, at a start or a wake; retryable; the message names the type, size
 and region and says to try again later or pick another size or region; the
-backend never falls back to another region). The
+backend never falls back to another region) and `relay-unreachable`
+(`server.tunnel.derpUrl` is set and the sandbox could not fetch that relay map
+or reach its relay, at a start or a resume; retryable; `relayUrl` names it; the
+backend never falls back to the default relay, see [the relay](#sandbox-lifecycle)). The
 message says no sandbox was left behind, or that the agent's pushed work is
 kept.
 
