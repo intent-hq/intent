@@ -25,6 +25,14 @@ apps hide it against an 18.0 daemon. No store migration. The documented surface 
 **497 / 443 / 54** (dispatchable / router / fast path), four fast-path methods fewer, and
 the reverse-RPC list drops to five names.
 
+Also within 18.0 (additive status field and refusal field, no version bump):
+**one managed Unsloth server per model**. The daemon runs one Unsloth server per model while a
+memory budget allows, stopping idle servers first when it does not. `unsloth.status` adds
+`servers` (every running server; the top-level fields describe the most recently used one),
+`unsloth.stop` stops every server, and the switch refusal adds `unloadedModels`
+([§5.37](./methods/system-observability.md), [§5.5](./methods/agents.md)). Older daemons omit
+both fields; clients treat a missing `servers` as the single top-level server.
+
 Also within 18.0 (additive refusal and reserved metadata key, no version bump):
 **Unsloth model switch confirmation**. A user-origin `agent.sendMessage` that would make
 the managed Unsloth server unload the model other local agents run on is refused with `-32602`

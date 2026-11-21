@@ -9,8 +9,8 @@ by field presence and must continue to use `version` as the release version.
 
 ### 5.37 Managed Unsloth server — `unsloth.status` / `unsloth.stop` *(v2.5)*
 
-The daemon owns a **singleton managed Unsloth server** (the `unsloth` CLI process plus the
-`llama-server` child it spawns, which holds the model weights) backing every `unsloth`-provider
+The daemon owns **one managed Unsloth server per model** (each is the `unsloth` CLI process plus
+the `llama-server` child it spawns, which holds the model weights) backing every `unsloth`-provider
 agent (model catalog §5.30; startup progress surfaces as the repeated `launch`-phase
 `agent:stream:status` events, §6.5). These two router methods expose observability and control
 over it. Both are **daemon-global**: they take no params and no `workspaceId` (like
@@ -18,10 +18,23 @@ over it. Both are **daemon-global**: they take no params and no `workspaceId` (l
 
 | Method | Params | Result |
 | --- | --- | --- |
-| unsloth.status | — (empty `{}`) | `{ running: boolean, repoId?, port?, pid?, uptimeSecs?, phase?, cpuPercent?, memoryBytes?, attachedAgentCount? }` |
-| unsloth.stop | — (empty `{}`) | `{ stopped: boolean }` — `stopped: false` means nothing was running (a **no-op result**, never an error) |
+| unsloth.status | — (empty `{}`) | `{ running: boolean, repoId?, port?, pid?, uptimeSecs?, phase?, cpuPercent?, memoryBytes?, attachedAgentCount?, servers? }` |
+| unsloth.stop | — (empty `{}`) | `{ stopped: boolean }` — stops every server; `stopped: false` means nothing was running (a **no-op result**, never an error) |
 
-**`unsloth.status`** — a point-in-time snapshot of the managed server. With a server up,
+**Several servers (within 18.0).** The first server takes the configured port (default
+`8888`, so adopting a user-run server still works); each further model gets a free loopback port.
+Before starting a model the daemon checks a memory budget (70% of total RAM less 1 GiB, the
+catalog fit rule): a running server counts as the larger of its measured process-tree memory and
+3× its selected GGUF size; a server still starting counts at its expected size, and an adopted
+server counts toward the budget but is never stopped. When the new model does not fit, the daemon
+stops servers with no attached agents first, least recently used first, then busy ones (a server
+still starting counts as busy). Before stopping a server that agents use, the daemon sends a
+warning-level `agent:stream:status` notice on the stream of the agent whose turn starts the new
+model, naming the stopped server and how many agents used it. With unknown total RAM or model
+size the daemon keeps one server at a time, as before.
+
+**`unsloth.status`** — a point-in-time snapshot. The top-level fields describe the most recently
+used server, so a client that knows only one server keeps working. With a server up,
 `running: true` and the other fields are present:
 
 - `repoId` — full HF repo id currently served (or being started), e.g.
@@ -42,13 +55,16 @@ over it. Both are **daemon-global**: they take no params and no `workspaceId` (l
   `{ running: false, attachedAgentCount }`; a daemon whose agent manager is not attached
   (composition-root wiring — e.g. a bare test harness, or a daemon that has never spawned any
   agent infrastructure) reports exactly `{ "running": false }`.
+- `servers` *(within 18.0)* — every running server, most recently used first, each
+  `{ repoId, port, pid, uptimeSecs, phase, cpuPercent, memoryBytes, attachedAgentCount }` with
+  the same meanings; here `attachedAgentCount` counts the agents spawned on that model. Empty
+  when none runs. Older daemons omit it; treat a missing list as the single top-level server.
 
 Status reads never block behind an in-flight startup: the snapshot is served from a lock-free
 identity mirror, so `unsloth.status` stays responsive even during a minutes-long first-use model
 download. A dead-and-reaped server child reports as `running: false`, never as a stale identity.
 
-**`unsloth.stop`** — gracefully terminates the managed server and its **whole process tree** if
-one is running; an in-flight startup is aborted within about one probe tick rather than leaving
+**`unsloth.stop`** — gracefully terminates every managed server and its **whole process tree**; an in-flight startup is aborted within about one probe tick rather than leaving
 the stop blocked behind the startup window. `stopped: true` means a server (or in-flight
 startup) was actually torn down. Stopping is **safe while agents are attached** — the daemon
 neither blocks nor warns; a client that wants an "N agents are still using this server"
