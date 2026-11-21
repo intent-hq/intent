@@ -18,7 +18,7 @@ are available on both UDS and WSS.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| unsloth.status | — (empty `{}`) | `{ running: boolean, repoId?, port?, pid?, uptimeSecs?, phase?, cpuPercent?, memoryBytes?, attachedAgentCount?, servers? }` |
+| unsloth.status | — (empty `{}`) | `{ running: boolean, repoId?, port?, pid?, uptimeSecs?, phase?, cpuPercent?, memoryBytes?, attachedAgentCount?, servers?, stopByModel? }` |
 | unsloth.stop | `{ repoId?: string }` | `{ stopped: boolean }` — stops the server for `repoId`, or every server when omitted; `stopped: false` means no matching server was running (a **no-op result**, never an error) |
 
 **Several servers (within 18.0).** The first server takes the configured port (default
@@ -59,6 +59,8 @@ used server, so a client that knows only one server keeps working. With a server
   `{ repoId, port, pid, uptimeSecs, phase, cpuPercent, memoryBytes, attachedAgentCount }` with
   the same meanings; here `attachedAgentCount` counts the agents spawned on that model. Empty
   when none runs. Older daemons omit it; treat a missing list as the single top-level server.
+- `stopByModel` *(within 18.0)* — `true` when `unsloth.stop` honours `repoId`; present whenever
+  the agent manager is attached. Older daemons omit it.
 
 Status reads never block behind an in-flight startup: the snapshot is served from a lock-free
 identity mirror, so `unsloth.status` stays responsive even during a minutes-long first-use model
@@ -67,8 +69,8 @@ download. A dead-and-reaped server child reports as `running: false`, never as a
 **`unsloth.stop`** — gracefully terminates the managed server for `repoId` (the other servers keep
 running), or every managed server when `repoId` is omitted or `null`, with its **whole process
 tree**. A non-string `repoId` is refused with `-32602` rather than widened to stop every server.
-Older daemons ignore `repoId` and stop their one server, so a client sends it only when
-`unsloth.status` reports `servers`. An in-flight startup is aborted within about one probe tick rather than leaving
+Older daemons ignore `repoId` and stop every server, so a client sends it only when
+`unsloth.status` reports `stopByModel: true`. An in-flight startup is aborted within about one probe tick rather than leaving
 the stop blocked behind the startup window. `stopped: true` means a server (or in-flight
 startup) was actually torn down. Stopping is **safe while agents are attached** — the daemon
 neither blocks nor warns; a client that wants an "N agents are still using this server"
