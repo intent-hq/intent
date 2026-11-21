@@ -13,13 +13,13 @@ The daemon owns **one managed Unsloth server per model** (each is the `unsloth` 
 the `llama-server` child it spawns, which holds the model weights) backing every `unsloth`-provider
 agent (model catalog §5.30; startup progress surfaces as the repeated `launch`-phase
 `agent:stream:status` events, §6.5). These two router methods expose observability and control
-over it. Both are **daemon-global**: they take no params and no `workspaceId` (like
-`system.capabilities`), and are available on both UDS and WSS.
+over it. Both are **daemon-global**: they take no `workspaceId` (like `system.capabilities`), and
+are available on both UDS and WSS.
 
 | Method | Params | Result |
 | --- | --- | --- |
 | unsloth.status | — (empty `{}`) | `{ running: boolean, repoId?, port?, pid?, uptimeSecs?, phase?, cpuPercent?, memoryBytes?, attachedAgentCount?, servers? }` |
-| unsloth.stop | — (empty `{}`) | `{ stopped: boolean }` — stops every server; `stopped: false` means nothing was running (a **no-op result**, never an error) |
+| unsloth.stop | `{ repoId?: string }` | `{ stopped: boolean }` — stops the server for `repoId`, or every server when omitted; `stopped: false` means no matching server was running (a **no-op result**, never an error) |
 
 **Several servers (within 18.0).** The first server takes the configured port (default
 `8888`, so adopting a user-run server still works); each further model gets a free loopback port.
@@ -64,11 +64,15 @@ Status reads never block behind an in-flight startup: the snapshot is served fro
 identity mirror, so `unsloth.status` stays responsive even during a minutes-long first-use model
 download. A dead-and-reaped server child reports as `running: false`, never as a stale identity.
 
-**`unsloth.stop`** — gracefully terminates every managed server and its **whole process tree**; an in-flight startup is aborted within about one probe tick rather than leaving
+**`unsloth.stop`** — gracefully terminates the managed server for `repoId` (the other servers keep
+running), or every managed server when `repoId` is omitted or `null`, with its **whole process
+tree**. A non-string `repoId` is refused with `-32602` rather than widened to stop every server.
+Older daemons ignore `repoId` and stop their one server, so a client sends it only when
+`unsloth.status` reports `servers`. An in-flight startup is aborted within about one probe tick rather than leaving
 the stop blocked behind the startup window. `stopped: true` means a server (or in-flight
 startup) was actually torn down. Stopping is **safe while agents are attached** — the daemon
 neither blocks nor warns; a client that wants an "N agents are still using this server"
-confirmation should check `unsloth.status`'s `attachedAgentCount` first. A later
+confirmation should check the server's `attachedAgentCount` in `unsloth.status` first. A later
 `unsloth`-provider spawn simply starts the server again.
 
 ```json
@@ -83,7 +87,7 @@ confirmation should check `unsloth.status`'s `attachedAgentCount` first. A later
 { "jsonrpc":"2.0","id":97,"result":{ "running":false,"attachedAgentCount":0 } }
 
 // → request
-{ "jsonrpc":"2.0","id":98,"method":"unsloth.stop","params":{} }
+{ "jsonrpc":"2.0","id":98,"method":"unsloth.stop","params":{ "repoId":"unsloth/gemma-3-27b-it-GGUF" } }
 // ← response
 { "jsonrpc":"2.0","id":98,"result":{ "stopped":true } }
 ```
