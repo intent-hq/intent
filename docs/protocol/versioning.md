@@ -8,8 +8,23 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `18.0` — guided Antigravity setup retirement, on top of 17.0's CoW isolation setting retirement, 16.0's per-agent CoW sandbox retirement and 15.5's Agent Plugins, 15.4's bounded object reads, 15.3's plain-folder workspaces, 15.2's retired workspaces and 15.1's discussions, guest roles, scoped repository pages and GitLab child Git policy (intentd advertises all four at protocol 15.2); 15.4 is not a shipped-version claim.
+**Documented version:** `18.1` — composer autocomplete, on top of 18.0's guided Antigravity setup retirement, 17.0's CoW isolation setting retirement, 16.0's per-agent CoW sandbox retirement and 15.5's Agent Plugins, 15.4's bounded object reads, 15.3's plain-folder workspaces, 15.2's retired workspaces and 15.1's discussions, guest roles, scoped repository pages and GitLab child Git policy (intentd advertises all four at protocol 15.2); 15.4 is not a shipped-version claim.
 Every extension retains its independent support gate.
+
+**Version 18.1 — composer autocomplete (additive).**
+Adds the router method `input.autocomplete` ([§5.59](./methods/input.md)): given the
+composer draft `text` (1–2,000 chars) and recent conversation `context` (0–4,000
+chars), the daemon asks Kilo Gateway or OpenRouter for a short continuation and
+answers `{ completion }`. Every configuration or upstream failure (off, OpenRouter
+without a key, 404, 429, 4 s timeout, network or parse error) answers
+`{ completion: "" }`; only malformed params are `-32602`. Daemon-global, owner and host
+members only. Adds the settings-catalog entries `autocomplete.enabled` (default
+`false`), `autocomplete.service` (`kilo` | `openrouter`), `autocomplete.model`
+(`nvidia/nemotron-3.5-lightning` | `particle-ai/particle-1`), TOML-backed under
+`[autocomplete]`, plus the sensitive `autocomplete.kilo.apiKey` and
+`autocomplete.openrouter.apiKey` ([§5.12](./methods/settings.md)). Clients detect
+support by `autocomplete.enabled` in `settings.list`; older daemons return `-32601`
+for the method. No store migration; the router surface gains one method.
 
 **Version 18.0 — guided Antigravity setup retirement (breaking).**
 Antigravity now runs the user's `agy` CLI as `agy acp` (agy 1.5.0 or later;
