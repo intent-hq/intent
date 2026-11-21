@@ -308,10 +308,10 @@ message or `data` ever contains the submitted value. The agent-facing
 
 ### Unsloth model switch confirmation
 
-A user-origin `agent.sendMessage` whose turn would make the managed Unsloth server
-unload the model other agents use is refused with `-32602` and
+A user-origin `agent.sendMessage` whose turn would stop a managed Unsloth server
+other agents use, to free memory for its model, is refused with `-32602` and
 `error.data = { code: "unsloth-model-switch-confirmation-required", currentModel,
-requestedModel, agents }` before any state change. Resend with
+requestedModel, unloadedModels, agents }` before any state change. Resend with
 `messageMetadata.confirmUnslothModelSwitch: true` after the user confirms
 ([§5.5](./methods/agents.md)).
 
