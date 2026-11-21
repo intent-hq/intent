@@ -25,10 +25,13 @@ over it. Both are **daemon-global**: they take no params and no `workspaceId` (l
 `8888`, so adopting a user-run server still works); each further model gets a free loopback port.
 Before starting a model the daemon checks a memory budget (70% of total RAM less 1 GiB, the
 catalog fit rule): a running server counts as the larger of its measured process-tree memory and
-3× its selected GGUF size. When the new model does not fit, the daemon stops servers with no
-attached agents first, least recently used first, then busy ones; agents on a stopped busy server
-get a warning-level `agent:stream:status` notice first. With unknown total RAM or model size the
-daemon keeps one server at a time, as before.
+3× its selected GGUF size; a server still starting counts at its expected size, and an adopted
+server counts toward the budget but is never stopped. When the new model does not fit, the daemon
+stops servers with no attached agents first, least recently used first, then busy ones (a server
+still starting counts as busy). Before stopping a server that agents use, the daemon sends a
+warning-level `agent:stream:status` notice on the stream of the agent whose turn starts the new
+model, naming the stopped server and how many agents used it. With unknown total RAM or model
+size the daemon keeps one server at a time, as before.
 
 **`unsloth.status`** — a point-in-time snapshot. The top-level fields describe the most recently
 used server, so a client that knows only one server keeps working. With a server up,
