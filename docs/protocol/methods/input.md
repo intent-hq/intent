@@ -50,8 +50,9 @@ for the other service is ignored.
 - `Authorization: Bearer <key>` only when a key is saved.
 - Body: `model`, `max_tokens: 40`, `temperature: 0.2`, `stop: ["\n"]`,
   `reasoning: { enabled: false }`, and two messages — a fixed system prompt (continue
-  the user's message without repeating it, at most the current sentence, nothing when
-  unsure) and the user message `<conversation>\n{context}\n</conversation>\n<typed>{text}</typed>`.
+  the user's message without repeating it; finish a word cut mid-way, else start with a
+  single space; at most the current sentence; nothing when unsure) and the user message
+  `<conversation>\n{context}\n</conversation>\n<typed>{text}</typed>`.
 
 **Reply clean-up** (applied to `choices[0].message.content`):
 
@@ -61,9 +62,13 @@ for the other service is ignored.
 3. Cut after the first sentence end: `.`, `?` or `!` followed by whitespace or the end
    (so `file.rs` does not end a sentence).
 4. Cap at 200 characters and drop trailing whitespace.
+5. Fix the spacing against `text`: when `text` ends with whitespace, drop the reply's
+   leading whitespace; otherwise leading whitespace collapses to exactly one space, and
+   a reply without it continues the current word as sent.
+6. Drop junk: the result is `""` when the reply holds a control character, or `<` / `>`
+   while neither `context` nor `text` has any.
 
-Leading whitespace is kept as the model sent it: the model decides whether the
-continuation starts a new word. A reply that is empty after clean-up yields `""`.
+A reply that is empty after clean-up yields `""`.
 
 **Client behaviour (informative).** The desktop asks only when autocomplete is on, the
 trimmed draft has at least 5 characters, the caret is at the end, no IME composition is
