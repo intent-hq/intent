@@ -52,7 +52,8 @@ used server, so a client that knows only one server keeps working. With a server
 - `attachedAgentCount` — the number of currently-tracked agents spawned with the `unsloth`
   provider (keyed on the base provider of the selection, not the `opencode` command it launches), counted **regardless of `running`** (a stopped-but-attached state is possible
   mid-restart). When no server is up the result degrades to
-  `{ running: false, attachedAgentCount }`; a daemon whose agent manager is not attached
+  `{ running: false, attachedAgentCount, servers: [], stopByModel: true }` (older daemons send
+  only the first two); a daemon whose agent manager is not attached
   (composition-root wiring — e.g. a bare test harness, or a daemon that has never spawned any
   agent infrastructure) reports exactly `{ "running": false }`.
 - `servers` *(within 18.0)* — every running server, most recently used first, each
@@ -66,8 +67,8 @@ Status reads never block behind an in-flight startup: the snapshot is served fro
 identity mirror, so `unsloth.status` stays responsive even during a minutes-long first-use model
 download. A dead-and-reaped server child reports as `running: false`, never as a stale identity.
 
-**`unsloth.stop`** — gracefully terminates the managed server for `repoId` (the other servers keep
-running), or every managed server when `repoId` is omitted or `null`, with its **whole process
+**`unsloth.stop`** — gracefully terminates the managed server whose `servers[].repoId` equals
+`repoId` exactly (the other servers keep running), or every managed server when `repoId` is omitted or `null`, with its **whole process
 tree**. A non-string `repoId` is refused with `-32602` rather than widened to stop every server.
 Older daemons ignore `repoId` and stop every server, so a client sends it only when
 `unsloth.status` reports `stopByModel: true`. An in-flight startup is aborted within about one probe tick rather than leaving
@@ -84,9 +85,13 @@ confirmation should check the server's `attachedAgentCount` in `unsloth.status` 
 { "jsonrpc":"2.0","id":97,"result":{
   "running":true,"repoId":"unsloth/gemma-3-27b-it-GGUF","port":8888,"pid":48113,
   "uptimeSecs":312,"phase":"ready","cpuPercent":184.2,"memoryBytes":17179869184,
-  "attachedAgentCount":2 } }
+  "attachedAgentCount":2,
+  "servers":[{ "repoId":"unsloth/gemma-3-27b-it-GGUF","port":8888,"pid":48113,"uptimeSecs":312,
+    "phase":"ready","cpuPercent":184.2,"memoryBytes":17179869184,"attachedAgentCount":2 }],
+  "stopByModel":true } }
 // ← response (no server running; agent manager attached)
-{ "jsonrpc":"2.0","id":97,"result":{ "running":false,"attachedAgentCount":0 } }
+{ "jsonrpc":"2.0","id":97,"result":{
+  "running":false,"attachedAgentCount":0,"servers":[],"stopByModel":true } }
 
 // → request
 { "jsonrpc":"2.0","id":98,"method":"unsloth.stop","params":{ "repoId":"unsloth/gemma-3-27b-it-GGUF" } }
