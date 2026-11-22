@@ -52,7 +52,12 @@ for (const scenario of [
       if (scenario === 'daemon-first guide route') write(guide, `${readFileSync(path.join(root, guide), 'utf8')}\nOpen \`${newSection.route}\`.\n`);
       // mobile is not a required destination, so only the format guard catches these.
       if (scenario === 'unparsed frontend target') write(frontend, readFileSync(path.join(root, frontend), 'utf8').replace("  settingsTarget({\n    id: 'mobile',", "  otherTarget({\n    id: 'mobile',"));
-      if (scenario === 'double-quoted frontend id') write(frontend, readFileSync(path.join(root, frontend), 'utf8').replace("    id: 'mobile',", '    id: "mobile",'));
+      if (scenario === 'double-quoted frontend id') {
+        const quoted = readFileSync(path.join(root, frontend), 'utf8').replace("    id: 'mobile',", '    id: "mobile",').replace("hashAliases: ['mobile']", 'hashAliases: ["mobile"]');
+        // Only the double-quote branch of the guard may see mobile.
+        assert.doesNotMatch(quoted, /(?:\bid:\s*|\[\s*)'mobile'/);
+        write(frontend, quoted);
+      }
       // A frontend removal looks like a daemon-first row; the guide still links both.
       if (scenario === 'removed documented tuple') write(frontend, readFileSync(path.join(root, frontend), 'utf8').replace("    ['notifications', 'Notifications', 'Notification preferences.', 'app-behavior'],\n", ''));
       if (scenario === 'removed documented block') write(frontend, readFileSync(path.join(root, frontend), 'utf8').replace(/  settingsTarget\(\{\n    id: 'providers',[\s\S]*?\n  \}\),\n/, ''));
