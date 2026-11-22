@@ -476,6 +476,9 @@ type MachineModelsRow = MachineModels | CloudEntryModels;
 interface MachineLoad {
   runningAgents: number;            // every agent counted against the cap: local agents and every backend's remote agents
   agentCap: number;                 // the effective agents.maxConcurrent
+  cpuPercent?: number;              // whole host, 0-100, smoothed; absent when not reported
+  memoryUsedBytes?: number;         // whole host; with memoryTotalBytes, absent when not reported
+  memoryTotalBytes?: number;
 }
 
 interface CloudEntryModels {        // machineOrder: 1 only
@@ -534,7 +537,9 @@ interface MachineModels {
    `visible`. Like that report, they list only providers enabled on the machine;
    `disabledProviders` names the others.
 4. **Load.** `load` is the machine-wide count from the report's `capacity`
-   (`runningAgents`, `agentCap`; never the memory figures): every agent
+   (`runningAgents`, `agentCap`; never its memory budget figures), plus the
+   host's `cpuPercent`, `memoryUsedBytes` and `memoryTotalBytes` from the
+   report's `resources` when the machine sends them: every agent
    counted against the machine's cap, its own local agents and other
    backends' included, while the row's `runningAgents` counts only this
    backend's agents there. The machine pushes its report when the count
@@ -543,13 +548,13 @@ interface MachineModels {
    `load` is absent while the machine is not connected (the last count says
    nothing about now) and before its first report. Cloud rows have no
    `load`: each agent there gets a new sandbox. The top-level `local` is this
-   backend's own load, the same two numbers from its process registry; it is
+   backend's own load, the same numbers from its process registry and its own host sample; it is
    present only when the backend runs agents itself (absent in
    [orchestrator mode](#orchestrator-mode)). Agents use these to pick the
    least-loaded machine; placement itself still applies only the
    [capacity check](../node-link.md#capabilities-report) at launch.
 5. **Never exposed:** routes (`hosts`, `port`, `tcAddress`), fingerprints,
-   credentials, `nodeProtocol`, the memory figures of `capacity` and other
+   credentials, `nodeProtocol`, the memory budget figures of `capacity` and other
    backends' identities.
 6. **Staleness.** A report can be up to 1 hour old before placement refreshes it.
    Callers that need the live state call `remoteMachines.refresh` first; admission

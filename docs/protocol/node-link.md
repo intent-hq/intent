@@ -4720,6 +4720,11 @@ interface MachineCapabilities {
     chargedMemoryBytes: number;  // aggregate memory charged to running agents
     memoryBudgetBytes?: number;  // effective agents.memoryBudgetMb in bytes; absent when unlimited
   };
+  resources?: {                  // the whole host, not only agents; absent from older machines
+    cpuPercent?: number;         // integer 0-100: CPU use across all cores, smoothed over the last few seconds; absent until a second sample
+    memoryUsedBytes: number;     // physical memory in use
+    memoryTotalBytes: number;    // physical memory installed
+  };
   providers: {
     id: string;
     visible: boolean;
@@ -4771,16 +4776,24 @@ interface MachineCapabilities {
   nodeProtocol version. An older machine does not push; the backend picks the
   change up at its next refresh (a report older than 1 hour is refreshed before
   placement).
-- **Load pushed on change.** The machine checks `capacity.runningAgents` every
-  2 seconds while any backend link is live. When it differs from the count it
-  last reported (an agent of any backend, or a local one, started or stopped),
-  it sends an unsolicited `capabilitiesReply` on every live backend link. A
-  burst of starts and stops therefore costs at most one push per 2 seconds,
-  and every backend sees the machine-wide count within about 2 seconds. The
+- **Load pushed on change.** The machine checks `capacity.runningAgents` and
+  samples `resources` every 2 seconds while any backend link is live. When the
+  count differs from the one it last reported (an agent of any backend, or a
+  local one, started or stopped), it sends an unsolicited `capabilitiesReply`
+  on every live backend link. A burst of starts and stops therefore costs at
+  most one push per 2 seconds, and every backend sees the machine-wide count
+  within about 2 seconds. A change of `resources` alone pushes only when
+  `cpuPercent` or the memory in use (as a percentage of the total) moved by 5
+  points or more from the last report, and at most once every 10 seconds. The
   `welcome` of a new bind carries the current count, so a change while no link
   is live is not pushed later. Like the provider push, this adds no frame type
   and no nodeProtocol version; an older machine does not push, and the backend
   keeps the count from its last requested report.
+- **Resources.** `resources` describes the whole host (every process, not only
+  agents), so a backend can tell a busy machine from an idle one. CPU is
+  sampled across all cores and smoothed; the first report after a start may
+  omit `cpuPercent`. It is optional and additive (no nodeProtocol version): an
+  older machine omits it, and clients show nothing for it.
 - **Models** come from the machine's own `models.list`; `cli-missing` and
   `prerequisite-missing` are its existing `warningKind` values.
 - **Sign-in (default account only).** Each provider has a cheap sign-in probe
