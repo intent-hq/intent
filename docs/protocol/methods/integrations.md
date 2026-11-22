@@ -886,17 +886,18 @@ error rows and any events) and do not change the contract above.
 > daemon has no hosted OAuth callback, so v1 authenticates with a **Sentry
 > user/internal-integration auth token + organization slug**. The daemon reads the saved
 > account settings on each call: `accounts.sentry.organization` (organization slug) and the
-> `accounts.sentry.token` secret, both written through `settings.update`. Each missing half
-> falls back to the legacy secret-store accounts `sentry.org` / `sentry.token`, then to
-> `SENTRY_ORG` / `SENTRY_API_TOKEN`. Sentry is REST-only; the token is sent as the
-> **`Authorization: Bearer <token>`** header.
+> `accounts.sentry.token` secret, both written through `settings.update`. Only a half that is
+> unset falls back, to the legacy secret-store accounts `sentry.org` / `sentry.token`, then to
+> `SENTRY_ORG` / `SENTRY_API_TOKEN`; a saved token that cannot be read fails the call with
+> `-32603`. Sentry is REST-only; the token is sent as the **`Authorization: Bearer <token>`**
+> header.
 >
 > - `sentry.authStatus` validates the resolved pair via `GET /organizations/{org}/` and reports
 >   connection state.
 > - **There is no `sentry.connect` / `sentry.revoke` / `cancelAuth` wire method.** As with
->   `linear.*`, Sentry exposes **nothing** here: "connect" becomes "save the token + org through
->   `settings.update`" (no restart needed), "revoke/logout" is a local "forget token" action, and `cancelAuth`
->   was always a pure client-side no-op. The settings UI buttons are inert.
+>   `linear.*`, Sentry exposes **nothing** here: "connect" saves the token + org through
+>   `settings.update` (no restart needed), "revoke/logout" is a local "forget token" action,
+>   and `cancelAuth` was always a pure client-side no-op.
 >
 > **🔒 Secret guardrail.** The auth token is a secret: it is **never logged, echoed, or returned**
 > over the wire. Only **derived identity** (the `organization` slug) and the boolean connection
