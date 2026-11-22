@@ -5,8 +5,11 @@
 // Direction: the daemon catalog leads. A new destination lands in intentd first
 // and the cloudlands-fe registry entry after it, so a catalog row whose id the
 // frontend source does not name yet only warns (pending) until the frontend
-// catches up. Rows both sides name must match exactly, and required
-// destinations must always resolve on both sides.
+// catches up. The files alone cannot tell a not-yet-added entry from a removed
+// one, so a pending row must be new: required destinations and rows the
+// Assistant guide links must always resolve on both sides (the guide text for
+// a new section lands after its frontend entry). Rows both sides name must
+// match exactly.
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -67,10 +70,11 @@ try {
       const block = blocks.find(b => b.match(/^    id: '([^']+)',/m)?.[1] === row.id);
       const mappedRow = mapped.get(row.id);
       if (!block && !mappedRow) {
-        // An id the registry still names as an object id or tuple head means
-        // the parser lost it, not that the frontend lags: fail on format drift.
-        const named = new RegExp(`(?:\\bid:\\s*|\\[\\s*)'${escapeRegExp(row.id)}'`).test(source);
-        assert.ok(!named, `${row.id}: frontend names this target but the checker cannot parse it; extend the checker deliberately for a new registry format`);
+        // An id the registry still names as an object id or tuple head, in
+        // any quote style, means the parser lost it, not that the frontend
+        // lags: fail on format drift.
+        const named = new RegExp(`(?:\\bid:\\s*|\\[\\s*)(['"\`])${escapeRegExp(row.id)}\\1`).test(source);
+        assert.ok(!named, `${row.id}: frontend source names '${row.id}' as an id or tuple head but the checker cannot parse that entry; extend the checker deliberately for a new registry format`);
         assert.ok(!required.includes(row.id), `${row.id}: no frontend registry entry for a required destination`);
         pending.push(row.id);
         continue;
@@ -93,9 +97,13 @@ try {
     const guideRoutes = [...new Set([...guide.matchAll(/`(\/[^`\s]+)`/g)].map(match => match[1]).filter(route => !/[{}]/.test(route)))];
     assert.ok(guideRoutes.length > 0, 'guide must document static navigation routes');
     for (const route of guideRoutes) {
-      // Every catalog row has already been checked against the frontend; this
-      // makes guide → catalog → registry a single enforced route contract.
-      assert.ok(rows.some(row => row.route === route), `guide route missing from supported catalog: ${route}`);
+      // Non-pending catalog rows have been checked against the frontend; this
+      // makes guide → catalog → registry a single enforced route contract and
+      // keeps a frontend removal of a documented destination from passing as
+      // pending.
+      const routed = rows.filter(row => row.route === route);
+      assert.ok(routed.length > 0, `guide route missing from supported catalog: ${route}`);
+      assert.ok(routed.some(row => !pending.includes(row.id)), `guide route ${route} (${routed.map(row => row.id).join(', ')}): no frontend registry entry; the frontend entry lands before the guide documents it`);
     }
     const remote = rows.find(row => row.id === 'websocket-api');
     assert.match(remote.description, /QR/i, 'Remote Access must describe QR pairing');
