@@ -1487,10 +1487,13 @@ Result (both methods):
     "name": "goal",
     "action": "set" | "updated" | "unchanged" | "shown",
     "goal": "string" | null,      // the goal after the command
-    "noticeMessageId": "string"   // id of the persisted notice row
+    "noticeMessageId"?: "string"  // id of the persisted notice row
   }
 }
 ```
+
+`noticeMessageId` is absent when the goal write succeeded but the notice row could not
+be written (the daemon logs it). The call still succeeds and `goal` is the stored state.
 
 The result has no `messageId`, `queuedMessage` or `turnId`. Clients do not create an
 optimistic user bubble, launch animation or thinking state for a command send, and
@@ -1502,7 +1505,9 @@ is trimmed; empty or `null` removes it. Over 1,000 Unicode scalar values is `-32
 with `data.code: "goal-too-long"`. An unknown or deleted agent is `-32602`
 (`agent not found`); a retired agent is `-32602` (`agent is retired`,
 `data: { code: "agent-retired" }`), and a `/goal` command to a retired agent fails the
-same way. The action is computed and written atomically against the stored value, so
+same way. In a retired workspace both are `-32602` with
+`data: { code: "workspace-retired" }`: a `/goal` command never revives a workspace, even
+on `agent.sendMessage`, which otherwise does. The action is computed and written atomically against the stored value, so
 two racing writers cannot both answer `set`.
 
 | Request | Action | Write, event, notice row |
