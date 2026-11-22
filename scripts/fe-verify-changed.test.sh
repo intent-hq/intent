@@ -219,7 +219,7 @@ expect_verify_argv
 
 case_name="an exported empty fixture root is passed through for the frontend to reject"
 expect_fixtures=
-TRANSFER_SELECTION_FIXTURE_ROOT= run_make "FE_DIR=$outside"
+TRANSFER_SELECTION_FIXTURE_ROOT='' run_make "FE_DIR=$outside"
 expect_ok
 expect_verify_argv
 expect_fe=$fe
