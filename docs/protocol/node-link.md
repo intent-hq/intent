@@ -4791,8 +4791,10 @@ interface MachineCapabilities {
   keeps the count from its last requested report.
 - **Resources.** `resources` describes the whole host (every process, not only
   agents), so a backend can tell a busy machine from an idle one. CPU is
-  sampled across all cores and smoothed; the first report after a start may
-  omit `cpuPercent`. It is optional and additive (no nodeProtocol version): an
+  sampled across all cores and smoothed over the last few seconds; the first
+  report after a start or an idle gap may omit `cpuPercent`. A machine that
+  sends `resources` also pushes its load on change, so a backend treats its
+  `capacity.runningAgents` as live. It is optional and additive (no nodeProtocol version): an
   older machine omits it, and clients show nothing for it.
 - **Models** come from the machine's own `models.list`; `cli-missing` and
   `prerequisite-missing` are its existing `warningKind` values.

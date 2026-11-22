@@ -439,10 +439,13 @@ reports.
 
 `capabilities.capacity.runningAgents` is the machine-wide load (its local
 agents and every backend's remote agents), while `runningAgents` counts only
-this backend's agents there. A machine pushes a new report when that count
-changes ([load pushed on change](../node-link.md#capabilities-report)), so
-while it is connected the backend emits `remoteMachine:changed` within about
-2 seconds of an agent starting or stopping on it.
+this backend's agents there. A machine whose report has `resources` pushes a
+new report when that count changes
+([load pushed on change](../node-link.md#capabilities-report)), so while it is
+connected the backend emits `remoteMachine:changed` within about 2 seconds of
+an agent starting or stopping on it. An older machine (no `resources`) does
+not push: clients should treat its `capacity` as possibly stale and show
+`runningAgents` instead.
 
 ##### Machine model lookup
 
@@ -539,18 +542,21 @@ interface MachineModels {
 4. **Load.** `load` is the machine-wide count from the report's `capacity`
    (`runningAgents`, `agentCap`; never its memory budget figures), plus the
    host's `cpuPercent`, `memoryUsedBytes` and `memoryTotalBytes` from the
-   report's `resources` when the machine sends them: every agent
-   counted against the machine's cap, its own local agents and other
-   backends' included, while the row's `runningAgents` counts only this
-   backend's agents there. The machine pushes its report when the count
-   changes ([load pushed on change](../node-link.md#capabilities-report)),
-   so it is current within about 2 seconds while the machine is connected.
-   `load` is absent while the machine is not connected (the last count says
-   nothing about now) and before its first report. Cloud rows have no
-   `load`: each agent there gets a new sandbox. The top-level `local` is this
-   backend's own load, the same numbers from its process registry and its own host sample; it is
-   present only when the backend runs agents itself (absent in
-   [orchestrator mode](#orchestrator-mode)). Agents use these to pick the
+   report's `resources`: every agent counted against the machine's cap, its
+   own local agents and other backends' included, while the row's
+   `runningAgents` counts only this backend's agents there. A machine that
+   sends `resources` also pushes its report when the count changes
+   ([load pushed on change](../node-link.md#capabilities-report)), so it is
+   current within about 2 seconds while the machine is connected. `load` is
+   therefore present only while the machine is connected **and** its report
+   has `resources`: it is absent while the machine is not connected (the last
+   count says nothing about now), before its first report, and for an older
+   machine, which never pushes and whose count can be up to an hour old.
+   Cloud rows have no `load`: each agent there gets a new sandbox. The
+   top-level `local` is this backend's host in the same shape: its process
+   registry (every agent it runs, including any it runs for other backends)
+   and its own host sample. It is absent in
+   [orchestrator mode](#orchestrator-mode). Agents use these to pick the
    least-loaded machine; placement itself still applies only the
    [capacity check](../node-link.md#capabilities-report) at launch.
 5. **Never exposed:** routes (`hosts`, `port`, `tcAddress`), fingerprints,
