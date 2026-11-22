@@ -40,6 +40,10 @@ apps hide it against an 18.0 daemon. No store migration. The documented surface 
 **497 / 443 / 54** (dispatchable / router / fast path), four fast-path methods fewer, and
 the reverse-RPC list drops to five names.
 
+Also within 18.0 (behavior only, no wire change): **idle Unsloth servers stop**. A server the
+daemon started stops after about 15 minutes with no live agents on its model and leaves `servers`
+([§5.37](./methods/system-observability.md)). The next spawn for the model starts it again.
+
 Also within 18.0 (additive stop param and status field, no version bump): **stop one Unsloth
 model**. `unsloth.stop` takes an optional `repoId` that stops only that model's server, and
 `unsloth.status` reports `stopByModel: true` ([§5.37](./methods/system-observability.md)). Older

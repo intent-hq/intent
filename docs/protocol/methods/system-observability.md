@@ -33,6 +33,13 @@ warning-level `agent:stream:status` notice on the stream of the agent whose turn
 model, naming the stopped server and how many agents used it. With unknown total RAM or model
 size the daemon keeps one server at a time, as before.
 
+**Idle servers (within 18.0).** A server the daemon started stops on its own once it has been
+ready with no live agents on its model and no start running through it for about 15 minutes (the
+daemon checks once a minute, so 15 to 16 minutes); it then leaves `servers`. An agent attached to the model keeps the server up even when it runs no turns,
+and a new spawn for the model resets the countdown. An adopted server or one still starting is
+never stopped this way. The next `unsloth`-provider spawn for the model starts it again. Older
+daemons keep every server until it is stopped or evicted.
+
 **`unsloth.status`** — a point-in-time snapshot. The top-level fields describe the most recently
 used server, so a client that knows only one server keeps working. With a server up,
 `running: true` and the other fields are present:
