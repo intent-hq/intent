@@ -1011,8 +1011,11 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 # Nothing masks the exit status:
 # pnpm passes the script's code through to make ("Error 2" = empty change set). FE_VERIFY_BASE escapes
 # apostrophes for the single-quoted hand-off; scripts/fe-verify-changed.test.sh
-# pins the mapping.
+# pins the mapping. The frontend finds the shared transfer-selection fixtures at
+# ../../../docs, which only resolves inside packages/, so a FE_DIR worktree
+# elsewhere gets this checkout's copy unless the caller already set one.
 FE_VERIFY_BASE = $(subst ','\'',$(BASE))
+fe-verify-changed: export TRANSFER_SELECTION_FIXTURE_ROOT ?= $(CURDIR)/docs/protocol/fixtures/transfer-selection
 fe-verify-changed: ensure-fe-submodule ensure-fe-toolchain ## Run only the frontend checks and unit tests the cloudlands-fe branch changed (BASE=<fe ref>, DRY_RUN=1 lists the selected tests, RESUME=1 resumes after a failed run, NO_FAIL_FAST=1 runs every check past a failure, SKIP_CT_FULL=1 defers the full component suite)
 	@$(FE_DEPS_FRESH) || (echo "[fe-verify-changed] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
 	@set --; \
