@@ -882,18 +882,20 @@ error rows and any events) and do not change the contract above.
 > verbatim as the Sentry search string. The field names and shapes here are the source of
 > truth for both sides.
 
-> **Auth model — token + org from the environment (no OAuth/device flow, no
-> `connect`/`revoke`).** A local daemon has no hosted OAuth callback, so v1 authenticates with
-> a **Sentry user/internal-integration auth token + organization slug resolved from the
-> environment**: `SENTRY_API_TOKEN` (with an optional lower-priority secret-store account
-> `sentry.token`) plus `SENTRY_ORG` (organization slug). Sentry is REST-only; the token is sent
-> as the **`Authorization: Bearer <token>`** header.
+> **Auth model — saved token + org (no OAuth/device flow, no `connect`/`revoke`).** A local
+> daemon has no hosted OAuth callback, so v1 authenticates with a **Sentry
+> user/internal-integration auth token + organization slug**. The daemon reads the saved
+> account settings on each call: `accounts.sentry.organization` (organization slug) and the
+> `accounts.sentry.token` secret, both written through `settings.update`. Each missing half
+> falls back to the legacy secret-store accounts `sentry.org` / `sentry.token`, then to
+> `SENTRY_ORG` / `SENTRY_API_TOKEN`. Sentry is REST-only; the token is sent as the
+> **`Authorization: Bearer <token>`** header.
 >
 > - `sentry.authStatus` validates the resolved pair via `GET /organizations/{org}/` and reports
 >   connection state.
 > - **There is no `sentry.connect` / `sentry.revoke` / `cancelAuth` wire method.** As with
->   `linear.*`, Sentry exposes **nothing** here: "connect" becomes "set `SENTRY_API_TOKEN` +
->   `SENTRY_ORG` and restart", "revoke/logout" is a local "forget token" action, and `cancelAuth`
+>   `linear.*`, Sentry exposes **nothing** here: "connect" becomes "save the token + org through
+>   `settings.update`" (no restart needed), "revoke/logout" is a local "forget token" action, and `cancelAuth`
 >   was always a pure client-side no-op. The settings UI buttons are inert.
 >
 > **🔒 Secret guardrail.** The auth token is a secret: it is **never logged, echoed, or returned**
@@ -1014,9 +1016,9 @@ interface SentryIssueResult {     // flattened UI shape — matches the FE verba
 #### Examples
 
 ```json
-// → check Sentry auth (validates the env credential pair via the GET /organizations/{org}/ probe)
+// → check Sentry auth (validates the resolved credential pair via the GET /organizations/{org}/ probe)
 { "jsonrpc":"2.0","id":70,"method":"sentry.authStatus","params":{} }
-// ← response (SENTRY_API_TOKEN + SENTRY_ORG present and valid)
+// ← response (token + org resolved and valid)
 { "jsonrpc":"2.0","id":70,"result":{ "authenticated": true, "organization": "acme" } }
 ```
 
@@ -1061,7 +1063,7 @@ interface SentryIssueResult {     // flattened UI shape — matches the FE verba
 ```
 
 ```json
-// → not-configured (no SENTRY_API_TOKEN/SENTRY_ORG, or org probe fails) → -32603
+// → not-configured (no token + org pair resolved, or org probe fails) → -32603
 { "jsonrpc":"2.0","id":75,"method":"sentry.listIssues","params":{} }
 // ← error
 { "jsonrpc":"2.0","id":75,"error":{ "code":-32603,"message":"Sentry is not configured." } }
