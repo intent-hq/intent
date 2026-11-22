@@ -984,9 +984,12 @@ daemon builds a cgroup v2 hierarchy at startup (`intent_core::workload`):
 `<domain>/{supervisor, daemon, workloads}`, where `domain` is its own cgroup
 (a systemd unit with `Delegate=memory pids`) or `intentd-<hash>` under the root
 cgroup (root in a VM). The sitter moves to `supervisor`, the daemon to
-`daemon`, and `workloads` gets `memory.max` = the ceiling, `memory.high` 5 %
-below it, and `memory.swap.max = 0` (swapping workloads would stall the
-daemon as surely as running out of RAM). Every workload — agent CLIs, adapter chains, MCP and model servers,
+`daemon`, and `workloads` gets `memory.max` = the ceiling and
+`memory.swap.max = 0`, with `memory.high` left at `max`: without swap, a
+`memory.high` throttle cannot reclaim a runaway's anonymous memory, so it
+stalled the process just under the limit for minutes instead of letting the
+kernel kill it (measured: ~105k `high` events, no kill), and swapping
+workloads would stall the daemon as surely as running out of RAM. Every workload — agent CLIs, adapter chains, MCP and model servers,
 scripts, setup and archive scripts, terminals, `host.exec` — runs in its own
 leaf `workloads/<kind>-<pid>-<seq>`, joined **before it runs any code**: a
 `pre_exec` hook for `std`/`tokio` commands (so a missing program still fails
