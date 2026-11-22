@@ -2471,15 +2471,16 @@ none):
    `machine-orchestrator: <name> is now an orchestrator and no longer runs agents for other backends`,
    and the call that dialed (`remoteMachines.refresh`, a placement, a prompt)
    fails with `-32602` and `data: { code: "machine-orchestrator" }`.
-2. Then, in the background, it deletes the machine's stored token
-   (`remoteMachines.<id>.token`), its leases and pending stop records, then
-   the machine row and its [ordered list](#ordered-machine-list) entry. The
-   row's deletion and the [detach](#detached-workspaces) of each
+2. Then, in the background, it first [detaches](#detached-workspaces) each
    [workspace home](#workspace-homes) on the machine, without the 60 s grace,
-   are one store write, so no restart or store error can leave a home
-   attached to the removed machine. A home [moving](#moving-the-home) away
-   from it at that moment returns to detached if the move fails. Each home is
-   announced with `workspace:updated { changes: { home } }`. No checkout is
+   in one store write, and announces each with
+   `workspace:updated { changes: { home } }`. The same write makes a home
+   [moving](#moving-the-home) away from the machine return to detached if its
+   move fails. Only then does it delete the machine's stored token
+   (`remoteMachines.<id>.token`), its leases and pending stop records, then
+   the machine row and its [ordered list](#ordered-machine-list) entry; the
+   row's deletion detaches its homes again. A restart or a store error at any
+   step leaves no home attached to the removed machine. No checkout is
    deleted: the orchestrator runs no [home final stop](../node-link.md#home-final-stop),
    so the home checkout stays on its disk, and the workspace keeps its
    backup refs. [Moving the home](#moving-the-home) restores the workspace on
