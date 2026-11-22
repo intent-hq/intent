@@ -2580,7 +2580,8 @@ deletions are never persisted now holds on desktop (SQLite) daemons only: a rest
 still drops them and the workspace or agent survives. In orchestrator mode (Postgres) the
 `deleteAt` deadline is stored with the pending deletion, so it survives a daemon restart or a
 takeover of the tenant by another process; the process that serves the tenant next re-arms it
-(without a second `*:delete-scheduled` event) and the delete commits once at its deadline.
+(without a second `*:delete-scheduled` event) and the delete commits at most once at its
+deadline (a crash in the instant between claiming the deadline and starting the delete drops it).
 `*.cancelDelete` removes the stored deadline. Payloads, events and `pendingDeleteAt` are
 unchanged.
 
