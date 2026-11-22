@@ -173,6 +173,19 @@ backend sees the unknown close code as a route failure and keeps retrying, as
 before. An older orchestrator still binds; its report lists no providers.
 The surface counts are unchanged.
 
+Also within 18.0 (additive response, event and setting fields; no method-catalog
+change): **workload memory containment** (intent-hq/intent#9809). On Linux,
+workloads run in a memory-limited cgroup; `system.status.workloadContainment`
+reports the mode, `agents.workloadMemoryMaxMb` sets the ceiling, and a script
+run, `host.exec` or terminal killed by the limit carries
+`exitReason: "memoryLimit"` (script runtime and `lastRun`, `host.exec`,
+`host:exec:exit`, `terminal:exit`). Script runs also carry `startedBy`.
+**nodeProtocol 20** carries that reason for runs on a remote machine
+(`exitReason` on `scriptExited` / `ptyExited`, sent only on a link that
+negotiated 20; [link contract](./node-link.md#version-range)); daemons offer
+`{ min: 7, max: 20 }`. Clients detect every field by presence. The surface
+counts are unchanged.
+
 Also within 18.0 (additive methods and setting; prepared, off by default, so no
 version bump): **push relay linking**. The router methods `push.createLink`,
 `push.revokeLink` and `push.status` link a phone to the push relay for iOS Live
