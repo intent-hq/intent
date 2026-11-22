@@ -433,7 +433,10 @@ machine row with its last report, and the token in its secret store under
 row stays until removed.
 
 `remoteMachine:changed` carries `{ machine: RemoteMachine }`, or
-`{ machineId, removed: true }` after removal. It is delivered to owner
+`{ machineId, removed: true }` after removal. A removal the backend made on
+its own because the machine is now an orchestrator adds
+`reason: "orchestrator"` ([leaving its backends](#an-orchestrator-leaves-its-backends));
+clients ignore a `reason` they do not know. It is delivered to owner
 connections only and emitted on add, remove, state changes and new capability
 reports.
 
@@ -572,7 +575,11 @@ interface MachineModels {
    frontend offers **Make available to <current backend>** with the warning
    that remote agents run code as the machine owner's OS user. It never offers
    it for guest sessions, or when `principal.me` on that connection is not the
-   owner.
+   owner. It never offers it for a machine that runs as an
+   [orchestrator](#orchestrator-mode) (its reported `daemonMode`): an
+   orchestrator refuses `executor.mint` with `-32003` `orchestrator-mode`, and
+   the frontend reports that refusal as "<machine> is an orchestrator", not as
+   a missing owner.
 2. The frontend main process relays, keeping the token out of the renderer and
    never persisting it: `remoteMachines.backendInfo` on the backend,
    `executor.mint` on the machine, then `remoteMachines.add` on the backend.
@@ -2464,12 +2471,22 @@ none):
    `machine-orchestrator: <name> is now an orchestrator and no longer runs agents for other backends`,
    and the call that dialed (`remoteMachines.refresh`, a placement, a prompt)
    fails with `-32602` and `data: { code: "machine-orchestrator" }`.
-2. Then, in the background, it deletes the machine row, its stored token
-   (`remoteMachines.<id>.token`), its leases and pending stop records, and its
-   [ordered list](#ordered-machine-list) entry.
-3. It sends `remoteMachine:changed { machineId, removed: true }`, then
-   `{ order }`. The `removed` event is the signal that the removal is done.
-   A removal that fails (a store error) runs again at the next dial.
+2. Then, in the background, each [workspace home](#workspace-homes) on the
+   machine becomes [detached](#detached-workspaces), without the 60 s grace,
+   and is announced with `workspace:updated { changes: { home } }`; a failed
+   detach is retried before anything else is deleted. Only then does it delete
+   the machine row, its stored token (`remoteMachines.<id>.token`), its leases
+   and pending stop records, and its [ordered list](#ordered-machine-list)
+   entry. Nothing is
+   deleted: the orchestrator runs no [home final stop](../node-link.md#home-final-stop),
+   so the home checkout stays on its disk, and the workspace keeps its
+   backup refs. [Moving the home](#moving-the-home) restores the workspace on
+   another machine from its last backup.
+3. It sends `remoteMachine:changed { machineId, removed: true, reason: "orchestrator" }`,
+   then `{ order }`. The `removed` event is the signal that the removal is
+   done; `reason` tells the app to say why the runner left ("<name> is now an
+   orchestrator and was removed from your runners"). A removal that fails (a
+   store error) runs again at the next dial.
 
 `remoteMachines.add` of an orchestrator fails with the same error. A new
 machine is not saved; a machine already saved is removed as above.

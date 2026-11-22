@@ -796,8 +796,10 @@ removed with per-agent CoW sandboxes in protocol 16.
 The [daemon-to-daemon remote machines contract (§5.50)](./methods/nodes.md#daemon-to-daemon-remote-machines)
 defines `remoteMachine:changed` on the backend: `{ machine: RemoteMachine }`
 on add, state changes and new capability reports, or `{ machineId, removed: true }`
-after removal. It is delivered to owner connections only, never to members or
-guests, and never carries the executor token. With `machineOrder: 1` it also
+after removal (with `reason: "orchestrator"` when the backend removed a machine
+that [became an orchestrator](./methods/nodes.md#an-orchestrator-leaves-its-backends)).
+It is delivered to owner connections only, never to members or guests, and
+never carries the executor token. With `machineOrder: 1` it also
 carries `{ order: MachineOrderRow[] }` after each change of the
 [ordered machine list](./methods/nodes.md#ordered-machine-list); this variant is
 delivered to owner and member connections, never to guests.
