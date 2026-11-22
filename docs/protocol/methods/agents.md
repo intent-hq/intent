@@ -1430,12 +1430,28 @@ when all of these are true:
 
 1. `content`, trimmed of leading and trailing whitespace, is exactly `/goal`, or starts
    with `/goal` followed by whitespace. Case-sensitive: `/Goal`, `/goals`, `/goal:` and
-   `please /goal x` are ordinary messages.
-2. `messageMetadata` is absent, or carries no `type` and no structured payload
-   (answers, wizard submissions, suggested-prompt sends and every other typed
-   metadata are delivered as text, and resolve pending questions as before).
+   `please /goal x` are ordinary messages. "Whitespace" is the Unicode `White_Space`
+   property (Rust `char::is_whitespace`) everywhere in this section.
+2. `messageMetadata` is absent, `null`, or an object with no `type` key. Other keys
+   (for example the desktop's `mentionTokens`) do not stop recognition and are dropped
+   with the command. Typed metadata — `question_answers`, wizard submissions and every
+   other `type` — is delivered as text and resolves pending questions as before.
 
 The statement is everything after the first whitespace, trimmed, newlines kept.
+
+**The `command` field decides.** A client may guess from a leading `/goal` token to skip
+its optimistic bubble, but only the result decides: a result with `command` was a
+command; a result without it was an ordinary delivery, and the client shows the user
+row from `messageId` / `queuedMessage` / `agent:message` as usual.
+
+**Other send params on a command are ignored.** `noteIds`, `contextReferences`,
+`stdinContext`, `workspaceContext`, `priority`, `model`, `messageId`,
+`userAppMessageId`, `assistantMessageId` and `assistantAppMessageId` have no effect:
+a command never switches the model, never merges into or absorbs a queue entry
+([submission correlation](#submission-correlation-and-optimistic-display-additive-extension)),
+and returns no `submissionIds` or `recoverySources`. Commands are not deduplicated by
+`messageId`: a client retry runs the command again (a repeated set answers `unchanged`
+with a new notice row).
 Everything else — no `interpretCommands`, `agent.sendQueuedMessageNow` /
 `sendQueuedMessagesNow`, entries already in a queue, `agent.editAndRegenerate`,
 `agent.sendToTask`, `agent.wakeOrCreate`, `ws.agent.send` and every other
@@ -1446,9 +1462,12 @@ A recognized command runs at the RPC seam, before queueing, attention retirement
 archived-workspace revive or turn start. It persists no user row, sends nothing to the
 provider, starts and interrupts no turn, and enqueues nothing (on `agent.queueMessage`
 while the agent is busy, the running turn continues and the goal applies from the next
-turn). A command with `imageBlocks` or `fileBlocks` is `-32602` (`/goal does not take
-attachments`) with no state change. A statement over 1,000 characters is `-32602`
-(`goal is too long (max 1000 characters)`) with no state change.
+turn). A command with a non-empty `imageBlocks` or `fileBlocks` is `-32602`
+(`/goal does not take attachments`, `data: { code: "goal-attachments-not-allowed" }`)
+with no state change. A statement over 1,000 Unicode scalar values (after trimming) is
+`-32602` (`goal is too long (max 1000 characters)`,
+`data: { code: "goal-too-long", maxLength: 1000 }`) with no state change. Clients branch
+on `data.code`, not the message, and rely on the daemon for the length check.
 
 | Content | Stored goal | Action | Notice text |
 |---|---|---|---|
@@ -1479,7 +1498,12 @@ clear the composer only on success.
 
 **`agent.setGoal`.** `{ agentId, workspaceId?, goal: string | null }` →
 `{ action, goal, noticeMessageId? }`. Used by the goal strip's Edit and Remove. The goal
-is trimmed; empty or `null` removes it. Over 1,000 characters is `-32602`.
+is trimmed; empty or `null` removes it. Over 1,000 Unicode scalar values is `-32602`
+with `data.code: "goal-too-long"`. An unknown or deleted agent is `-32602`
+(`agent not found`); a retired agent is `-32602` (`agent is retired`,
+`data: { code: "agent-retired" }`), and a `/goal` command to a retired agent fails the
+same way. The action is computed and written atomically against the stored value, so
+two racing writers cannot both answer `set`.
 
 | Request | Action | Write, event, notice row |
 |---|---|---|
@@ -1493,9 +1517,10 @@ Caller rules: open to the same callers as `agent.sendMessage` (owner, host membe
 workspace collaborators, guests included). The Assistant's generic `ws.rpc` path refuses
 it (`-32003`, `data.code: "forbidden-to-agent"`, `AGENT_FORBIDDEN_METHODS`), and there is
 no `ws.agent.*` binding. `agent.update` rejects `goal` like any key outside its
-whitelist. Likewise, `interpretCommands` is ignored on an `agent.sendMessage` /
-`agent.queueMessage` that arrives through `ws.rpc`, so an agent cannot set a goal with
-a `/goal` message either.
+whitelist. The refusal covers every agent-origin route, including `ws.rpc` calls
+relayed to another backend. Likewise, `interpretCommands` is ignored on an
+`agent.sendMessage` / `agent.queueMessage` that arrives through `ws.rpc` (relayed or
+not), so an agent cannot set a goal with a `/goal` message either.
 
 **Notice rows.** Every `/goal` command, and every `agent.setGoal` that writes, persists
 one transcript-only row: `role: "system"`, one text block with the notice text above
@@ -1504,12 +1529,22 @@ one transcript-only row: `role: "system"`, one text block with the notice text a
 `fromPrincipalId` is stamped when the caller is a known principal in a shared workspace.
 The row follows the `model_changed` rendering contract: never replayed to providers,
 delivered on the normal `agent:message` event. Clients that do not know the type show
-the text. The row is written outside any turn and has no other effect: it does not
+the text. `noticeMessageId` is the row's `id` on `agent:message` and
+`agent.getConversation`. The RPC result, the `agent:message` and the `agent:updated`
+may arrive in any order; clients match by id. The row is written outside any turn and
+has no other effect: it does not
 advance `updatedAt`, mark the agent or workspace unread, move the sender's
 new-messages divider, send push or desktop notifications, or change attention state.
 
 **Events.** A goal write emits `agent:updated` with data `{ agentId, goal }`
-(`goal: null` on remove, §6.5). `unchanged` and `shown` emit no `agent:updated`.
+(`goal: null` on remove, §6.5). `unchanged` and `shown` emit no `agent:updated`. A
+client that merges `agent:updated` as a patch deletes its `goal` on `null`. §6.9
+collection `updated` deltas carry full rows, so a row without `goal` replaces the
+previous one as unset.
+
+**Lifecycle.** The goal stays on the session through `agent.retire` / `agent.restore`
+and is deleted with the agent. It is not copied by `agent.importSession` or into any
+new agent.
 
 **No side effects.** Setting, replacing, removing or showing a goal does not wake the
 agent, start or interrupt a turn, or change permission policy, model, effort, status,
@@ -1518,7 +1553,9 @@ archived workspace.
 
 **Agent prompt.** While a goal is set, every outbound turn prompt — user messages,
 queued flushes, hook, PR-monitor, watch and event wakes, scheduled status requests —
-carries one goal block directly after the specialist Role Reminder. The block is
+carries one goal block directly after the specialist Role Reminder; an agent without
+a Role Reminder gets it at the same position, before the turn body (intentd goldens
+pin the order relative to the repository-guidance layer). The block is
 rendered with the latest prompt-harness wording, also for sessions pinned to an older
 harness version. The goal text is passed verbatim (newlines kept) inside a tagged block
 whose closing tag is escaped in the goal, so the text cannot end the block early. The
