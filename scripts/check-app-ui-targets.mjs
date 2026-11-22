@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 // Narrow, compilation-free check of Assistant destinations against the frontend
 // registry. Read source as data; never execute code from an upstream PR checkout.
+//
+// Direction: the daemon catalog leads. A new destination lands in intentd first
+// and the cloudlands-fe registry entry after it, so a catalog row whose id the
+// frontend source does not name yet only warns (pending) until the frontend
+// catches up. Rows both sides name must match exactly, and required
+// destinations must always resolve on both sides.
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -12,6 +18,8 @@ const { values } = parseArgs({ options: { root: { type: 'string' } } });
 const root = path.resolve(values.root ?? here);
 const read = file => readFileSync(path.join(root, file), 'utf8');
 const resource = 'packages/intentd/crates/intent-acp/resources/app-ui-targets.json';
+
+const escapeRegExp = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 function mappedTargets(source) {
   const groups = [...source.matchAll(/\.\.\.\[([\s\S]*?)\]\.map\(\(\[id, label, description, tab\]\) =>\s*settingsTarget\(\{([\s\S]*?)\}\),\s*\),/g)];
@@ -47,15 +55,26 @@ try {
     const blocks = [...source.matchAll(/^  (?:settingsTarget\()?\{\n([\s\S]*?)^  \}/gm)].map(m => m[1]);
     const mapped = mappedTargets(source);
     const ids = new Set();
+    const pending = [];
     const required = ['new-workspace', 'utility-default-model', 'global-instructions', 'devices', 'websocket-api', 'workspace-card'];
     for (const row of rows) {
       assert.equal(typeof row.id, 'string', 'target id must be a string');
       assert.ok(!ids.has(row.id), `duplicate target ${row.id}`);
       ids.add(row.id);
       assert.ok(!['guest-sessions', 'developer', 'agent-features'].includes(row.id), `${row.id}: experimental/internal destinations must not be routine recommendations`);
+      assert.equal(typeof row.label, 'string', `${row.id}: missing label`);
+      assert.equal(typeof row.description, 'string', `${row.id}: missing description`);
       const block = blocks.find(b => b.match(/^    id: '([^']+)',/m)?.[1] === row.id);
       const mappedRow = mapped.get(row.id);
-      assert.ok(block || mappedRow, `${row.id}: no frontend registry entry; extend the checker deliberately for a new registry format`);
+      if (!block && !mappedRow) {
+        // An id the registry still names as an object id or tuple head means
+        // the parser lost it, not that the frontend lags: fail on format drift.
+        const named = new RegExp(`(?:\\bid:\\s*|\\[\\s*)'${escapeRegExp(row.id)}'`).test(source);
+        assert.ok(!named, `${row.id}: frontend names this target but the checker cannot parse it; extend the checker deliberately for a new registry format`);
+        assert.ok(!required.includes(row.id), `${row.id}: no frontend registry entry for a required destination`);
+        pending.push(row.id);
+        continue;
+      }
       for (const field of ['id', 'tab', 'route', 'scrollSelector', 'highlightSelector', 'dynamic', 'idPattern']) {
         const match = block?.match(new RegExp(`^    ${field}: (.*),$`, 'm'));
         let expected = mappedRow?.[field];
@@ -68,8 +87,6 @@ try {
       const aliases = block?.match(/hashAliases: \[([\s\S]*?)\]/)?.[1];
       const expectedAliases = aliases === undefined ? mappedRow?.hashAliases : [...aliases.matchAll(/'([^']+)'/g)].map(m => m[1]);
       assert.deepEqual(row.hashAliases, expectedAliases, `${row.id}.hashAliases differs from frontend registry`);
-      assert.equal(typeof row.label, 'string', `${row.id}: missing label`);
-      assert.equal(typeof row.description, 'string', `${row.id}: missing description`);
     }
     for (const id of required) assert.ok(ids.has(id), `missing supported destination ${id}`);
     const guide = read('packages/intentd/crates/intent-services/resources/assistant-app-guide.md').replace(/<!--[\s\S]*?-->/g, '');
@@ -83,7 +100,10 @@ try {
     const remote = rows.find(row => row.id === 'websocket-api');
     assert.match(remote.description, /QR/i, 'Remote Access must describe QR pairing');
     assert.match(remote.description, /mobile/i, 'Remote Access must be discoverable for mobile questions');
-    console.log(`app-ui-targets: ${rows.length} supported destinations and ${guideRoutes.length} guide routes match frontend routes, aliases and selectors`);
+    for (const id of pending) {
+      console.log(`::warning::app-ui-targets: ${id}: no frontend registry entry yet; pending until cloudlands-fe adds it (the daemon catalog leads)`);
+    }
+    console.log(`app-ui-targets: ${rows.length - pending.length} supported destinations${pending.length ? ` (plus ${pending.length} pending frontend)` : ''} and ${guideRoutes.length} guide routes match frontend routes, aliases and selectors`);
   }
 } catch (error) {
   console.error(`app-ui-targets: ${error.message}`);
