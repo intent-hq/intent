@@ -358,7 +358,7 @@ On Linux the daemon runs every *workload* — agent provider CLIs and their adap
 }
 ```
 
-- `mode: "cgroup"` — the box is active. Its ceiling is `agents.workloadMemoryMaxMb` (§5.12), or by default the host's memory (or a lower cgroup limit above the daemon, e.g. a container's) less a daemon reserve of 15 %, clamped to 768 MiB–2 GiB. The daemon needs a writable, delegated cgroup v2: it runs as root, or in its own systemd unit with `Delegate=memory pids`.
+- `mode: "cgroup"` — the box is active. Its ceiling is `agents.workloadMemoryMaxMb` (§5.12), or by default the host's memory (or a lower cgroup limit above the daemon, e.g. a container's) less a daemon reserve (15 % of it, the reserve clamped to 768 MiB–2 GiB). The box also gets `memory.swap.max = 0` where swap accounting exists, so workloads are killed at the ceiling instead of thrashing swap. The daemon needs a writable, delegated cgroup v2: it runs as root, or in its own systemd unit with `Delegate=memory pids`.
 - `mode: "oomScoreAdj"` — Linux without a usable cgroup (not delegated, shared with other processes, read-only), or `agents.workloadMemoryMaxMb = 0`. Workloads run unboxed, but their root processes start with a raised `oom_score_adj` (scripts, terminals and `host.exec` 800; agents, adapters, MCP and model servers 500) so the kernel kills them before the daemon. `reason` says why.
 - `mode: "none"` — macOS and Windows; `reason` says so.
 - Administrator-only (not in the collaborator subset). Presence-detected: absent from older daemons; inside the object, unset fields are omitted, never `null`. Reading it costs two small cgroup file reads.

@@ -964,7 +964,7 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
 | `memoryBudgetMb` | auto: `(RAM − 8 GB) / 2`, min 4 GB (absent key); small hosts lower it, see below | Aggregate RSS of the whole child tree, as a soft admission gate on new spawns — binding only while the tree is over budget **and** host available memory is below the host reserve (8 GiB + one provisional agent; less on small hosts); see the headroom rule below. Absent key (the default) = auto (RAM-derived); explicit `0` = off (preserved for existing config files); positive value = budget in MB. Catalog max is the machine's own physical RAM, capped at 1,024,000 MB. |
 | `maxConcurrentAdapters` | `6` (on) | Concurrently live ephemeral adapter chains (quick actions, model probes). |
 | `maxConcurrent` | `0` (auto from RAM) | Agent **slots**. Not a memory bound — see the 22× range above. |
-| `workloadMemoryMaxMb` | auto: RAM (or a lower parent cgroup limit) less a daemon reserve of 15 %, clamped to 768 MiB–2 GiB (absent key) | Linux only: the hard `memory.max` of the shared cgroup box every workload runs in (below). `0` = no box; positive = MB. |
+| `workloadMemoryMaxMb` | auto: RAM (or a lower parent cgroup limit) less a daemon reserve (15 % of it, the reserve clamped to 768 MiB–2 GiB; absent key) | Linux only: the hard `memory.max` of the shared cgroup box every workload runs in (below). `0` = no box; positive = MB. |
 
 **Small hosts** ([intent-hq/intent#9809](https://github.com/intent-hq/intent/issues/9809)).
 Below 12 GiB of `MemTotal` (`SMALL_HOST_BYTES`), the auto values above are each
@@ -984,8 +984,9 @@ daemon builds a cgroup v2 hierarchy at startup (`intent_core::workload`):
 `<domain>/{supervisor, daemon, workloads}`, where `domain` is its own cgroup
 (a systemd unit with `Delegate=memory pids`) or `intentd-<hash>` under the root
 cgroup (root in a VM). The sitter moves to `supervisor`, the daemon to
-`daemon`, and `workloads` gets `memory.max` = the ceiling and `memory.high` 5 %
-below it. Every workload — agent CLIs, adapter chains, MCP and model servers,
+`daemon`, and `workloads` gets `memory.max` = the ceiling, `memory.high` 5 %
+below it, and `memory.swap.max = 0` (swapping workloads would stall the
+daemon as surely as running out of RAM). Every workload — agent CLIs, adapter chains, MCP and model servers,
 scripts, setup and archive scripts, terminals, `host.exec` — runs in its own
 leaf `workloads/<kind>-<pid>-<seq>`, joined **before it runs any code**: a
 `pre_exec` hook for `std`/`tokio` commands (so a missing program still fails
