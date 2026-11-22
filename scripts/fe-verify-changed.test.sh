@@ -230,6 +230,32 @@ expect_verify_argv
 expect_fe=$fe
 expect_fixtures=$canonical_fixtures
 
+spaced_fe="$temp_dir/fe worktree"
+mkdir -p "$spaced_fe/.git" "$spaced_fe/node_modules/.pnpm"
+cp "$fe/pnpm-lock.yaml" "$spaced_fe/pnpm-lock.yaml"
+cp "$fe/pnpm-lock.yaml" "$spaced_fe/node_modules/.pnpm/lock.yaml"
+expect_fe=$spaced_fe
+
+case_name="an absolute FE_DIR with a space runs verify:changed there"
+run_make "FE_DIR=$spaced_fe"
+expect_ok
+expect_verify_argv
+
+case_name="an absolute FE_DIR with a space and stale deps installs there first"
+printf 'lockfileVersion: 9\n# changed\n' >"$spaced_fe/pnpm-lock.yaml"
+run_make "FE_DIR=$spaced_fe"
+expect_ok
+expected_install="corepack: $spaced_fe"$'\n'"fixtures: $canonical_fixtures"$'\n'"pnpm"$'\n'"install"$'\n'"--frozen-lockfile"
+[[ "$log" == "bootstrap: --check-frontend"$'\n'"$expected_install"$'\n'* ]] \
+  || fail "$case_name: stub log was"$'\n'"$log"
+log=${log/$'\n'"$expected_install"/}
+expect_verify_argv
+expect_fe=$fe
+
+case_name="other FE recipes quote FE_DIR where a space would split it"
+unquoted=$(grep -nE '(cd|-[fedC]|cmp -s|--fe-dir) \$\(FE_DIR\)|[^"]\$\(FE_DIR\)/(pnpm-lock|node_modules|package\.json)' "$repo_root/Makefile" | grep -vE '^[0-9]+:[[:space:]]*#' || true)
+[[ -z "$unquoted" ]] || fail "$case_name: unquoted FE_DIR in:"$'\n'"$unquoted"
+
 case_name="make help lists the target"
 "$make_bin" -C "$mk" --no-print-directory help >"$temp_dir/help" 2>&1 </dev/null \
   || fail "$case_name: make help failed: $(<"$temp_dir/help")"
