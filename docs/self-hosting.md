@@ -69,6 +69,28 @@ sudo apt install ./intentd_amd64.deb
 systemctl --user enable --now intentd
 ```
 
+After upgrading the package, run
+`systemctl --user daemon-reload && systemctl --user restart intentd` so the
+new unit takes effect.
+
+## Memory containment on Linux
+
+On Linux the daemon runs agents, scripts, terminals, `host.exec` commands, MCP
+servers and model servers in one shared cgroup with a memory limit, so a
+runaway workload is killed inside it while the daemon and its clients stay up
+(`agents.workloadMemoryMaxMb`; by default total memory less a 768 MiB–2 GiB
+daemon reserve). This needs a writable, delegated cgroup v2:
+
+| Install | Containment |
+| --- | --- |
+| `.deb` systemd user unit | Yes: the unit sets `Delegate=memory pids`. |
+| Running as root (e.g. a VM or a privileged container) | Yes. |
+| Your own systemd unit | Add `Delegate=memory pids` to it. |
+| Homebrew services on Linux, a daemon started from a desktop session or a shell, an unprivileged container | No: workloads only get a higher OOM score than the daemon. |
+
+`system.status` (`intentd call system.status`) shows the mode under
+`workloadContainment`, with the reason when the cgroup is not used.
+
 ## Direct download
 
 Prebuilt sitter archives for macOS, Linux, and Windows are published on the
