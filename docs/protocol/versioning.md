@@ -2573,6 +2573,17 @@ A note with many screenshots can therefore no longer push a turn past the provid
 every send while it is in context. Agents that relied on seeing note images automatically must now open
 them on demand. The `noteIds` param shape is unchanged.
 
+Also within 13.0 (behavior only, no method-catalog or wire-shape change, so no version
+bump — [intent-hq/intentd#3657](https://github.com/intent-hq/intentd/pull/3657)): **persisted
+delete grace deadlines in orchestrator mode** (§5.1 / §5.5). The v6.7 rule that pending
+deletions are never persisted now holds on desktop (SQLite) daemons only: a restart there
+still drops them and the workspace or agent survives. In orchestrator mode (Postgres) the
+`deleteAt` deadline is stored with the pending deletion, so it survives a daemon restart or a
+takeover of the tenant by another process; the process that serves the tenant next re-arms it
+(without a second `*:delete-scheduled` event) and the delete commits once at its deadline.
+`*.cancelDelete` removes the stored deadline. Payloads, events and `pendingDeleteAt` are
+unchanged.
+
 ### Compatibility Policy
 
 - **Additive changes** (new methods, new optional fields, new event types) bump the **minor** version (e.g., 2.0 → 2.1).
