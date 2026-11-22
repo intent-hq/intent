@@ -200,6 +200,7 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
 - `supportsTestPrompt` *(v9.3; [intent-hq/intentd#1657](https://github.com/intent-hq/intentd/pull/1657))* is **always present**: whether the provider can be exercised by the live `host.providerTestPrompt` probe (§5.14). `false` for `unsloth`, whose first prompt can trigger a long model download; `true` for every other row, including `antigravity` (since 18.0) and `cursor`. For the opt-out providers, the RPC returns `unsupported` without resolution or spawn.
 - `supportsProfiles` and the top-level `profiles` list are prepared additive
   fields for [named provider profiles](provider-profiles.md#catalog-models-and-status).
+  It is `true` for the [profile-capable bases](provider-profiles.md#profile-capable-bases).
   `providers` keeps one row per provider type. `models.list` accepts a profile
   `providerRef` as `providerId`. The additive top-level `defaultNames` map labels
   a renamed [Default configuration](provider-profiles.md#default-configuration-overrides).
@@ -215,7 +216,7 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
 
 Antigravity is an opt-in catalog entry: `id: "antigravity"`, `command: "agy"` (launched as `agy acp`, agy 1.5.0 or later), `canBeDisabled: true`, `loginCommandHint: "agy acp --login"`, and `supportsTestPrompt: true`. Discovery does not enable it or change the active provider.
 
-Cursor is an opt-in provider that the user enables in Settings *([intent-hq/intentd#3073](https://github.com/intent-hq/intentd/pull/3073))*: `id: "cursor"`, `displayName` and `shortName` `"Cursor"`, `command: "cursor-agent"` (never the bare `agent` alias), `canBeDisabled: true`, `loginCommandHint: "cursor-agent login"`, `loginDocsUrl: "https://cursor.com/docs/cli/reference/authentication"`, `authErrorPatterns: ["authentication required"]`, `supportsTestPrompt: true`, and `supportsProfiles: false`. It carries no `requiresEnvVar` or `requiresFeatureCode`, so `visible` is `true`. Like the other opt-in providers it stays off until the user enables it: discovery, a successful auth probe, or a served model list never enables it automatically or changes the active provider. Auth is described under `host.providerAuthStatus` and the CLI fields under `host.providerDiscovery` (§5.14).
+Cursor is an opt-in provider that the user enables in Settings *([intent-hq/intentd#3073](https://github.com/intent-hq/intentd/pull/3073))*: `id: "cursor"`, `displayName` and `shortName` `"Cursor"`, `command: "cursor-agent"` (never the bare `agent` alias), `canBeDisabled: true`, `loginCommandHint: "cursor-agent login"`, `loginDocsUrl: "https://cursor.com/docs/cli/reference/authentication"`, `authErrorPatterns: ["authentication required"]`, `supportsTestPrompt: true`, and `supportsProfiles: true` (API key profiles, see [Cursor API key](provider-profiles.md#cursor-api-key); `false` on older daemons). It carries no `requiresEnvVar` or `requiresFeatureCode`, so `visible` is `true`. Like the other opt-in providers it stays off until the user enables it: discovery, a successful auth probe, or a served model list never enables it automatically or changes the active provider. Auth is described under `host.providerAuthStatus` and the CLI fields under `host.providerDiscovery` (§5.14).
 
 ### 5.44 Guided Antigravity setup
 
