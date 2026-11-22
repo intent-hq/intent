@@ -1177,7 +1177,12 @@ or Cursor profile: its catalog reports `false` for them and it rejects such a wr
 `base-provider-unsupported`. An older client shows the new bases' profiles as rows with
 the raw editor only. A machine that predates the Grok and Cursor launch-only steps runs
 those profiles' environment as sent, so a login saved on that machine can win over the
-key until the machine is updated; Droid and Auggie profiles need no step.
+key until the machine is updated; Droid and Auggie profiles need no step. Downgrading the
+daemon past this change while a Grok, Droid, Auggie or Cursor profile is saved makes the
+older daemon read the whole profile file as malformed (it accepts only the bases it
+knows): every `providers.profiles.*` call returns `provider-profiles-unreadable` and
+qualified references need a replacement, as described under **Reads**, until the daemon
+is upgraded again. The file is left untouched, so nothing is lost.
 
 Clients detect Default configuration overrides by the presence of `defaults` on the
 `providers.profiles.list` result. When it is absent, a client may still offer the
