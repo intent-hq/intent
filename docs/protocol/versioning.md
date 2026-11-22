@@ -171,7 +171,9 @@ The call that dialed fails with the new `-32602`
 `data.code: "machine-orchestrator"`. An older
 backend sees the unknown close code as a route failure and keeps retrying, as
 before. An older orchestrator still binds; its report lists no providers.
-The surface counts are unchanged.
+The surface counts are unchanged. Additively, that removal event carries
+`reason: "orchestrator"`, and the machine's workspace homes are detached at
+once so they can be moved; an older client ignores the field.
 
 Also within 18.0 (additive methods and setting; prepared, off by default, so no
 version bump): **push relay linking**. The router methods `push.createLink`,
