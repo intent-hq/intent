@@ -222,6 +222,11 @@ expect_fixtures=
 TRANSFER_SELECTION_FIXTURE_ROOT='' run_make "FE_DIR=$outside"
 expect_ok
 expect_verify_argv
+
+case_name="an empty fixture root on the make command line is passed through"
+run_make "FE_DIR=$outside" "TRANSFER_SELECTION_FIXTURE_ROOT="
+expect_ok
+expect_verify_argv
 expect_fe=$fe
 expect_fixtures=$canonical_fixtures
 
