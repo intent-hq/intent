@@ -2635,4 +2635,4 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 | `AgentLite` | `cloudStart` | [Placement on E2B](./methods/nodes.md#placement-on-e2b) | Pending cloudlands-fe E2B cloud machines PR (Start On, machine badges) |
 | `Workspace` | `home` | [Workspace homes](./methods/nodes.md#workspace-homes) | Pending cloudlands-fe homes PR (home on the workspace card and the detached banner); emitted only on an orchestrator serving homes |
 | `AgentLite` | `nodeName` | [Placed agent projection](./methods/nodes.md#placement-and-creation) | Pending: the complete node contract that advertises `agentNodes`; agents placed on [remote machines](./methods/nodes.md#placement-subset) carry it on detail reads, but the app does not read it yet |
-| `AgentLite` | `goal` | [Conversation goal](./methods/agents.md#conversation-goal) | Pending cloudlands-fe conversation goal PR (pinned goal strip, [intent-hq/intent#9646](https://github.com/intent-hq/intent/issues/9646)) |
+| `AgentLite` | `goal` | [Conversation goal](./methods/agents.md#conversation-goal) | [cloudlands-fe#4947](https://github.com/intent-hq/cloudlands-fe/pull/4947) |
