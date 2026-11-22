@@ -26,6 +26,22 @@ members only. Adds the settings-catalog entries `autocomplete.enabled` (default
 support by `autocomplete.enabled` in `settings.list`; older daemons return `-32601`
 for the method. No store migration; the router surface gains one method.
 
+Also within 18.1 (additive method, send param, row field and capability;
+capability-gated, so no version bump): **conversation goal**
+([§5.5](./methods/agents.md#conversation-goal), [intent-hq/intent#9646](https://github.com/intent-hq/intent/issues/9646)).
+`server.capabilities.conversationGoal: 1` gates it. Adds the router method
+`agent.setGoal { agentId, workspaceId?, goal: string | null }` →
+`{ action, goal, noticeMessageId? }` (user callers only; refused through `ws.rpc`),
+the top-level `interpretCommands?: boolean` param on `agent.sendMessage` and
+`agent.queueMessage` (a `/goal` command then answers
+`{ success: true, queued: false, command }` with no user row, queue entry or turn),
+the presence-detected `goal` field on `AgentLite` and `agent.getSession` (omitted
+when unset), `agent:updated { agentId, goal }` (`null` = removed), and transcript-only
+`role: "system"` rows with `metadata.type: "goal_command"`. Store migration adds
+`agent_session.goal`. Older daemons omit the capability, ignore
+`interpretCommands`, deliver `/goal …` as text, and answer `agent.setGoal` with
+`-32601`.
+
 **Version 18.0 — guided Antigravity setup retirement (breaking).**
 Antigravity now runs the user's `agy` CLI as `agy acp` (agy 1.5.0 or later;
 [intent-hq/intentd#3267](https://github.com/intent-hq/intentd/pull/3267)). The fast-path
@@ -2646,3 +2662,4 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 | `AgentLite` | `cloudStart` | [Placement on E2B](./methods/nodes.md#placement-on-e2b) | Pending cloudlands-fe E2B cloud machines PR (Start On, machine badges) |
 | `Workspace` | `home` | [Workspace homes](./methods/nodes.md#workspace-homes) | Pending cloudlands-fe homes PR (home on the workspace card and the detached banner); emitted only on an orchestrator serving homes |
 | `AgentLite` | `nodeName` | [Placed agent projection](./methods/nodes.md#placement-and-creation) | Pending: the complete node contract that advertises `agentNodes`; agents placed on [remote machines](./methods/nodes.md#placement-subset) carry it on detail reads, but the app does not read it yet |
+| `AgentLite` | `goal` | [Conversation goal](./methods/agents.md#conversation-goal) | [cloudlands-fe#4947](https://github.com/intent-hq/cloudlands-fe/pull/4947) |

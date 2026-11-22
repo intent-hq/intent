@@ -18,7 +18,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | agent.create | workspaceId (req), name?, nameExplicitlySet?: bool, model?, reasoningEffort? *(v5.2)*, specialistId?, idempotencyKey?, provider?, agentType?, metadata?, workspacePath?, workspaceContext?, contextReferences?, imageBlocks?, fileBlocks? *(v6.12; attachment references only since v10.0)*, isBackground?, rememberSpecialist? (boolean; [manual memory](#manual-specialist-memory)) | { agent: AgentLite } — details below the table. |
 | agent.delegate | workspaceId (req) + delegate opts (taskNoteId?, noteId?, taskText?, agentInstructions?, specialist?, model?, provider?, reasoningEffort?, behaviorPrompt?, waitMode?, skipAutoCommit?, isolation?, force?: bool, placement?, tasks?: [taskNoteId \| { taskNoteId, specialist?, model?, provider?, reasoningEffort?, placement? }]) | `{ ok: true, agentId, name, provider?, effectiveIsolation? }` (single-task form; see the batch form below) — details below the table. |
 | agent.sendToTask | taskNoteId (req), message (req), priority?, messageMetadata? | service result — `priority: "interrupt"` preempts the assignee's in-flight turn keep-alive (the agent process is never killed) and delivers immediately instead of the plain persist. **MCP binding default (behavior only, within v7.0 — [intentd#1292](https://github.com/intent-hq/intentd/pull/1292)):** the agent-facing `ws.agent.sendToTask` binding resolves an omitted (or `null`) `priority` to `"interrupt"` before calling this RPC — the explicit `priority: "queue"` opt-out restores queue-if-busy delivery by mapping to `"normal"`, and every other explicit value passes through unchanged; the wire default for an omitted `priority` on this RPC itself is unchanged (plain persist / queue-if-busy). `messageMetadata` is the same opaque per-message payload as `agent.sendMessage`, persisted on the assignee's user message row; it is threaded through both the runtime turn path and the store-only fallback (read-only wiring with no agent manager), so attribution is consistent across deployments. **Pending questions (v9.5, [intentd#1710](https://github.com/intent-hq/intentd/pull/1710)):** the assignee's pending structured-question marker (§5.5 "Pending questions") does not gate this delivery — the message delivers (or queues on the ordinary busy path) on the runtime and store-only paths alike, and the marker survives it; the v2.8 `heldForQuestions: true` park result is retired |
-| agent.sendMessage | agentId (req), content (req), workspaceId (req), messageId?, imageBlocks?, fileBlocks?, priority?, noteIds?, stdinContext?, contextReferences?, messageMetadata?, model?, assistantMessageId?, assistantAppMessageId?, userAppMessageId? | { success, queued, messageId? \| queuedMessage?, turnId? } — details below the table. |
+| agent.sendMessage | agentId (req), content (req), workspaceId (req), messageId?, imageBlocks?, fileBlocks?, priority?, noteIds?, stdinContext?, contextReferences?, messageMetadata?, model?, assistantMessageId?, assistantAppMessageId?, userAppMessageId?, interpretCommands? *(conversation goal)* | { success, queued, messageId? \| queuedMessage?, turnId? } — details below the table. With `interpretCommands: true`, a `/goal` command answers `{ success: true, queued: false, command }` instead; see [Conversation goal](#conversation-goal). |
 | agent.sendQueuedMessageNow | agentId (req), messageId (req), workspaceId (req) | { success: true, queued: false, messageId, turnId } on the atomic send — details below the table. |
 | agent.sendQueuedMessagesNow | agentId (req), workspaceId (req), messageIds (req, nonempty array of distinct nonempty strings) | `{ success: true, queued, messageIds, turnId?, quarantined? }`. Explicitly sends exactly the selected ready entries as one batch in existing queue order, with at most one keep-alive preemption. Validates the whole selection under the queue lock before dequeue or preemption: missing/stale/foreign IDs, duplicates, editing entries, unexpired holds, imported unbound human instructions and script-monitor wake entries (`messageMetadata.type: "script_monitor_wake"` with `monitorId` and without `remoteAgentId`; a [machine-run wake](./scripts.md#wakes-of-machine-run-monitors) is an ordinary entry) return `-32602` without sending any selected entry. Script-monitor wakes retain their individual monitor admission and lifecycle fence. Guest collaborators may select only entries visible in their `agent.getQueue`; original authorship, attachments and per-entry transcript rows are preserved. Unselected and later-arriving entries remain queued. `queued: false` carries the head entry’s `turnId`; all row echoes share it and precede the single shrunk `agent:queue:updated`, with one `agent:queue:processing` event. `queued: true` omits `turnId`: a startup/slot race restores the complete batch at the queue front; a partial transcript persistence failure parks the agent in Error and restores the batch in order, retaining entry IDs and skipping already-persisted rows on retry. Quarantine returns `queued: true, quarantined: true` without popping or preempting. `messageIds` always lists the selected IDs in queue order. A repeated request after delivery returns `-32602`; clients must refresh the queue rather than retry blindly. Requires the runtime agent manager; store-only configurations return unsupported without changing the queue. |
 | agent.dismissQuestions *(v2.8; model notice added within v4.3, intentd#892)* | agentId (req), messageId (req), workspaceId (req) | { success: true, dismissedQuestionsMessageId } — details below the table. |
@@ -27,7 +27,8 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | agent.rpcMethods *(prepared, Assistant RPC)* | workspaceId? | { count, methods: [{ method, class, summary, doc? }] } — this daemon's agent classes for `ws.rpc` (read). Lets another backend's Assistant read them through the relay. |
 | agent.markSeen *(v4.5)* | agentId (req), messageId (req), workspaceId (req) | { success: true, lastSeenMessageId } — details below the table. |
 | agent.editAndRegenerate | agentId (req), messageId (req), content (req), workspaceId (req), imageBlocks? *(stored block references with the capped-block-read capability)*, fileBlocks? *(attachment references only since v10.0; see the file-block contract on `agent.sendMessage`)*, model? | { success, queued: false, messageId, truncatedCount } — details below the table. |
-| agent.queueMessage | agentId (req), content (req), messageId? *(submission correlation v1, below)*, imageBlocks?, fileBlocks? *(attachment references only since v10.0; an inline-`data` entry is `-32602` naming the index BEFORE enqueueing — see the file-block contract on `agent.sendMessage`)*, messageMetadata?, workspaceId? | { success, queuedMessage, turnId } — details below the table. |
+| agent.queueMessage | agentId (req), content (req), messageId? *(submission correlation v1, below)*, imageBlocks?, fileBlocks? *(attachment references only since v10.0; an inline-`data` entry is `-32602` naming the index BEFORE enqueueing — see the file-block contract on `agent.sendMessage`)*, messageMetadata?, workspaceId?, interpretCommands? *(conversation goal)* | { success, queuedMessage, turnId } — details below the table. With `interpretCommands: true`, a `/goal` command is applied at once and answers `{ success: true, queued: false, command }` with nothing enqueued; see [Conversation goal](#conversation-goal). |
+| agent.setGoal *(conversation goal)* | agentId (req), goal (req: string \| null), workspaceId? | { action: "set" \| "updated" \| "cleared" \| "unchanged", goal: string \| null, noticeMessageId? } — sets, replaces or removes the conversation goal. User/FE callers only: the Assistant's `ws.rpc` is refused (`-32003` `forbidden-to-agent`), and there is no MCP binding. Gated by `conversationGoal: 1`. See [Conversation goal](#conversation-goal). |
 | agent.editQueuedMessage | agentId (req), messageId (req), content (req), editing?, workspaceId? | { success, queuedMessage } (QueuedMessage shape as above). **Author-only for human entries**, independently of shared queue visibility; a displaced editor alias additionally fails the stale-edit conflict check described below: another principal's entry cannot be edited or restamped, including by an owner. Unknown-human entries cannot establish authorship and are refused to every wire caller. Unauthorized edits have no side effects: a non-host-owner wire caller gets `-32602` (`queued message not found: <id>`), even though the entry is visible; a host owner gets `-32602` (`queued message <id> can only be edited by its author`). Agent/daemon callers and genuinely automatic/agent entries retain their existing rules; imported-human delivery restrictions are separate. An unbound wire request fails the membership gate ahead of this check with `-32003 Forbidden` (§5.48). A nonexistent id keeps its existing error. See [Shared pending human queue](#shared-pending-human-queue) |
 | agent.removeQueuedMessage | agentId (req), messageId (req), workspaceId? | { success: true }. **Human entries: author or owner only**, independently of shared queue visibility. Other participants cannot remove someone else's entry, even when its id and content are visible. Unauthorized removal is `-32602` (`queued message not found: <id>`) with no side effects. Automatic/agent entries keep their existing mutation policy. Removal of a nonexistent id remains an idempotent success. See [Shared pending human queue](#shared-pending-human-queue) |
 | agent.getQueue | agentId (req), workspaceId?, limit?, nextToken? *(see [Paged agent lists and queues](#paged-agent-lists-and-queues))* | { success, queue: QueuedMessage[], queueLength, nextToken } — QueuedMessage = { id, content, queuedAt, position, turnId?, imageBlocks?, fileBlocks?, deliveryGroups?, messageMetadata?, interruptPriority?, editing?, editingMessageId?, author? } (shape as `agent.queueMessage`, including attachment-reference-only `fileBlocks` and the multiplayer `author` projection, §5.48; additive `deliveryGroups` retains [grouped retry content](#queued-delivery-groups-prepared-additive-extension)). **Shared queue:** every caller with access to the workspace receives the full queue, including other participants' messages and the owner's. `position` is the zero-based index in the full queue. `agent.diagnostics` queue entries and the `agent:queue:updated` / `agent:queue:processing` events use the same shared-read policy (§6.5). Reading an entry does not authorize editing, removal or immediate delivery; see [Shared pending human queue](#shared-pending-human-queue). Attribution still distinguishes a resolved principal, an unknown human and an automatic/agent entry; missing identity never grants authorship. [Imported unbound human queues](./workspace.md#human-authorship-in-workspace-transfers) retain their historical author, remain held against automatic delivery, and require affirmative current host-owner authorization for an explicit send. A parked dismissal notice (intentd#892, within v4.3) surfaces here with its `questions_dismissed` `messageMetadata` and `interruptPriority: true` at the queue head — promoted to position 0 ahead of even pre-existing interrupt-priority entries, unlike the normal interrupt insertion order; see `agent.dismissQuestions` |
@@ -152,6 +153,7 @@ see [workspace discussions](multiplayer.md#555-workspace-discussions).
   `permissionPolicy` is the override: `"interactive"`, `"allow"`, `"auto"`, `"deny"`, or `null` when the agent follows the daemon default. **Always present on `AgentLite`**, `null` included: its presence is the support signal, because an older daemon omits it and rejects the unknown `agent.update` key with `-32602`. The `agent.getSession` session form serves it only when set.
   `effectivePermissionPolicy` is the policy the agent's next local process start uses — the override, else the daemon default (`INTENTD_PERMISSION_POLICY` when set, else the `agents.permissionPolicy` setting, §5.12) — overlaid on `agent.get` / `agent.list` / mutation results. It is **omitted** for a remote agent (its machine applies `remoteAgents.permission`, §5.50) and when no agent runtime is attached. Clients offer the per-chat control only for rows that carry it.
   The override is a preference, not activity: a request whose keys are only `permissionPolicy`, `pinned` and/or `notificationsMuted` never advances `updatedAt`. `agent:updated` carries the canonical written value (`{ agentId, permissionPolicy }`).
+- **`goal` (additive, presence-detected):** the user-set [conversation goal](#conversation-goal) (string, 1–1,000 characters) on `AgentLite` (`agent.list`, `agent.get`, the §6.9 collection rows) and the `agent.getSession` session form. **Omitted when unset** (absent, never `null` or `""`). Written only through a `/goal` command or `agent.setGoal`; `agent.update` rejects the key. A goal change is a preference, not activity: it never advances `updatedAt`. Clients show goal UI only when `conversationGoal: 1` is advertised, so an absent field on an older daemon means "unsupported", and on a supporting daemon means "unset".
 - **Live-turn preview overlay ([intent-hq/intentd#786](https://github.com/intent-hq/intentd/pull/786), read-path):** while a turn is in flight (`isResponding` with the live-turn slot held by a busy worker — orphan slots without a busy worker are ignored, the same gate as the STAB-125 turn-liveness reads below), `lastAgentResponse`/`digest` are derived from the live turn's streamed-so-far text (the same extraction that derives the persisted-preview fields from the newest assistant row) instead of the persisted last-assistant-message preview, with a **per-field** fallback: a turn that has streamed no text (or no digest) yet keeps the persisted value, so an early turn never blanks the previous preview.
   Mid-turn `lastAgentResponse` is additionally **clipped at the last completed newline** ([intent-hq/intentd#795](https://github.com/intent-hq/intentd/pull/795)) — the still-streaming trailing partial line is excluded, and a turn with no completed line yet keeps the persisted value (same per-field fallback); `digest` derives from the **unclipped** text, since its capture requires the closing tag (an unclosed opener never leaks).
   Terminal `agent:stream:end` and persisted previews are unclipped (§7).
@@ -1405,6 +1407,166 @@ agent's live work for both direct user retirement and MCP self-retirement:
   re-arms with `ws.agent.watch`). Restore is likewise silent for the workspace `unread`
   state — no stored-flag write, no `workspace:attention-changed`; reads re-derive (see
   the `agent.restore` row above).
+
+#### Conversation goal
+
+A user can pin one goal to a conversation. The daemon stores it on the agent session,
+shows it to the agent on every turn, and serves it to every client. Exact integer
+`client.hello.server.capabilities.conversationGoal: 1` (also on `system.capabilities`)
+advertises the whole contract below. Clients send `interpretCommands`, offer `/goal`
+and show goal UI only when it is present. Older daemons omit it, ignore
+`interpretCommands`, and deliver `/goal …` as plain text.
+
+**Storage.** Migration-backed column on the agent session (`agent_session.goal`, NULL
+when unset). The value survives app and daemon restart, tab reopen, provider session
+recreation, and remote-machine placement. It is served as `goal` on `AgentLite` and
+the `agent.getSession` session form, omitted when unset (see the `goal` row field
+above). The write is a narrow preference write: it does not advance `updatedAt`, and a
+concurrent full-row session write cannot clobber it.
+
+**`/goal` command recognition.** Only `agent.sendMessage` and `agent.queueMessage`
+requests with top-level `interpretCommands: true` are parsed. The request is a command
+when all of these are true:
+
+1. `content`, trimmed of leading and trailing whitespace, is exactly `/goal`, or starts
+   with `/goal` followed by whitespace. Case-sensitive: `/Goal`, `/goals`, `/goal:` and
+   `please /goal x` are ordinary messages. "Whitespace" is the Unicode `White_Space`
+   property (Rust `char::is_whitespace`) everywhere in this section.
+2. `messageMetadata` is absent, `null`, or an object with no `type` key. Other keys
+   (for example the desktop's `mentionTokens`) do not stop recognition and are dropped
+   with the command. Typed metadata — `question_answers`, wizard submissions and every
+   other `type` — is delivered as text and resolves pending questions as before.
+
+The statement is everything after the first whitespace, trimmed, newlines kept.
+
+**The `command` field decides.** A client may guess from a leading `/goal` token to skip
+its optimistic bubble, but only the result decides: a result with `command` was a
+command; a result without it was an ordinary delivery, and the client shows the user
+row from `messageId` / `queuedMessage` / `agent:message` as usual.
+
+**Other send params on a command are ignored.** `noteIds`, `contextReferences`,
+`stdinContext`, `workspaceContext`, `priority`, `model`, `messageId`,
+`userAppMessageId`, `assistantMessageId` and `assistantAppMessageId` have no effect:
+a command never switches the model, never merges into or absorbs a queue entry
+([submission correlation](#submission-correlation-and-optimistic-display-additive-extension)),
+and returns no `submissionIds` or `recoverySources`. Commands are not deduplicated by
+`messageId`: a client retry runs the command again (a repeated set answers `unchanged`
+with a new notice row).
+Everything else — no `interpretCommands`, `agent.sendQueuedMessageNow` /
+`sendQueuedMessagesNow`, entries already in a queue, `agent.editAndRegenerate`,
+`agent.sendToTask`, `agent.wakeOrCreate`, `ws.agent.send` and every other
+automatic-origin delivery — is never parsed and delivers as text. One agent cannot set
+another agent's goal.
+
+A recognized command runs at the RPC seam, before queueing, attention retirement,
+archived-workspace revive or turn start. It persists no user row, sends nothing to the
+provider, starts and interrupts no turn, and enqueues nothing (on `agent.queueMessage`
+while the agent is busy, the running turn continues and the goal applies from the next
+turn). A command with a non-empty `imageBlocks` or `fileBlocks` is `-32602`
+(`/goal does not take attachments`, `data: { code: "goal-attachments-not-allowed" }`)
+with no state change. A statement over 1,000 Unicode scalar values (after trimming) is
+`-32602` (`goal is too long (max 1000 characters)`,
+`data: { code: "goal-too-long", maxLength: 1000 }`) with no state change. Clients branch
+on `data.code`, not the message, and rely on the daemon for the length check.
+
+| Content | Stored goal | Action | Notice text |
+|---|---|---|---|
+| `/goal <text>`, none set | `<text>` | `set` | `Goal set: <text>` |
+| `/goal <text>`, a different goal set | `<text>` | `updated` | `Goal updated: <text>` |
+| `/goal <text>`, same text set | unchanged, no write | `unchanged` | `Goal unchanged: <text>` |
+| `/goal`, goal set | unchanged | `shown` | `Current goal: <goal>` |
+| `/goal`, none set | unchanged | `shown` | `No goal set. Send /goal followed by what done looks like.` |
+
+Result (both methods):
+
+```jsonc
+{
+  "success": true,
+  "queued": false,
+  "command": {
+    "name": "goal",
+    "action": "set" | "updated" | "unchanged" | "shown",
+    "goal": "string" | null,      // the goal after the command
+    "noticeMessageId"?: "string"  // id of the persisted notice row
+  }
+}
+```
+
+`noticeMessageId` is absent when the goal write succeeded but the notice row could not
+be written (the daemon logs it). The call still succeeds and `goal` is the stored state.
+
+The result has no `messageId`, `queuedMessage` or `turnId`. Clients do not create an
+optimistic user bubble, launch animation or thinking state for a command send, and
+clear the composer only on success.
+
+**`agent.setGoal`.** `{ agentId, workspaceId?, goal: string | null }` →
+`{ action, goal, noticeMessageId? }`. Used by the goal strip's Edit and Remove. The goal
+is trimmed; empty or `null` removes it. Over 1,000 Unicode scalar values is `-32602`
+with `data.code: "goal-too-long"`. An unknown or deleted agent is `-32602`
+(`agent not found`); a retired agent is `-32602` (`agent is retired`,
+`data: { code: "agent-retired" }`), and a `/goal` command to a retired agent fails the
+same way. In a retired workspace both are `-32602` with
+`data: { code: "workspace-retired" }`: a `/goal` command never revives a workspace, even
+on `agent.sendMessage`, which otherwise does. The action is computed and written atomically against the stored value, so
+two racing writers cannot both answer `set`.
+
+| Request | Action | Write, event, notice row |
+|---|---|---|
+| Text, none set | `set` | yes |
+| Text, different goal set | `updated` | yes |
+| Same text as stored | `unchanged` | none; no `noticeMessageId` |
+| Empty or `null`, goal set | `cleared` | yes |
+| Empty or `null`, none set | `unchanged` | none; no `noticeMessageId` |
+
+Caller rules: open to the same callers as `agent.sendMessage` (owner, host members and
+workspace collaborators, guests included). The Assistant's generic `ws.rpc` path refuses
+it (`-32003`, `data.code: "forbidden-to-agent"`, `AGENT_FORBIDDEN_METHODS`), and there is
+no `ws.agent.*` binding. `agent.update` rejects `goal` like any key outside its
+whitelist. The refusal covers every agent-origin route, including `ws.rpc` calls
+relayed to another backend. Likewise, `interpretCommands` is ignored on an
+`agent.sendMessage` / `agent.queueMessage` that arrives through `ws.rpc` (relayed or
+not), so an agent cannot set a goal with a `/goal` message either.
+
+**Notice rows.** Every `/goal` command, and every `agent.setGoal` that writes, persists
+one transcript-only row: `role: "system"`, one text block with the notice text above
+(`Goal removed.` for `cleared`), and
+`metadata = { "type": "goal_command", "action": "set" | "updated" | "unchanged" | "cleared" | "shown", "goal": string | null, "fromPrincipalId"?: string }`.
+`fromPrincipalId` is stamped when the caller is a known principal in a shared workspace.
+The row follows the `model_changed` rendering contract: never replayed to providers,
+delivered on the normal `agent:message` event. Clients that do not know the type show
+the text. `noticeMessageId` is the row's `id` on `agent:message` and
+`agent.getConversation`. The RPC result, the `agent:message` and the `agent:updated`
+may arrive in any order; clients match by id. The row is written outside any turn and
+has no other effect: it does not
+advance `updatedAt`, mark the agent or workspace unread, move the sender's
+new-messages divider, send push or desktop notifications, or change attention state.
+
+**Events.** A goal write emits `agent:updated` with data `{ agentId, goal }`
+(`goal: null` on remove, §6.5). `unchanged` and `shown` emit no `agent:updated`. A
+client that merges `agent:updated` as a patch deletes its `goal` on `null`. §6.9
+collection `updated` deltas carry full rows, so a row without `goal` replaces the
+previous one as unset.
+
+**Lifecycle.** The goal stays on the session through `agent.retire` / `agent.restore`
+and is deleted with the agent. It is not copied by `agent.importSession` or into any
+new agent.
+
+**No side effects.** Setting, replacing, removing or showing a goal does not wake the
+agent, start or interrupt a turn, or change permission policy, model, effort, status,
+`updatedAt`, unread, pending question or attention state, and does not revive an
+archived workspace.
+
+**Agent prompt.** While a goal is set, every outbound turn prompt — user messages,
+queued flushes, hook, PR-monitor, watch and event wakes, scheduled status requests —
+carries one goal block directly after the specialist Role Reminder; an agent without
+a Role Reminder gets it at the same position, before the turn body (intentd goldens
+pin the order relative to the repository-guidance layer). The block is
+rendered with the latest prompt-harness wording, also for sessions pinned to an older
+harness version. The goal text is passed verbatim (newlines kept) inside a tagged block
+whose closing tag is escaped in the goal, so the text cannot end the block early. The
+block says that newer explicit user instructions take precedence. It is never stored in
+the user's message. The head daemon assembles the prompt for remote-machine agents, so
+the same block reaches them. The wording is harness-owned, not a wire contract.
 
 #### Paged agent lists and queues
 

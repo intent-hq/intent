@@ -51,6 +51,15 @@ eligibility with false flags on draining overlays. Enable queue optimism only fo
 `1`; missing, malformed and unknown versions use confirmed queue display.
 The numeric protocol version and a partially present field are not support tests.
 
+**Conversation goal.** Exact integer `server.capabilities.conversationGoal: 1`, also
+returned by `system.capabilities`, advertises the complete
+[conversation goal contract](./agents.md#conversation-goal): the `goal` session field,
+`agent.setGoal`, the `interpretCommands` send param and `goal_command` notice rows.
+Clients send `interpretCommands: true`, offer `/goal` and show the goal strip only when
+it is present. Missing, malformed or unknown values keep today's behavior: `/goal …` is
+sent as plain text and no goal UI is shown. It is support discovery, not caller
+authority.
+
 **Direct agent retirement (10.10).** `server.capabilities.agentRetire: 1` advertises
 support for [§5.5 `agent.retire`](./agents.md#direct-user-retirement), including stopping
 a running target and cancelling its wake sources. Clients enable the retirement action
