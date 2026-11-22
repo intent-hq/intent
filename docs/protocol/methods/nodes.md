@@ -437,6 +437,13 @@ row stays until removed.
 connections only and emitted on add, remove, state changes and new capability
 reports.
 
+`capabilities.capacity.runningAgents` is the machine-wide load (its local
+agents and every backend's remote agents), while `runningAgents` counts only
+this backend's agents there. A machine pushes a new report when that count
+changes ([load pushed on change](../node-link.md#capabilities-report)), so
+while it is connected the backend emits `remoteMachine:changed` within about
+2 seconds of an agent starting or stopping on it.
+
 ##### Machine model lookup
 
 *(Experimental, additive, docs lead implementation.)*
@@ -461,10 +468,15 @@ arguments one to one onto the params:
 
 | Method | Params | Result |
 | --- | --- | --- |
-| remoteMachines.models | nodeId?, provider?, model? (each a non-empty string, exact match) | `{ machines: MachineModelsRow[] }` (only `MachineModels` without `machineOrder: 1`); reads the cached reports only (no connect, no refresh); an unknown `nodeId` fails `-32602` `machine-unknown` |
+| remoteMachines.models | nodeId?, provider?, model? (each a non-empty string, exact match) | `{ machines: MachineModelsRow[], local?: MachineLoad }` (only `MachineModels` without `machineOrder: 1`); reads the cached reports only (no connect, no refresh); an unknown `nodeId` fails `-32602` `machine-unknown` |
 
 ```ts
 type MachineModelsRow = MachineModels | CloudEntryModels;
+
+interface MachineLoad {
+  runningAgents: number;            // every agent counted against the cap: local agents and every backend's remote agents
+  agentCap: number;                 // the effective agents.maxConcurrent
+}
 
 interface CloudEntryModels {        // machineOrder: 1 only
   kind: "cloud";
@@ -485,7 +497,8 @@ interface MachineModels {
   state: "connected" | "disconnected" | "unreachable" | "revoked" | "update-required";
   lastConnectedAt?: string;
   observedAt?: string;              // when the report below was taken; absent before the first report
-  runningAgents: number;
+  runningAgents: number;            // this backend's live agents on the machine
+  load?: MachineLoad;               // machine-wide, from the report; only while connected
   providers: {
     id: string;
     status: "signed-in" | "signed-out" | "unknown" | "auth-failed" | "cli-missing" | "prerequisite-missing";
@@ -520,9 +533,25 @@ interface MachineModels {
    ([capabilities report](../node-link.md#capabilities-report)) without
    `visible`. Like that report, they list only providers enabled on the machine;
    `disabledProviders` names the others.
-4. **Never exposed:** routes (`hosts`, `port`, `tcAddress`), fingerprints,
-   credentials, `nodeProtocol`, `capacity` and other backends.
-5. **Staleness.** A report can be up to 1 hour old before placement refreshes it.
+4. **Load.** `load` is the machine-wide count from the report's `capacity`
+   (`runningAgents`, `agentCap`; never the memory figures): every agent
+   counted against the machine's cap, its own local agents and other
+   backends' included, while the row's `runningAgents` counts only this
+   backend's agents there. The machine pushes its report when the count
+   changes ([load pushed on change](../node-link.md#capabilities-report)),
+   so it is current within about 2 seconds while the machine is connected.
+   `load` is absent while the machine is not connected (the last count says
+   nothing about now) and before its first report. Cloud rows have no
+   `load`: each agent there gets a new sandbox. The top-level `local` is this
+   backend's own load, the same two numbers from its process registry; it is
+   present only when the backend runs agents itself (absent in
+   [orchestrator mode](#orchestrator-mode)). Agents use these to pick the
+   least-loaded machine; placement itself still applies only the
+   [capacity check](../node-link.md#capabilities-report) at launch.
+5. **Never exposed:** routes (`hosts`, `port`, `tcAddress`), fingerprints,
+   credentials, `nodeProtocol`, the memory figures of `capacity` and other
+   backends' identities.
+6. **Staleness.** A report can be up to 1 hour old before placement refreshes it.
    Callers that need the live state call `remoteMachines.refresh` first; admission
    rechecks everything at launch whatever this method returned.
 
