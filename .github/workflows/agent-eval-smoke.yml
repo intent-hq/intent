@@ -59,7 +59,7 @@ jobs:
       - name: Report
         if: always()
         run: cat "$RUNNER_TEMP/agent-eval/report.md" >> "$GITHUB_STEP_SUMMARY" || true
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: agent-eval-smoke-report
