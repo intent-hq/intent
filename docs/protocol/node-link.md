@@ -2040,6 +2040,16 @@ there, so they need a new version. A daemon that implements it offers
 `{ min: 7, max: 19 }` on both sides. A machine on a lower link cannot be a
 home (`machine-update-required`).
 
+**nodeProtocol 20** is protocol 19 plus the exit reason of a script or
+terminal: optional `exitReason` on `scriptExited` and `ptyExited`
+(`"memoryLimit"` when the machine's workload memory limit killed a process of
+the run and the run did not succeed, intent-hq/intent#9809). Both bodies are
+closed, so an older peer would reject the member: a machine sends it only on
+a link that negotiated 20 and drops it otherwise. The backend shows it as the
+run's `exitReason` (script runtime and `lastRun`, `terminal:exit`,
+`host:exec:exit` of a home exec). A daemon that implements it offers
+`{ min: 7, max: 20 }` on both sides.
+
 ### Frames
 
 Each WebSocket binary message on `/node/link` is one JSON frame of at most
@@ -2067,7 +2077,7 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `scriptStop` | backend → machine | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId` |
 | `scriptStarted` | machine → backend | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId`, `pid` |
 | `scriptOutput` | machine → backend | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId`, `seq`, `data` |
-| `scriptExited` | machine → backend | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId`, `exitCode?`, `error?` |
+| `scriptExited` | machine → backend | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId`, `exitCode?`, `error?`; `exitReason?` protocol 20 or later |
 | `setupOutput` | machine → backend | script | Protocol 10 or later: `agentId`, `seq`, `data`; see [setup output](#setup-status-and-output) |
 | `skills` | backend → machine | control | Protocol 12 or later: `queryId` (UUID); see [skills on the machine](#skills-on-the-machine-nodeprotocol-12) |
 | `skillsReply` | machine → backend | control | Protocol 12 or later: `queryId`, `skills: MachineSkill[]` |
@@ -4195,7 +4205,7 @@ interface PtyResizeFrame { type: "ptyResize"; terminalId: string; cols: number; 
 interface PtyKillFrame   { type: "ptyKill";   terminalId: string }                 // control lane
 interface PtyAckFrame    { type: "ptyAck";    terminalId: string; seq: number }    // control lane, backend → machine
 interface PtyOutputFrame { type: "ptyOutput"; terminalId: string; seq: number; data: string; stream?: "stdout" | "stderr" } // script lane; base64
-interface PtyExitedFrame { type: "ptyExited"; terminalId: string; exitCode?: number; error?: string } // script lane
+interface PtyExitedFrame { type: "ptyExited"; terminalId: string; exitCode?: number; error?: string; exitReason?: "memoryLimit" } // script lane; exitReason protocol 20
 ```
 
 1. **One process per terminal.** `ptyOpen` starts the user's shell (or
@@ -4509,6 +4519,7 @@ interface ScriptExitedFrame  {
   type: "scriptExited"; agentId: string; scriptId: string; spawnId: string;
   exitCode?: number;                       // absent only together with error
   error?: string;                          // "<code>: <detail>"
+  exitReason?: "memoryLimit";              // protocol 20 or later
 }
 ```
 
