@@ -51,10 +51,18 @@ Clients read `supportsProfiles` per catalog row and never hard-code the list.
 | `auggie` | `AUGMENT_SESSION_AUTH` | none | none (the session JSON beats a stored login) |
 | `cursor` | `CURSOR_API_KEY`, `CURSOR_AUTH_TOKEN` | none | [Cursor API key](#cursor-api-key) |
 
-`droid` keeps its existing gate: it has a catalog row, and therefore profiles, only
-when the daemon enables Factory Droid. A base that is not in the catalog accepts no
-profile writes (`base-provider-unsupported`). Clients
-read the reference from `ProviderProfile.providerRef` and never compose it from a name.
+`droid` keeps its existing gate: its catalog row reports `supportsProfiles: true` (a
+capability, like the rest of the row) but stays `visible: false`, so clients offer no
+Droid profiles, unless the daemon enables Factory Droid.
+
+The credential list of each row is also what a single-credential profile unsets so
+that a value inherited from the daemon or the login shell cannot override it. The
+launch-only steps apply to named profiles only (`<base>@<id>`); a Default
+configuration's overrides run as saved. "Does not set `X`" below means the profile has
+no `set` or `unset` entry for `X` (compared ignoring ASCII case).
+
+Clients read the reference from `ProviderProfile.providerRef` and never compose it from
+a name.
 
 The reference travels in the **existing provider fields**. No parallel
 `profileId` field exists:
@@ -456,7 +464,7 @@ break the shared installation. The `env-key-reserved` message names the reason. 
 | `HOME`, `USERPROFILE` | Read for executable discovery and as the source home for account isolation; not replaced at launch. Use the base's account folder to select an account. |
 | `npm_config_workspace*`, `npm_workspace*`, `npm_config_include_workspace_root` | Removed from adapter bootstrap launches |
 | `INTENT_*`, `INTENTD_*` | Intent session and bootstrap wiring |
-| `GIT_CONFIG_PARAMETERS`, `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` | Intent sets this at launch (session wiring and commit identity). Reserved for Codex and Claude Code. |
+| `GIT_CONFIG_PARAMETERS`, `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` | Intent sets this at launch (session wiring and commit identity). Reserved for every base. |
 | `INITIAL_AGENT_MODE` | Intent sets this at launch (session wiring and commit identity). Reserved for Codex only; Claude Code profiles may set it. |
 | `AGENT_CLI_CREDENTIAL_STORE` | Cursor only: Intent sets it for a [Cursor API key](#cursor-api-key) profile. |
 
@@ -486,22 +494,37 @@ replaced. A local `host.providerAuthStatus` probe reports such a profile
 
 <a id="grok-api-key"></a>**Grok API key.** *(Additive.)* Grok uses `XAI_API_KEY` only
 when no Grok login is saved, and its `GROK_CONFIG` overlay cannot change that order. A
-Grok profile that sets a non-empty `XAI_API_KEY` and no `GROK_HOME` therefore runs with
-`GROK_HOME=~/.intent/grok-api-key/<profileId>-<key digest>` on the host that runs the
-provider, with the digest rule above. The rules of the Codex home apply: launch-only,
-never saved, not an account folder, kept across launches, and a new home for a new key.
-The user's own `~/.grok` (login, config, skills) is not used by that profile. Clients save
-this kind with `XAI_API_KEY` set and nothing unset.
+Grok profile that sets a non-empty `XAI_API_KEY` and does not set `GROK_HOME` therefore
+runs with `GROK_HOME=~/.intent/grok-api-key/<profileId>-<key digest>` on the host that
+runs the provider, with the digest rule above. Like the Codex home it is launch-only,
+never saved, not an account folder, kept across launches, and new for a new key; unlike
+Codex there is no `DEFAULT_AUTH_REQUEST`, because Grok reads the key itself. The user's
+own `~/.grok` (login, config, skills) is not used by that profile. Clients save this kind
+with `XAI_API_KEY` set and nothing unset.
 
 <a id="cursor-api-key"></a>**Cursor API key.** *(Additive.)* Cursor uses
-`CURSOR_API_KEY` only when no Cursor login is stored (in a file on Linux and Windows,
-in the Keychain on macOS). A Cursor profile that sets a non-empty `CURSOR_API_KEY` and
-no `CURSOR_CONFIG_DIR` therefore runs with `AGENT_CLI_CREDENTIAL_STORE=memory`, so the
-CLI reads no stored login, and with
-`CURSOR_CONFIG_DIR=~/.intent/cursor-api-key/<profileId>-<key digest>`, so a model
-choice is not saved as the user's own Cursor default. The rules of the Codex home apply.
-The key is never passed on the command line. Clients save this kind with
-`CURSOR_API_KEY` set and `CURSOR_AUTH_TOKEN` unset.
+`CURSOR_API_KEY` only when no Cursor login is stored, and the login is not kept in
+`CURSOR_CONFIG_DIR` (it is in a file under `$XDG_CONFIG_HOME/cursor` on Linux and in the
+Keychain on macOS). So:
+
+- A Cursor profile that sets a non-empty `CURSOR_API_KEY` or `CURSOR_AUTH_TOKEN` runs with
+  `AGENT_CLI_CREDENTIAL_STORE=memory`, whatever else it sets: the CLI reads no stored
+  login.
+- One that sets a non-empty `CURSOR_API_KEY` and does not set `CURSOR_CONFIG_DIR` also
+  runs with `CURSOR_CONFIG_DIR=~/.intent/cursor-api-key/<profileId>-<key digest>`, so a
+  model choice is not saved as the user's own Cursor default. This folder follows the
+  Grok home rules.
+
+Both are launch-only and never saved. The key is never passed on the command line.
+Clients save this kind with `CURSOR_API_KEY` set and `CURSOR_AUTH_TOKEN` unset.
+
+<a id="key-profile-auth-status"></a>**Auth status of the new bases' profiles.**
+`host.providerAuthStatus` probes a profile with the overlay its launches use (launch-only
+steps included), on the base's own probe: `grok models` (a Grok key profile reports
+`authenticated: true` once the key is present: Grok does not check it there),
+`cursor-agent models` (Cursor checks the key), the Droid ACP probe, and `auggie token
+print` (true once the session JSON is present). Only a test prompt proves that a key
+works; clients run one after saving where the base supports it (`supportsTestPrompt`).
 
 **Delete blocking.** `delete` refuses while a saved setting explicitly selects the
 profile. It returns `-32602` with `data.code: "provider-profile-in-use"` and
@@ -840,7 +863,11 @@ are tracked separately, never per model.
 ##### Quick actions
 
 `agent.completeOnce` ([§5.32](agent-aux.md)) fails over on its ACP route on the same
-terms as a turn. The auggie route has no profiles and does not fail over.
+terms as a turn. The auggie route (`auggie --print`) does not fail over; an `auggie@…`
+reference runs it with that profile's `AUGMENT_SESSION_AUTH`, locally and on a machine.
+`agent.enhancePrompt` runs when the effective default provider is `auggie` or an
+`auggie@…` profile, with that profile's session (on an orchestrator, the machine's
+own Auggie sign-in).
 
 - **Candidates.** The reference the call resolves to (its *configured* reference)
   plays the part of home. The rotation, choice and limits are those of
@@ -919,8 +946,9 @@ type DefaultRemoteLaunch =
 - <a id="default-credential-auto-mark"></a>**Credential auto-mark.** An
   `updateDefault` that **adds a credential** marks the Default in the same commit,
   so the credential is used on remote machines without a second step. A
-  credential is a `kind: "set"` entry for one of the credentials in
-  [Profile-capable bases](#profile-capable-bases) (compared ignoring ASCII case). It is added
+  credential is a `kind: "set"` entry for any credential listed in
+  [Profile-capable bases](#profile-capable-bases), whatever its row (compared ignoring
+  ASCII case). It is added
   when the saved environment did not already set that key; changing the value of a
   key that is already set, or `keep`, adds nothing.
   - An explicit `remoteCompatible` in the same write wins.
@@ -1142,6 +1170,14 @@ on write.
 A daemon that advertises `supportsProfiles` but predates per-profile Fast mode
 rejects a qualified `providers.fastMode` key with `-32602`; the whole update fails and
 the stored map is unchanged, so clients surface the error rather than retrying.
+
+Clients detect the [profile-capable bases](#profile-capable-bases) by `supportsProfiles`
+per row, so an older daemon (Codex and Claude Code only) never gets a Grok, Droid, Auggie
+or Cursor profile: its catalog reports `false` for them and it rejects such a write with
+`base-provider-unsupported`. An older client shows the new bases' profiles as rows with
+the raw editor only. A machine that predates the Grok and Cursor launch-only steps runs
+those profiles' environment as sent, so a login saved on that machine can win over the
+key until the machine is updated; Droid and Auggie profiles need no step.
 
 Clients detect Default configuration overrides by the presence of `defaults` on the
 `providers.profiles.list` result. When it is absent, a client may still offer the
