@@ -866,8 +866,11 @@ are tracked separately, never per model.
 terms as a turn. The auggie route (`auggie --print`) does not fail over; an `auggie@…`
 reference runs it with that profile's `AUGMENT_SESSION_AUTH`, locally and on a machine.
 `agent.enhancePrompt` runs when the effective default provider is `auggie` or an
-`auggie@…` profile, with that profile's session (on an orchestrator, the machine's
-own Auggie sign-in).
+`auggie@…` profile. It uses that configuration's environment: locally, and on an
+orchestrator by sending it as the `oneShot` profile environment, which the machine
+applies (see [node link](../node-link.md)). The machine's own Auggie sign-in applies
+only when no environment is sent: a bare `auggie` without saved overrides, or a
+Default that is not marked for remote machines.
 
 - **Candidates.** The reference the call resolves to (its *configured* reference)
   plays the part of home. The rotation, choice and limits are those of
