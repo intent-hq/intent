@@ -4,8 +4,10 @@
 # cloudlands-fe's `pnpm run verify:changed` (the frontend counterpart of
 # `make test-changed`). It runs the real recipe from a copy of the Makefile in
 # a throwaway checkout whose frontend is a stub `corepack` recording its argv,
-# and pins how BASE / DRY_RUN / RESUME / NO_FAIL_FAST / SKIP_CT_FULL map onto verify:changed flags plus that a failing
-# run fails make with the script's own code. The selection itself is
+# and pins how BASE / DRY_RUN / RESUME / NO_FAIL_FAST / SKIP_CT_FULL map onto verify:changed flags, that a failing
+# run fails make with the script's own code, and that the frontend receives
+# TRANSFER_SELECTION_FIXTURE_ROOT even when FE_DIR is a worktree outside the
+# monorepo (its own ../../../docs default only resolves inside packages/). The selection itself is
 # cloudlands-fe's scripts/verify-changed.test.ts.
 
 set -euo pipefail
@@ -13,6 +15,7 @@ set -euo pipefail
 # The caller's environment must not steer the recipe under test (a shell with
 # BASE=HEAD, DRY_RUN=1, RESUME=1, NO_FAIL_FAST=1 or SKIP_CT_FULL=1 exported would change every expected argv).
 unset BASE DRY_RUN RESUME NO_FAIL_FAST SKIP_CT_FULL FE_DIR MAKEFLAGS MFLAGS
+unset TRANSFER_SELECTION_FIXTURE_ROOT
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 temp_dir=$(cd "$(mktemp -d)" && pwd -P)
@@ -46,10 +49,15 @@ printf 'bootstrap: %s\n' "$*" >>"$FE_TEST_LOG"
 SH
 chmod +x "$mk/scripts/bootstrap-dev-host.sh"
 
-# Stub corepack: logs "<cwd>" then one argv word per line, exits COREPACK_STUB_EXIT.
+# Stub corepack: logs "<cwd>", the fixture root it inherited, then one argv
+# word per line, and exits COREPACK_STUB_EXIT.
 cat >"$bin_dir/corepack" <<'SH'
 #!/usr/bin/env bash
-{ echo "corepack: $PWD"; printf '%s\n' "$@"; } >>"$FE_TEST_LOG"
+{
+  echo "corepack: $PWD"
+  echo "fixtures: ${TRANSFER_SELECTION_FIXTURE_ROOT-<unset>}"
+  printf '%s\n' "$@"
+} >>"$FE_TEST_LOG"
 exit "${COREPACK_STUB_EXIT:-0}"
 SH
 chmod +x "$bin_dir/corepack"
@@ -68,9 +76,14 @@ run_make() {
   log=$(<"$temp_dir/log")
 }
 
-# $@ = the flags expected after `verify:changed --`.
+canonical_fixtures="$mk/docs/protocol/fixtures/transfer-selection"
+
+# $@ = the flags expected after `verify:changed --`. expect_fe / expect_fixtures
+# name the frontend directory and the fixture root the stub should see.
+expect_fe=$fe
+expect_fixtures=$canonical_fixtures
 expect_verify_argv() {
-  local expected="bootstrap: --check-frontend"$'\n'"corepack: $fe"$'\n'"pnpm"$'\n'"run"$'\n'"verify:changed"$'\n'"--"
+  local expected="bootstrap: --check-frontend"$'\n'"corepack: $expect_fe"$'\n'"fixtures: $expect_fixtures"$'\n'"pnpm"$'\n'"run"$'\n'"verify:changed"$'\n'"--"
   [[ $# -eq 0 ]] || expected+=$'\n'"$(printf '%s\n' "$@")"
   [[ "$log" == "$expected" ]] || fail "$case_name: stub log was"$'\n'"$log"$'\n'"expected"$'\n'"$expected"
 }
@@ -180,6 +193,42 @@ COREPACK_STUB_EXIT=7 run_make DRY_RUN=1
 [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0 after verify:changed exited 7"
 [[ "$stderr" == *"fe-verify-changed] Error 7"* ]] \
   || fail "$case_name: make did not report the script's code; stderr was"$'\n'"$stderr"
+
+case_name="FE_DIR outside the monorepo still gets the monorepo's fixture root"
+outside="$temp_dir/fe-worktree"
+mkdir -p "$outside/node_modules/.pnpm"
+printf 'gitdir: elsewhere\n' >"$outside/.git"
+cp "$fe/pnpm-lock.yaml" "$outside/pnpm-lock.yaml"
+cp "$fe/pnpm-lock.yaml" "$outside/node_modules/.pnpm/lock.yaml"
+expect_fe=$outside
+run_make "FE_DIR=$outside" DRY_RUN=1
+expect_ok
+expect_verify_argv --resolved-plan
+
+case_name="an exported fixture root wins over the default"
+expect_fixtures="$temp_dir/my fixtures"
+TRANSFER_SELECTION_FIXTURE_ROOT=$expect_fixtures run_make "FE_DIR=$outside"
+expect_ok
+expect_verify_argv
+
+case_name="a fixture root on the make command line wins over the default"
+expect_fixtures="$temp_dir/cli fixtures"
+run_make "FE_DIR=$outside" "TRANSFER_SELECTION_FIXTURE_ROOT=$expect_fixtures"
+expect_ok
+expect_verify_argv
+
+case_name="an exported empty fixture root is passed through for the frontend to reject"
+expect_fixtures=
+TRANSFER_SELECTION_FIXTURE_ROOT='' run_make "FE_DIR=$outside"
+expect_ok
+expect_verify_argv
+
+case_name="an empty fixture root on the make command line is passed through"
+run_make "FE_DIR=$outside" "TRANSFER_SELECTION_FIXTURE_ROOT="
+expect_ok
+expect_verify_argv
+expect_fe=$fe
+expect_fixtures=$canonical_fixtures
 
 case_name="make help lists the target"
 "$make_bin" -C "$mk" --no-print-directory help >"$temp_dir/help" 2>&1 </dev/null \
