@@ -341,6 +341,28 @@ When the aggregate agent memory budget is on (`agents.memoryBudgetMb` > 0, §5.1
 - `queuedSpawns` counts the agent spawns currently parked in the admission wait queue — whether they queued on the concurrency slot cap or on the memory budget. `0` means nothing is waiting.
 - Unlike the child-tree fields above (always present, `null` until sampled), all three follow the **presence-detection convention**: when the budget is off (`agents.memoryBudgetMb = 0`, the default) they are **absent** — never `null`. Reading them never perturbs admission state. Additive response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version.
 
+#### `system.status` — workload memory containment (additive)
+
+On Linux the daemon runs every *workload* — agent provider CLIs and their adapter chains, MCP servers, the Unsloth model server, `ws.script` runs, setup and archive scripts, terminals and `host.exec` calls — in one shared cgroup v2 box with a memory limit, so a runaway workload is OOM-killed inside it while the daemon keeps running ([intent-hq/intent#9809](https://github.com/intent-hq/intent/issues/9809)). Each workload has its own leaf cgroup under the box. `system.status` reports it as one object:
+
+```jsonc
+{
+  "workloadContainment": {
+    "mode": "cgroup",                 // "cgroup" | "oomScoreAdj" | "none"
+    "reason": "…",                    // why the cgroup box is not active (absent in cgroup mode)
+    "memoryMaxBytes": 3271557120,     // the box's memory.max (cgroup mode only)
+    "memoryCurrentBytes": 734003200,  // the box's memory.current (cgroup mode only)
+    "oomKills": 1                     // OOM kills inside the box since it was created (cgroup mode only)
+  }
+  // ...existing status fields
+}
+```
+
+- `mode: "cgroup"` — the box is active. Its ceiling is `agents.workloadMemoryMaxMb` (§5.12), or by default the host's memory (or a lower cgroup limit above the daemon, e.g. a container's) less a daemon reserve (15 % of it, the reserve clamped to 768 MiB–2 GiB). The box also gets `memory.swap.max = 0` where swap accounting exists, so workloads are killed at the ceiling instead of thrashing swap. The daemon needs a writable, delegated cgroup v2: it runs as root, or in its own systemd unit with `Delegate=memory pids`.
+- `mode: "oomScoreAdj"` — Linux without a usable cgroup (not delegated, shared with other processes, read-only), or `agents.workloadMemoryMaxMb = 0`. Workloads run unboxed, but their root processes start with a raised `oom_score_adj` (scripts, terminals and `host.exec` 800; agents, adapters, MCP and model servers 500) so the kernel kills them before the daemon. `reason` says why.
+- `mode: "none"` — macOS and Windows; `reason` says so.
+- Administrator-only (not in the collaborator subset). Presence-detected: absent from older daemons; inside the object, unset fields are omitted, never `null`. Reading it costs two small cgroup file reads.
+
 #### `system.status` — workspaces-root disk fields (additive)
 
 The `system.status` result additionally reports the disk space of the **volume containing the daemon's resolved workspaces root** — the parent directory `workspace.create` provisions new checkouts under, resolved with the create path's precedence: startup-pinned `workspaces.root` (`INTENTD_WORKSPACES_DIR`) wins, then a non-empty absolute `workspace.worktreesLocation` setting, then the `~/intent/workspaces` default (resolved once at boot; a `worktreesLocation` change applies on restart) — so a client can warn when workspace provisioning is about to run out of space:

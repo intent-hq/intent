@@ -961,9 +961,52 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
 | Knob | Default | Bounds |
 | --- | --- | --- |
 | `idleReapMinutes` | `10` (new installs; an existing `config.toml` keeps its own value — see above) | How long an idle agent subtree is retained (`0` disables the idle-reap **sweep** — it does not guarantee idle trees survive, since a non-zero `memoryBudgetMb` can still evict them at admission). **The lever for a memory-constrained seat.** |
-| `memoryBudgetMb` | auto: `(RAM − 8 GB) / 2`, min 4 GB (absent key) | Aggregate RSS of the whole child tree, as a soft admission gate on new spawns — binding only while the tree is over budget **and** host available memory is below `HOST_MEMORY_RESERVE_BYTES` (8 GiB + one provisional agent); see the headroom rule below. Absent key (the default) = auto (RAM-derived); explicit `0` = off (preserved for existing config files); positive value = budget in MB. Catalog max is the machine's own physical RAM, capped at 1,024,000 MB. |
+| `memoryBudgetMb` | auto: `(RAM − 8 GB) / 2`, min 4 GB (absent key); small hosts lower it, see below | Aggregate RSS of the whole child tree, as a soft admission gate on new spawns — binding only while the tree is over budget **and** host available memory is below the host reserve (8 GiB + one provisional agent; less on small hosts); see the headroom rule below. Absent key (the default) = auto (RAM-derived); explicit `0` = off (preserved for existing config files); positive value = budget in MB. Catalog max is the machine's own physical RAM, capped at 1,024,000 MB. |
 | `maxConcurrentAdapters` | `6` (on) | Concurrently live ephemeral adapter chains (quick actions, model probes). |
 | `maxConcurrent` | `0` (auto from RAM) | Agent **slots**. Not a memory bound — see the 22× range above. |
+| `workloadMemoryMaxMb` | auto: RAM (or a lower parent cgroup limit) less a daemon reserve (15 % of it, the reserve clamped to 768 MiB–2 GiB; absent key) | Linux only: the hard `memory.max` of the shared cgroup box every workload runs in (below). `0` = no box; positive = MB. |
+
+**Small hosts** ([intent-hq/intent#9809](https://github.com/intent-hq/intent/issues/9809)).
+Below 12 GiB of `MemTotal` (`SMALL_HOST_BYTES`), the auto values above are each
+the **lower** of today's formula and a small-host one, so they can only drop:
+with `smallReserve = clamp(MemTotal / 2, 1 GiB, 8 GiB)`, the slot cap is
+`clamp((MemTotal − smallReserve) / 1 GiB, 2, 100)`, the budget
+`max((MemTotal − smallReserve) / 2, 512 MiB)`, and the host reserve
+`smallReserve + PROVISIONAL_AGENT_BYTES` (`host_memory_reserve_bytes`). A
+3.8 GiB host gets 2 slots, a ~0.95 GiB budget and a ~2.5 GiB reserve; at 12 GiB
+and above (and when RAM is unknown) every value is unchanged.
+
+**Workload containment** ([intent-hq/intent#9809](https://github.com/intent-hq/intent/issues/9809)).
+The knobs above gate *new* spawns; nothing in them bounds a process that is
+already running. On a 4 GB host with no swap, one test run could thrash the VM
+until the daemon, its SQLite pool and every client stalled. So on Linux the
+daemon builds a cgroup v2 hierarchy at startup (`intent_core::workload`):
+`<domain>/{supervisor, daemon, workloads}`, where `domain` is its own cgroup
+(a systemd unit with `Delegate=memory pids`) or `intentd-<hash>` under the root
+cgroup (root in a VM). The sitter moves to `supervisor`, the daemon to
+`daemon`, and `workloads` gets `memory.max` = the ceiling and
+`memory.swap.max = 0`, with `memory.high` left at `max`: without swap, a
+`memory.high` throttle cannot reclaim a runaway's anonymous memory, so it
+stalled the process just under the limit for minutes instead of letting the
+kernel kill it (measured: ~105k `high` events, no kill), and swapping
+workloads would stall the daemon as surely as running out of RAM. Every workload — agent CLIs, adapter chains, MCP and model servers,
+scripts, setup and archive scripts, terminals, `host.exec` — runs in its own
+leaf `workloads/<kind>-<pid>-<seq>`, joined **before it runs any code**: a
+`pre_exec` hook for `std`/`tokio` commands (so a missing program still fails
+the spawn) and the `intentd cgroup-exec` shim for PTY commands, which have no
+`pre_exec`. When the box is full the kernel OOM-kills the largest process
+inside it (`memory.oom.group` stays 0, so a test worker dies, not its agent);
+a script, `host.exec` or terminal killed that way reports
+`exitReason: "memoryLimit"`, and an agent leaf's kill is logged with the
+agent's id. Stopping a script or terminal kills its whole leaf, which also
+catches `setsid` escapees. A sitter respawn starts in `supervisor` and
+re-adopts the hierarchy; startup sweeps empty leaves.
+Where the cgroup is not usable (not delegated, shared with other processes,
+read-only) the daemon falls back to `oom_score_adj` (800 for scripts,
+terminals and `host.exec`, 500 for agent-type roots) and reports why in
+`system.status.workloadContainment`. `workload_spawn_lint` classifies every
+spawn site as workload or internal. The daemon reserve's 768 MiB floor comes
+from a measured 438 MB daemon RSS on a busy host plus OS and page-cache room.
 
 - **The budget binds only when the host is short — a two-condition rule**
   ([intent-hq/intentd#1947](https://github.com/intent-hq/intentd/pull/1947)).
