@@ -38,7 +38,7 @@ endif
 # Export only to the Rust compiler/gate recipes (see COMPACT_TARGETS below):
 # a global export of the default would leak COMPACT=1 into unrelated recipes
 # and into any make they start, where a coverage goal then rejects it.
-COMPACT_TARGETS := gate check clippy check-windows check-macos lint-sources build-intentd test test-intentd test-changed test-select test-stress list-tests coverage-changed coverage-e2e coverage-all
+COMPACT_TARGETS := gate check clippy clippy-postgres check-windows check-macos lint-sources build-intentd test test-intentd test-changed test-select test-stress list-tests coverage-changed coverage-e2e coverage-all
 $(COMPACT_TARGETS): export COMPACT := $(COMPACT)
 ifeq ($(COMPACT),1)
 ifneq ($(filter coverage-%,$(MAKECMDGOALS)),)
@@ -59,7 +59,7 @@ INTENTD_DIR = packages/intentd
 # any recipe runs, as does CI. A recursive make (gate -> test) inherits the
 # wrapper; INNER keeps a caller's own RUSTC_WRAPPER (e.g. sccache) chained.
 PARALLEL_THREADS ?= 8
-PARALLEL_GOALS := all build build-intentd check clippy lint-sources gate test test-intentd test-changed test-select test-stress
+PARALLEL_GOALS := all build build-intentd check clippy clippy-postgres lint-sources gate test test-intentd test-changed test-select test-stress
 PARALLEL_WRAPPER := $(CURDIR)/scripts/rustc-parallel.sh
 ifeq ($(PARALLEL),1)
 ifneq ($(CI)$(GITHUB_ACTIONS),)
@@ -431,7 +431,7 @@ SWEEP_DAYS ?= 3
 GATE_SWEEP_IDLE_HOURS ?= 24
 
 # Parallelism caps shared by the Rust build/test/coverage targets
-# (build-intentd, clippy, test-intentd, test-changed, test-select, test-stress, coverage-changed,
+# (build-intentd, clippy, clippy-postgres, test-intentd, test-changed, test-select, test-stress, coverage-changed,
 # coverage-e2e, coverage-all).
 # Negative values mean "logical CPUs minus N" (clamped to at least 1):
 # cargo-nextest accepts them for test threads (NEXTEST_TEST_THREADS /
@@ -453,13 +453,13 @@ BUILD_JOBS ?= -2
 # `make test NEXTEST_SHOW_PROGRESS=bar CARGO_TERM_PROGRESS_WHEN=auto`.
 # CI already sets CI=true, under which both tools are non-interactive anyway.
 gate test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
-gate check clippy check-windows check-macos lint-sources build-intentd test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
+gate check clippy clippy-postgres check-windows check-macos lint-sources build-intentd test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
 # Pagers on the same targets. A saved-script PTY has no keyboard, so any
 # git/gh step that pages to `less` stalls forever waiting for a keypress.
 # nextest ignores PAGER (only --no-pager / user config disable its paging),
 # hence the explicit --no-pager on list-tests.
-gate check clippy check-windows check-macos lint-sources build-intentd test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
-gate check clippy check-windows check-macos lint-sources build-intentd test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
+gate check clippy clippy-postgres check-windows check-macos lint-sources build-intentd test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
+gate check clippy clippy-postgres check-windows check-macos lint-sources build-intentd test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
 # The gate runner's low-disk sweep also reclaims idle sibling worktrees' trees.
 gate test test-intentd test-changed test-select test-stress: export WORKSPACES_DIR := $(WORKSPACES_DIR)
 
@@ -523,7 +523,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	ensure-fe-toolchain fe-verify-changed \
 	update \
 	build build-intentd build-sidecar gate test test-intentd test-scripts test-scripts-changed mine-ws-usage test-changed test-select test-stress flake-triage list-tests coverage-changed coverage-e2e coverage-all \
-	fmt clippy shear check-windows check-macos lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell lint-workflows bash3 check clean clean-dev \
+	fmt clippy clippy-postgres shear check-windows check-macos lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell lint-workflows bash3 check clean clean-dev \
 	sweep sweep-all sweep-gates seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
 	sandbox-status sandbox-stop sandbox-shot \
@@ -539,7 +539,7 @@ help: ## List documented targets
 	@printf '  Default COMPACT=1: dev/test debug=0 and CARGO_INCREMENTAL=0; COMPACT=0 keeps line-table debug info.\n'
 	@printf '  Caller Rust flags retain precedence. Compact/default resume records are separate; coverage defaults to COMPACT=0.\n'
 	@printf '  See CONTRIBUTING.md for debugging tradeoffs and the component mixed-goal boundary.\n'
-	@printf 'Opt-in faster local compiles: PARALLEL=1 make build (also check, clippy, lint-sources, gate, test, test-changed, test-select, test-stress).\n'
+	@printf 'Opt-in faster local compiles: PARALLEL=1 make build (also check, clippy, clippy-postgres, lint-sources, gate, test, test-changed, test-select, test-stress).\n'
 	@printf '  rustc -Zthreads=N (PARALLEL_THREADS=N, default 8) for intentd crates only; ~1-2 GB more RAM per rustc; builds into target/parallel-tN; never CI or release (CONTRIBUTING.md).\n'
 
 doctor: ## Report missing intentd + cloudlands-fe development prerequisites
@@ -602,7 +602,7 @@ ensure-intentd-submodule:
 # (gate -> test, the test-changed fallback) gets INTENTD_TREE_CHECKED and skips
 # it; at MAKELEVEL 0 a stray exported value is ignored. See scripts/intentd_tree_preflight.py.
 INTENTD_BEHIND_LIMIT ?= 250
-INTENTD_TREE_GATES := fmt shear clippy lint-sources check-windows check-macos test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all
+INTENTD_TREE_GATES := fmt shear clippy clippy-postgres lint-sources check-windows check-macos test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all
 .PHONY: intentd-tree-preflight
 intentd-tree-preflight: ensure-intentd-submodule ## Print the intentd tree the Rust gates test; refuse an off-pin or stale default packages/intentd (INTENTD_DIR=<path> chooses one, DRY_RUN=1 only warns)
 	@python3 scripts/intentd_tree_preflight.py --repo-root '$(subst ','\'',$(CURDIR))' \
@@ -720,6 +720,16 @@ fmt: ensure-intentd-submodule ## cargo fmt --check
 clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
 	cd "$(INTENTD_DIR)" && $(COMPACT_CARGO) cargo clippy --workspace --all-targets --jobs $(BUILD_JOBS) -- -D warnings
 
+# The local twin of intentd CI store-postgres's first Clippy step. The
+# workspace clippy builds intent-store without its `postgres` feature, so the
+# Postgres backend and its tests compile to nothing there: an unused doc
+# comment on a parity_test! call passed make check and failed that job
+# (intentd#3672). A separate pass keeps the feature out of the workspace lint.
+# The orchestrator's Clippy step stays CI-only: with the feature on it rebuilds
+# every crate the orchestrator links.
+clippy-postgres: ensure-intentd-submodule ## cargo clippy -p intent-store --features postgres --all-targets -- -D warnings (CI store-postgres's Clippy step)
+	cd "$(INTENTD_DIR)" && $(COMPACT_CARGO) cargo clippy -p intent-store --features postgres --all-targets --jobs $(BUILD_JOBS) -- -D warnings
+
 # The local twin of intentd CI's check-job step "Unused dependencies
 # (cargo-shear)": unused dependencies and .rs files no crate includes (e.g. a
 # trybuild tests/ui file missing from [package.metadata.cargo-shear]
@@ -829,7 +839,7 @@ bash3: ## Build Bash 3.2 for the shell suites' 3.2 pass into BASH3_CACHE_DIR (de
 		env -u GITHUB_ENV bash scripts/install-ci-bash3.sh "$(BASH3_CACHE_DIR)"; \
 	fi
 
-RUST_CHECK_TARGETS := check-makefile-targets check-protocol-field-parity lint-shell-sleeps fmt shear clippy lint-sources
+RUST_CHECK_TARGETS := check-makefile-targets check-protocol-field-parity lint-shell-sleeps fmt shear clippy clippy-postgres lint-sources
 
 # make check / gate / the test goals run other steps first (Makefile target and
 # field-parity checks, the fixture checks); order them after it as well. Only
@@ -891,20 +901,20 @@ endif
 check-deferred-reset:
 	@[ -z "$(CHECK_DEFERRED)" ] || rm -f "$(CHECK_DEFERRED)"
 
-check: $(RUST_CHECK_TARGETS) ## Makefile target check + protocol field parity + shell sleep lint + fmt + cargo-shear + clippy + source lints (a parity failure is reported at the end)
+check: $(RUST_CHECK_TARGETS) ## Makefile target check + protocol field parity + shell sleep lint + fmt + cargo-shear + clippy + Postgres store clippy + source lints (a parity failure is reported at the end)
 	@if [ -s "$(CHECK_DEFERRED)" ]; then \
 		failed=$$(tr '\n' ' ' < "$(CHECK_DEFERRED)"); rm -f "$(CHECK_DEFERRED)"; \
 		echo "make check: FAILED: $${failed}(output above); every other check step passed" >&2; \
 		exit 1; \
 	fi; rm -f "$(CHECK_DEFERRED)"
 
-gate: check | check-callback-fixture check-transfer-fixture ## Run all local Rust gates (fmt, cargo-shear, clippy, source lints, then nextest)
+gate: check | check-callback-fixture check-transfer-fixture ## Run all local Rust gates (fmt, cargo-shear, clippy, Postgres store clippy, source lints, then nextest)
 	@$(INTENTD_TREE_CHECKED_ENV) $(MAKE) --no-print-directory test
 
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures, HERMETIC=1 hides provider CLIs like CI)
 
 test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
-	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_gate_storage scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_flake_triage scripts.test_nextest_stress scripts.test_host_load scripts.test_watch_capacity scripts.test_intentd_tree_preflight scripts.test_sandbox_shot_target scripts.test_live_rig
+	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_gate_storage scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_postgres_store_hint scripts.test_flake_triage scripts.test_nextest_stress scripts.test_host_load scripts.test_watch_capacity scripts.test_intentd_tree_preflight scripts.test_sandbox_shot_target scripts.test_live_rig
 
 # DRY_RUN must never start real work: run every target whose help or recipe
 # mentions DRY_RUN, plus every coverage-*, with DRY_RUN=1 and stub cargo/rustup,
@@ -984,6 +994,7 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 		echo "[test-changed] NO_FAIL_FAST=1: nextest runs with --no-fail-fast"; \
 	fi
 	@$(HERMETIC_PREFLIGHT)
+	@$(POSTGRES_STORE_HINT) || true
 	@INTENTD_DIR="$(INTENTD_DIR)" BASE="$(BASE)" DRY_RUN="$(DRY_RUN)" \
 		BUILD_JOBS="$(BUILD_JOBS)" TEST_THREADS="$(TEST_THREADS)" \
 		GATE_REPO_ROOT="$(CURDIR)" GATE_CACHE_DIR="$(GATE_CACHE_DIR)" \
@@ -1055,6 +1066,13 @@ COMMA := ,
 TEST_SELECT_FEATURES_LIST = $(strip $(subst $(COMMA), ,$(FEATURES)))
 TEST_SELECT_FEATURES = $(if $(TEST_SELECT_FEATURES_LIST), --features '$(subst ','\'',$(TEST_SELECT_FEATURES_LIST))')
 unexport E FEATURES
+# The Postgres store tests build only with FEATURES=intent-store/postgres, so a
+# filtered run without it leaves them out silently (intentd#3672 lost a new
+# parity test from a 365-test test-select). The hint warns when the intentd
+# branch changes them or E names them; it never fails the run.
+POSTGRES_STORE_HINT = python3 scripts/postgres_store_hint.py --label '$@' \
+	--intentd-dir '$(subst ','\'',$(INTENTD_DIR))' --base '$(subst ','\'',$(or $(BASE),origin/main))'
+TEST_SELECT_HINT = $(POSTGRES_STORE_HINT) --features '$(subst ','\'',$(TEST_SELECT_FEATURES_LIST))' --filterset '$(TEST_SELECT_E)'
 ifneq ($(filter test-select test-stress,$(MAKECMDGOALS)),)
 ifneq ($(origin E),command line)
 $(error make $(firstword $(filter test-select test-stress,$(MAKECMDGOALS))) needs E='<nextest filterset>' on the make command line, e.g. make $(firstword $(filter test-select test-stress,$(MAKECMDGOALS))) E='test(/repository_selection/)')
@@ -1071,6 +1089,7 @@ test-select: ensure-intentd-submodule | check-transfer-fixture ## Run only the R
 		exit 1; \
 	}
 	@$(HERMETIC_PREFLIGHT)
+	@$(TEST_SELECT_HINT) || true
 	@$(RUST_TEST_RUNNER) --label test-select --filterset '$(TEST_SELECT_E)'$(TEST_SELECT_FEATURES)
 
 # Repeat the tests matching E COUNT times with retries off (nextest
@@ -1142,6 +1161,7 @@ test-stress: ensure-intentd-submodule | check-transfer-fixture ## Repeat the Rus
 		exit 1; \
 	}
 	@$(HERMETIC_PREFLIGHT)
+	@$(TEST_SELECT_HINT) || true
 	@$(RUST_TEST_RUNNER) --label test-stress --filterset '$(TEST_SELECT_E)'$(TEST_SELECT_FEATURES) \
 		--stress-count '$(COUNT)' --load '$(strip $(LOAD))'$(if $(strip $(LOAD_CPUS)), --load-cpus '$(strip $(LOAD_CPUS))')$(if $(strip $(LOAD_CORES)), --load-cores '$(strip $(LOAD_CORES))') \
 		--stall '$(strip $(STALL))'$(if $(strip $(STALL_MS)), --stall-ms '$(strip $(STALL_MS))')$(if $(strip $(STALL_EVERY_MS)), --stall-every-ms '$(strip $(STALL_EVERY_MS))')
