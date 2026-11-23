@@ -3045,7 +3045,8 @@ backend worktree.
 | The script exits non-zero | `failed` with `exitCode`; the agent starts, and its first turn carries the local setup-failure notice |
 | The script cannot be written or spawned | `failed`, `error: "node-setup-failed: <detail>"`; the agent starts with the notice |
 | The script runs past `timeoutSecs` | Its process group is killed; `failed`, `error: "node-setup-timeout: <detail>"`; the agent starts with the notice |
-| A `stop` or machine restart while the agent's own checkout is made, before the script starts | `exited` is journaled with no `setupFinished` or `started`; the next launch with `checkout` removes the partial checkout, makes a fresh one and runs the script |
+| A `stop` while the agent's own checkout is made, before the script starts | `exited` is journaled with no `setupFinished` or `started`; the next launch with `checkout` removes the partial checkout, makes a fresh one and runs the script |
+| The machine restarts while the agent's own checkout is made, before the script starts | No `setupFinished` or `started` is journaled, and no exit record is guaranteed (the backend reads the process as lost); the next launch with `checkout` removes the partial checkout, makes a fresh one and runs the script |
 | A `stop` during setup | The process group is killed; `exited` is journaled with no `setupFinished` or `started`; the next launch keeps the checkout and records `failed`, `error: "node-setup-interrupted: <detail>"`, without a re-run |
 | The machine restarts during setup | At its next launch of that agent the machine records `failed`, `error: "node-setup-interrupted: <detail>"`, without a re-run |
 
