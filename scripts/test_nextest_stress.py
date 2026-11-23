@@ -92,6 +92,13 @@ class TallyTests(unittest.TestCase):
         self.assertEqual(counts["failed"], 3, "the repeated summary block must not double count")
         self.assertEqual(counts["failures"], {"src/lib.rs:1": 2, "TIMEOUT": 1})
 
+    def test_counts_runs_and_failures_per_test(self):
+        # make flake-triage gives a verdict per test from these counts.
+        self.assertEqual(tally(OUTPUT)["by_test"], {
+            "probe flaky": {"runs": 3, "failed": 2},
+            "probe stable": {"runs": 3, "failed": 1},
+        })
+
     def test_summary_line_names_iterations_counts_and_locations(self):
         line = stress.summary_line("test-stress", tally(OUTPUT), "LOAD=1 (4 cpu + fsync)")
         self.assertEqual(

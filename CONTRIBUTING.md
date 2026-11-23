@@ -162,6 +162,28 @@ pause). It never writes resume records, so `RESUME`, `GATE_FORCE` and
 commands (and a failed summary line repeats it), because timeouts then may come
 from another workspace; the same check is `python3 scripts/host_load.py`.
 
+`make flake-triage RUN=<merge_group run URL> COUNT=200 LOAD=1` answers whose
+fault a merge-queue ejection is in one step. It reads the run's failed logs
+with `gh`, takes the tests whose final status failed (a test that passed on
+retry did not eject the PR) and the PR from the queue branch name, then runs
+`make test-stress` on three intentd revisions, each in its own worktree: main
+(`BASE`, default a fresh `origin/main`), main merged with the PR (the tree the
+queue tested), and the PR alone. It prints a Markdown table of failures per
+revision and test, and one verdict: `fails on main`, `caused by this PR` or
+`inconclusive`. "Caused by this PR" needs the merged tree to fail significantly
+more often than main (one-sided Fisher exact test, p < 0.05), so 1/200 against
+0/200 stays inconclusive. Without `RUN`, pass `E='<nextest filterset>'` and
+`PR=<n>` (or `BRANCH=<ref>`). To replay an old ejection, set `BASE` to the main
+commit it ran on: intentd#3560 was ejected by a script-list race that failed
+54/200 on main (fixed in intentd#3565). The stress knobs (`COUNT`, `LOAD`,
+`STALL`, `FEATURES`, ...) apply to all three runs. A revision with the same tree
+as one already stressed is not run again. The worktrees stay under
+`$(GATE_CACHE_DIR)/flake-triage/worktrees/` so a repeat run builds
+incrementally; delete that directory and run `git -C packages/intentd worktree
+prune` to reclaim the space. The report (`report.md`, `report.json`) and each
+run's output are kept under `$(GATE_CACHE_DIR)/flake-triage/runs/` for seven
+days.
+
 These four (and `make test-intentd`, which `make test` runs, and the test
 phase of `make gate`) default `INTENTD_TEST_TIMEOUT_MULTIPLIER` to `3`, the
 value coverage CI and `make coverage-changed` already use, so tests'

@@ -136,6 +136,12 @@ class StressTally:
         for key in failed_keys:
             reason = self.locations.get(key) or self.runs[key]
             reasons[reason] = reasons.get(reason, 0) + 1
+        # "<binary> <test>" -> runs and failures, for make flake-triage's per-test verdicts.
+        by_test: dict[str, dict[str, int]] = {}
+        for (_, binary, test), status in self.runs.items():
+            entry = by_test.setdefault(f"{binary} {test}", {"runs": 0, "failed": 0})
+            entry["runs"] += 1
+            entry["failed"] += status not in PASS_STATUSES
         return {
             "iterations": len(iterations),
             "total_iterations": self.total_iterations,
@@ -144,6 +150,7 @@ class StressTally:
             "passed": len(self.runs) - len(failed_keys),
             "failed": len(failed_keys),
             "failures": dict(sorted(reasons.items(), key=lambda item: (-item[1], item[0]))),
+            "by_test": dict(sorted(by_test.items())),
             # nextest's (iterations, failed iterations), or None if it printed no summary.
             "nextest_summary": list(self.nextest_summary) if self.nextest_summary else None,
         }
