@@ -264,7 +264,7 @@ def resolve_base(src: Path, remote: str, base: str) -> tuple[str, str]:
         commit = rev_parse(src, "FETCH_HEAD")
     if commit is None:
         raise TriageError(f"BASE={base} is not a commit in {src} or on {remote}")
-    return commit, base
+    return commit, "BASE" if commit.startswith(base.lower()) else base
 
 
 def resolve_pr(src: Path, remote: str, pr: int) -> str:
