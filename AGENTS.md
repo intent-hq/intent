@@ -71,6 +71,9 @@ Start the smallest long-running target as a workspace service:
   `INTENTD_SOCKET`.
 - `make dev-sandbox-stack` — isolated intentd plus renderer (`INTENTD_PROFILE=release`,
   `INTENTD_BIN=/path`); `MOCK_AGENT=1` swaps in a scripted agent, no provider sign-in.
+- `make live-rig` — throwaway intentd for live cloud or relay checks, with host profiles
+  and cloud entries copied unprinted (`CLOUD=`, `PROFILES=`, `RELAY=fake|derper`);
+  `make live-rig-down` deletes it and proves 0 sandboxes and an unchanged host config.
 
 Each ready sandbox records `.dev/sandbox/<mode>.json`. Use `make sandbox-stop` only for
 an unmanaged or orphaned sandbox;

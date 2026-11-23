@@ -527,6 +527,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	sweep sweep-all sweep-gates seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
 	sandbox-status sandbox-stop sandbox-shot \
+	live-rig live-rig-down live-rig-status live-rig-call live-rig-relay live-rig-smoke \
 	run-fe-local uds-to-unauthed-wss-bridge dev-web-live dev dev-prod \
 	ios-open ios-info ios-build-ios ios-build-visionos ios-test dist-mac
 
@@ -903,7 +904,7 @@ gate: check | check-callback-fixture check-transfer-fixture ## Run all local Rus
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures, HERMETIC=1 hides provider CLIs like CI)
 
 test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
-	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_gate_storage scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_flake_triage scripts.test_nextest_stress scripts.test_host_load scripts.test_watch_capacity scripts.test_intentd_tree_preflight scripts.test_sandbox_shot_target
+	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_gate_storage scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_flake_triage scripts.test_nextest_stress scripts.test_host_load scripts.test_watch_capacity scripts.test_intentd_tree_preflight scripts.test_sandbox_shot_target scripts.test_live_rig
 
 # DRY_RUN must never start real work: run every target whose help or recipe
 # mentions DRY_RUN, plus every coverage-*, with DRY_RUN=1 and stub cargo/rustup,
@@ -1405,6 +1406,40 @@ sandbox-shot: ensure-fe-submodule ensure-fe-toolchain ## PNG of a named preview 
 		$(if $(call SANDBOX_SHOT_ARG,THEME),--theme "$(call SANDBOX_SHOT_ARG,THEME)") \
 		$(if $(call SANDBOX_SHOT_ARG,WIDTH),--width "$(call SANDBOX_SHOT_ARG,WIDTH)") \
 		$(if $(call SANDBOX_SHOT_ARG,OUT),--out "$(call SANDBOX_SHOT_ARG,OUT)")
+
+# Live cloud and relay checks: a throwaway intentd with copied host credentials.
+# Only command-line values count (LIVE_RIG_FLAG), so a stray PROFILE or CLOUD
+# in the caller's shell never changes the rig. Self-test: scripts/test_live_rig.py.
+LIVE_RIG_FLAG = $(if $(filter command line,$(origin $(1))),--$(2) '$(subst ','\'',$($(1)))')
+LIVE_RIG = python3 -B scripts/live_rig.py
+
+live-rig: ensure-intentd-submodule ## Throwaway intentd for live cloud/relay checks; run as a service (CLOUD=, PROFILES=, RELAY=fake|derper, INTENTD_BIN=)
+	@$(LIVE_RIG) up $(call LIVE_RIG_FLAG,INTENTD_BIN,intentd-bin) $(call LIVE_RIG_FLAG,RIG_INTENTD_DIR,intentd-dir) \
+		$(call LIVE_RIG_FLAG,INTENTD_PROFILE,build-profile) $(call LIVE_RIG_FLAG,BUILD_JOBS,build-jobs) \
+		$(call LIVE_RIG_FLAG,TAILCAT_BIN,tailcat-bin) $(call LIVE_RIG_FLAG,PROFILES,profiles) $(call LIVE_RIG_FLAG,CLOUD,cloud) \
+		$(call LIVE_RIG_FLAG,SIZE,size) $(call LIVE_RIG_FLAG,IDLE_PAUSE,idle-pause) $(call LIVE_RIG_FLAG,RELAY,relay) \
+		$(call LIVE_RIG_FLAG,RELAY_HOST,relay-host) $(call LIVE_RIG_FLAG,RELAY_PORT,relay-port) \
+		$(call LIVE_RIG_FLAG,RELAY_MAP_PORT,relay-map-port) $(call LIVE_RIG_FLAG,DERPER_BIN,derper-bin) \
+		$(call LIVE_RIG_FLAG,RIG_ROOT,rig-root) $(call LIVE_RIG_FLAG,READY_TIMEOUT,ready-timeout) \
+		$(if $(filter 1,$(call SANDBOX_SHOT_ARG,ORCHESTRATOR)),--orchestrator)
+
+live-rig-down: ## Remove the live rig: stop its agents, prove 0 sandboxes, delete copied secrets, check host config (FORCE=1)
+	@$(LIVE_RIG) down $(if $(filter 1,$(call SANDBOX_SHOT_ARG,FORCE)),--force) $(call LIVE_RIG_FLAG,SANDBOX_TIMEOUT,sandbox-timeout) \
+		$(call LIVE_RIG_FLAG,READY_TIMEOUT,ready-timeout)
+
+live-rig-status: ## Show the live rig's state, machines and backend id as JSON
+	@$(LIVE_RIG) status
+
+live-rig-call: ## One JSON-RPC call to the live rig daemon (METHOD=<method> PARAMS='<json>')
+	@[ -n "$(call SANDBOX_SHOT_ARG,METHOD)" ] || { echo "[live-rig] usage: make live-rig-call METHOD=<method> [PARAMS='<json>']" >&2; exit 2; }
+	@$(LIVE_RIG) call '$(METHOD)' $(if $(call SANDBOX_SHOT_ARG,PARAMS),'$(subst ','\'',$(PARAMS))')
+
+live-rig-relay: ## Take the live rig's relay node down or bring it back (ACTION=down|up)
+	@$(LIVE_RIG) relay '$(call SANDBOX_SHOT_ARG,ACTION)'
+
+live-rig-smoke: ## One cloud agent on the live rig, one turn, timings as evidence (CLOUD_ENTRY=, PROFILE=)
+	@$(LIVE_RIG) smoke $(call LIVE_RIG_FLAG,CLOUD_ENTRY,cloud-entry) $(call LIVE_RIG_FLAG,PROFILE,profile) \
+		$(call LIVE_RIG_FLAG,SMOKE_TIMEOUT,timeout)
 
 dev-fe: ensure-fe-submodule ## Run the FE dev stack against dev-daemon's UDS socket (two-terminal pair)
 	# Two-terminal counterpart of `make dev-daemon`: launches only the FE dev
