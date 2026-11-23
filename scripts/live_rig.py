@@ -415,6 +415,48 @@ def clear_state(state: dict, path: Path | None = None) -> bool:
         return True
 
 
+def refresh_state(instance_id: str, path: Path | None = None) -> dict | None:
+    """The state of `instance_id`; None once it is gone; an error if another rig replaced it."""
+    current = load_state(path)
+    if current is None:
+        return None
+    if current.get("instanceId") != instance_id:
+        raise RigError("another rig replaced this one while it was being removed; stopping without touching it")
+    return current
+
+
+@contextlib.contextmanager
+def teardown_lock(path: Path | None = None):
+    path = path or STATE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_name(path.name + ".down.lock"), "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RigError("another make live-rig-down is running for this worktree") from None
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def stop_child(process: subprocess.Popen, grace: float = 20) -> bool:
+    """Stop our own child's process group; a reaped child (its pid may be reused) is never signalled."""
+    for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 5)):
+        if process.poll() is not None:
+            return True
+        try:
+            os.killpg(process.pid, sig)
+        except ProcessLookupError:
+            return True
+        try:
+            process.wait(timeout=wait)
+            return True
+        except subprocess.TimeoutExpired:
+            continue
+    return process.poll() is not None
+
+
 def identity(pid: int) -> str | None:
     """What tells this process apart from a later one that reuses its pid."""
     stat = Path(f"/proc/{pid}/stat")
@@ -477,25 +519,6 @@ def alive(pid: int | None) -> bool:
         return status != "Z"
     except (OSError, IndexError):
         return True
-
-
-def stop_group(pid: int | None, grace: float = 20) -> bool:
-    """SIGTERM a process group, then SIGKILL after `grace`; True once it is gone."""
-    if not alive(pid):
-        return True
-    for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 5)):
-        try:
-            os.killpg(pid, sig)
-        except ProcessLookupError:
-            return True
-        except PermissionError:
-            os.kill(pid, sig)
-        deadline = time.monotonic() + wait
-        while time.monotonic() < deadline:
-            if not alive(pid):
-                return True
-            time.sleep(0.2)
-    return not alive(pid)
 
 
 def daemon_id(rig_dir: Path) -> str | None:
@@ -693,7 +716,7 @@ class Relay:
             self.node.server_close()
             self.node = None
         if self.process is not None:
-            stop_group(self.process.pid, grace=5)
+            stop_child(self.process, grace=5)
             self.process = None
 
     def close(self) -> None:
@@ -724,6 +747,13 @@ def wait_ready(rpc: Rpc, process: subprocess.Popen | None, timeout: float) -> di
                 pass
         time.sleep(0.5)
     raise RigError(f"intentd was not ready within {timeout:.0f}s")
+
+
+def stop_own_daemon(intentd: Path | None, env: dict, process: subprocess.Popen) -> bool:
+    """Stop a daemon this process started, through its handle, never by a bare pid."""
+    if process.poll() is None and intentd is not None:
+        subprocess.run([str(intentd), "stop"], env=env, capture_output=True, timeout=60)
+    return stop_child(process)
 
 
 def stop_daemon(intentd: Path | None, env: dict, record: dict | None) -> bool:
@@ -890,7 +920,7 @@ def cmd_up(args: argparse.Namespace) -> int:
         return code
     finally:
         if daemon is not None:
-            stop_daemon(intentd, env, proc_record(daemon.pid))
+            stop_own_daemon(intentd, env, daemon)
         if relay is not None:
             relay.close()
         current = mine()
@@ -995,10 +1025,16 @@ def wait_no_sandboxes(entries: list[dict], backend: str | None, timeout: float) 
 
 
 def cmd_down(args: argparse.Namespace) -> int:
+    with teardown_lock():
+        return remove_rig(args)
+
+
+def remove_rig(args: argparse.Namespace) -> int:
     state = load_state()
     if state is None:
         OUT.say("no rig is recorded; nothing to remove")
         return 0
+    instance = state.get("instanceId")
     rig_dir = Path(state["rigDir"])
     intentd = Path(state["intentdBin"]) if state.get("intentdBin") else None
     env = rig_env(rig_dir, os.environ)
@@ -1019,7 +1055,7 @@ def cmd_down(args: argparse.Namespace) -> int:
                 break
             time.sleep(0.5)
         parked = parked or not owned(supervisor)
-    state = load_state() or state
+    state = refresh_state(instance) or state
 
     temp = None
     removal_ok = True
@@ -1078,8 +1114,9 @@ def cmd_down(args: argparse.Namespace) -> int:
         sandboxes_ok = False
         report.append(("providers list no rig sandboxes", False, str(error)))
 
-    state = load_state() or state
-    daemon_gone = stop_daemon(intentd, env, state.get("daemon"))
+    state = refresh_state(instance) or state
+    daemon_gone = stop_own_daemon(intentd, env, temp) if temp is not None else True
+    daemon_gone = stop_daemon(intentd, env, state.get("daemon")) and daemon_gone
     relay_gone = stop_owned((state.get("relay") or {}).get("process"))
     supervisor_note = "gone" if not owned(supervisor) else "parked (stop its service)" if parked else "ALIVE"
     processes_ok = daemon_gone and relay_gone and parked

@@ -377,6 +377,47 @@ class StateTests(unittest.TestCase):
             if child.poll() is None:
                 child.kill()
 
+    def test_a_reaped_child_is_never_signalled(self):
+        from unittest import mock
+
+        child = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+        child.wait()
+        with mock.patch.object(MODULE.os, "killpg") as killpg, mock.patch.object(MODULE.os, "kill") as kill:
+            self.assertTrue(MODULE.stop_child(child, grace=1))
+        killpg.assert_not_called()
+        kill.assert_not_called()
+
+    def test_a_running_child_is_stopped(self):
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+        try:
+            self.assertTrue(MODULE.stop_child(child, grace=5))
+            self.assertIsNotNone(child.returncode)
+        finally:
+            if child.poll() is None:
+                child.kill()
+
+    def test_teardown_keeps_its_instance(self):
+        with tempfile.TemporaryDirectory() as root:
+            state = Path(root) / "state.json"
+            MODULE.reserve_state({"instanceId": "a", "n": 1}, state)
+            self.assertEqual(MODULE.refresh_state("a", state)["n"], 1)
+            MODULE.clear_state({"instanceId": "a"}, state)
+            self.assertIsNone(MODULE.refresh_state("a", state))
+            MODULE.reserve_state({"instanceId": "b"}, state)
+            with self.assertRaises(MODULE.RigError):
+                MODULE.refresh_state("a", state)
+
+    def test_only_one_teardown_runs_at_a_time(self):
+        with tempfile.TemporaryDirectory() as root:
+            state = Path(root) / "state.json"
+            with MODULE.teardown_lock(state):
+                with self.assertRaises(MODULE.RigError) as caught:
+                    with MODULE.teardown_lock(state):
+                        pass
+                self.assertIn("live-rig-down", str(caught.exception))
+            with MODULE.teardown_lock(state):
+                pass
+
     def test_rig_env_never_inherits_the_callers_intentd_settings(self):
         env = MODULE.rig_env(
             Path("/rig"),
