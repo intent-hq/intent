@@ -3134,9 +3134,10 @@ setup. Then it:
    replaces the agent's stored output. It keeps the tail and the log as for
    the first run.
 3. Runs `setup` with the same wrapper, environment, timeout, process group and
-   [setup-file excludes](#setup-script-on-the-machine) as the first run. The
-   files this run creates are added to the earlier runs' excludes, which
-   stay.
+   [setup-file excludes](#setup-script-on-the-machine) as the first run,
+   except that a retry adds no excludes: it runs while the agent works, so
+   a new file could be the agent's. The earlier runs' excludes stay, and a
+   retry a restart interrupted adds none either.
 4. Journals `setupFinished` with the result, and records it with the checkout.
    The agent's `ws.workspace.details().setupStatus` shows the new state from
    the start of the run.

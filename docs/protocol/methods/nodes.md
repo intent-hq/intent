@@ -1347,7 +1347,7 @@ the setup script; then the machine's own checks run.
 | `setup-retry-not-remote` | The agent is not a remote agent with a prepared checkout (no `setup`) |
 | `setup-retry-shared-checkout` | The agent works in another agent's checkout (retry that agent's setup), or in a workspace home (a home's setup is not retried this way) |
 | `setup-retry-not-failed` | `setup.state` is `pending`, `completed` or `skipped`, or the machine runs no retry for a `running` one |
-| `agent-busy` | A user's call while the agent runs a turn, also while a retry runs; retry when the turn ends |
+| `agent-busy` | A user's call while the agent runs a turn (outside a turn, a call while a retry runs joins it); retry when the turn ends |
 | `machine-update-required` | The link negotiates below 22; data `{ update: "machine", reason: "setup-retry" }` |
 | `setup-retry-no-script` | The workspace has no setup script now, so there is nothing to run |
 | `agent-not-running` | The agent does not run on its machine now, or is still starting; send it a message, then retry once that turn ends |
