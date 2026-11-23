@@ -13,13 +13,15 @@ silently skips them: intentd#3672 lost a new parity test from a 365-test
 stderr when
   1. the intentd branch (committed, staged, unstaged or untracked work since
      merge-base(HEAD, REF)) changes such a path and FEATURES lacks the feature;
-  2. E names Postgres tests and FEATURES lacks the feature; or
+  2. E names Postgres-gated tests (not the lint binaries) and FEATURES lacks
+     the feature; or
   3. FEATURES has the feature but INTENT_STORE_TEST_PG_URL is unset (the
      backend tests then skip) and INTENT_STORE_REQUIRE_PG is not 1.
 It always exits 0: a git failure (unknown REF, no checkout) prints nothing.
 """
 import argparse
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -32,6 +34,12 @@ GATED = (
     (STORE, "crates/intent-store/tests/postgres_backend/"),
     (STORE, "crates/intent-store/tests/postgres_neki.rs"),
     (ORCHESTRATOR, "crates/intentd-orchestrator/"),
+)
+# Filterset terms for gated tests; postgres_backend_lint and
+# postgres_tenant_schema_lint build without the feature.
+FILTERSET_NAMES = (
+    (STORE, re.compile(r"postgres_backend(?!_lint)|postgres_neki|postgres::", re.IGNORECASE)),
+    (ORCHESTRATOR, re.compile(r"intentd-orchestrator|intentd_orchestrator")),
 )
 
 
@@ -79,9 +87,13 @@ def hint(label, intentd_dir, base, features, filterset):
             "Its tests build only with the postgres feature, so this run leaves them out. Run them with:",
             f"  INTENT_STORE_TEST_PG_URL=postgres://... make test-select FEATURES={feature} E={shlex.quote(expression)}",
         ]
-    elif filterset and "postgres" in filterset.lower() and STORE not in covered:
-        lines += [f"WARNING: E names Postgres tests, which build only with FEATURES={STORE}/postgres;"
-                  " without it they are left out of this run."]
+    elif filterset:
+        named = [package for package, pattern in FILTERSET_NAMES
+                 if package not in covered and pattern.search(filterset)]
+        if named:
+            feature = f"{ORCHESTRATOR}/postgres" if ORCHESTRATOR in named else f"{STORE}/postgres"
+            lines += [f"WARNING: E names Postgres tests, which build only with FEATURES={feature};"
+                      " without it they are left out of this run."]
     if (STORE in covered and not os.environ.get("INTENT_STORE_TEST_PG_URL")
             and os.environ.get("INTENT_STORE_REQUIRE_PG") != "1"):
         lines += ["WARNING: INTENT_STORE_TEST_PG_URL is unset, so the Postgres backend tests skip (and pass)."

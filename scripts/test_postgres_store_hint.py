@@ -115,6 +115,20 @@ class PostgresStoreHintTests(unittest.TestCase):
         self.assertIn("E names Postgres tests", stderr)
         self.assertIn("FEATURES=intent-store/postgres", stderr)
         self.assertEqual(self.hint(filterset="test(/repository_selection/)"), "")
+        # The schema/query lint binaries build without the feature.
+        for expression in ("binary(postgres_backend_lint)", "binary(postgres_tenant_schema_lint)"):
+            self.assertEqual(self.hint(filterset=expression), "", expression)
+        for expression in ("package(intent-store) & test(/^postgres::/)", "binary(postgres_neki)"):
+            self.assertIn("FEATURES=intent-store/postgres", self.hint(filterset=expression), expression)
+
+    def test_filterset_naming_the_orchestrator_needs_its_feature(self):
+        for features in ("", "intent-store/postgres"):
+            with self.subTest(features=features):
+                stderr = self.hint(features, filterset="package(intentd-orchestrator)",
+                                   env={"INTENT_STORE_TEST_PG_URL": "postgres://x"})
+                self.assertIn("FEATURES=intentd-orchestrator/postgres", stderr)
+        self.assertEqual(self.hint("intentd-orchestrator/postgres", filterset="package(intentd-orchestrator)",
+                                   env={"INTENT_STORE_TEST_PG_URL": "postgres://x"}), "")
 
     def test_bad_base_or_missing_checkout_never_fails_the_run(self):
         self.commit(PARITY)
