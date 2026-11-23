@@ -212,6 +212,12 @@ negotiated 20; [link contract](./node-link.md#version-range)); daemons offer
 `{ min: 7, max: 20 }`. Clients detect every field by presence. The surface
 counts are unchanged.
 
+Also within 18.0 (private node link only; no client-visible change):
+**nodeProtocol 21** carries the provider session `_meta` of a remote agent's
+launch (`sessionMeta`, [link contract](./node-link.md#launch-and-agent-lifecycle)), so a remote
+Claude Code agent gets its instructions as the system prompt and the native
+sub-agent tool denied, as a local one does; daemons offer `{ min: 7, max: 21 }`.
+
 Also within 18.0 (additive methods and setting; prepared, off by default, so no
 version bump): **push relay linking**. The router methods `push.createLink`,
 `push.revokeLink` and `push.status` link a phone to the push relay for iOS Live
