@@ -224,7 +224,10 @@ install_pinned_node() {
     aarch64|arm64) arch=arm64 ;;
     *) note "no prebuilt Node $version for $(uname -m); install it for the test gates"; return 0 ;;
   esac
-  have curl && have tar || { note "Node $version needs curl and tar; install it for the test gates"; return 0; }
+  if ! have curl || ! have tar; then
+    note "Node $version needs curl and tar; install it for the test gates"
+    return 0
+  fi
   name="node-v$version-linux-$arch"
   say "installing Node $version into $dir"
   # Unpack into a sibling staging folder and rename it into place, so an
