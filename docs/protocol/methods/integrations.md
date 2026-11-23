@@ -887,9 +887,8 @@ error rows and any events) and do not change the contract above.
 > user/internal-integration auth token + organization slug**. The daemon reads the saved
 > account settings on each call: `accounts.sentry.organization` (organization slug) and the
 > `accounts.sentry.token` secret, both written through `settings.update`. Only a half that is
-> unset falls back, to the legacy secret-store accounts `sentry.org` / `sentry.token`, then to
-> `SENTRY_ORG` / `SENTRY_API_TOKEN`; a saved token that cannot be read fails the call with
-> `-32603`. Sentry is REST-only; the token is sent as the **`Authorization: Bearer <token>`**
+> unset falls back to `SENTRY_ORG` / `SENTRY_API_TOKEN`; a saved token that cannot be read fails
+> the call with `-32603`. Sentry is REST-only; the token is sent as the **`Authorization: Bearer <token>`**
 > header.
 >
 > - `sentry.authStatus` validates the resolved pair via `GET /organizations/{org}/` and reports
