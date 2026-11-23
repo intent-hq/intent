@@ -56,7 +56,7 @@ reset_case() {
   mkdir -p "$fixture/scripts" "$bin_dir" "$home" "$main_checkout"
   cp "$script" "$repo_root/scripts/retry.sh" "$fixture/scripts/"
   ln -s "$setup_bash" "$bin_dir/bash"
-  for command in sh cat chmod cp cut dirname env grep head mkdir mktemp mv rm sed tar gzip uname; do
+  for command in sh awk cat chmod cp cut dirname env grep head mkdir mktemp mv rm sed tar gzip uname; do
     ln -s "$(command -v "$command")" "$bin_dir/$command"
   done
   : >"$log"
@@ -360,11 +360,40 @@ esac"
   assert_status 0 "pinned node rerun"
   assert_not_called "curl" "pinned node rerun"
 
+  # assert_no_node_leftovers CASE: no download, checksum list, staging folder
+  # or install is left behind.
+  assert_no_node_leftovers() {
+    local leftover
+    [[ ! -e "$home/.nvm/versions/node/v$node_version" ]] || fail "$1: a bad download was installed"
+    for leftover in "$case_dir"/node.* "$case_dir"/node-sums.* "$home/.nvm/versions/node"/.v*; do
+      [[ ! -e "$leftover" ]] || fail "$1: left $leftover behind"
+    done
+  }
+
   stub_node_case "$(printf '0%.0s' $(seq 64))"
   run_setup
   assert_status 0 "pinned node checksum mismatch"
   assert_output "Node $node_version could not be installed" "pinned node checksum mismatch"
-  [[ ! -e "$home/.nvm/versions/node/v$node_version" ]] || fail "pinned node: a bad download was kept"
+  assert_no_node_leftovers "pinned node checksum mismatch"
+
+  # A tarball that matches its checksum but does not unpack (a truncated
+  # mirror file) installs nothing and leaves no staging folder.
+  printf 'not a tarball' >"$temp_dir/node.tar.gz"
+  stub_node_case "$(sha256sum "$temp_dir/node.tar.gz" | cut -d' ' -f1)"
+  run_setup
+  assert_status 0 "pinned node bad tarball"
+  assert_output "Node $node_version could not be installed" "pinned node bad tarball"
+  assert_no_node_leftovers "pinned node bad tarball"
+
+  # A version folder without bin/node (an interrupted nvm install) is left
+  # alone: nothing is downloaded and nothing is deleted.
+  stub_node_case "$node_sum"
+  mkdir -p "$home/.nvm/versions/node/v$node_version/lib"
+  run_setup
+  assert_status 0 "pinned node partial folder"
+  assert_output "exists without bin/node" "pinned node partial folder"
+  assert_not_called "curl https://nodejs.org" "pinned node partial folder"
+  [[ -d "$home/.nvm/versions/node/v$node_version/lib" ]] || fail "pinned node: deleted a folder it did not create"
 fi
 
 echo "workspace-setup tests passed under $("$setup_bash" -c 'echo "bash $BASH_VERSION"')"

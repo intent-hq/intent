@@ -46,7 +46,9 @@ fi
 APT_UPDATED=0
 TEMP_FILE=""
 APT_LOG=""
-trap 'rm -f -- ${TEMP_FILE:+"$TEMP_FILE"} ${APT_LOG:+"$APT_LOG"}' EXIT
+NODE_SUMS=""
+NODE_STAGE=""
+trap 'rm -f -- ${TEMP_FILE:+"$TEMP_FILE"} ${APT_LOG:+"$APT_LOG"} ${NODE_SUMS:+"$NODE_SUMS"}; [ -z "$NODE_STAGE" ] || rm -rf -- "$NODE_STAGE"' EXIT
 
 say() { printf '[setup] %s\n' "$*"; }
 note() { printf '[setup] NOTE: %s\n' "$*" >&2; }
@@ -207,12 +209,16 @@ pinned_node_version() {
 }
 
 install_pinned_node() {
-  local version arch name dir sums
+  local version arch name dir
   [ "$(uname -s)" = Linux ] || return 0
   version=$(pinned_node_version)
   [ -n "$version" ] || return 0
   dir="${NVM_DIR:-$HOME/.nvm}/versions/node/v$version"
   [ -x "$dir/bin/node" ] && return 0
+  if [ -e "$dir" ]; then
+    note "$dir exists without bin/node; remove it to let setup install Node $version for the test gates"
+    return 0
+  fi
   case "$(uname -m)" in
     x86_64) arch=x64 ;;
     aarch64|arm64) arch=arm64 ;;
@@ -221,26 +227,34 @@ install_pinned_node() {
   have curl && have tar || { note "Node $version needs curl and tar; install it for the test gates"; return 0; }
   name="node-v$version-linux-$arch"
   say "installing Node $version into $dir"
-  TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/node.XXXXXX") || return 1
-  sums=$(mktemp "${TMPDIR:-/tmp}/node-sums.XXXXXX") || return 1
-  if retry curl --proto '=https' --tlsv1.2 -fsSL "https://nodejs.org/dist/v$version/$name.tar.gz" -o "$TEMP_FILE" \
-    && retry curl --proto '=https' --tlsv1.2 -fsSL "https://nodejs.org/dist/v$version/SHASUMS256.txt" -o "$sums" \
-    && node_checksum_matches "$TEMP_FILE" "$sums" "$name.tar.gz" \
-    && mkdir -p "$dir" && tar -xzf "$TEMP_FILE" -C "$dir" --strip-components=1; then
-    rm -f -- "$TEMP_FILE" "$sums"
-    TEMP_FILE=""
+  # Unpack into a sibling staging folder and rename it into place, so an
+  # interrupted run never leaves a partial install the next run accepts.
+  if TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/node.XXXXXX") \
+    && NODE_SUMS=$(mktemp "${TMPDIR:-/tmp}/node-sums.XXXXXX") \
+    && retry curl --proto '=https' --tlsv1.2 -fsSL "https://nodejs.org/dist/v$version/$name.tar.gz" -o "$TEMP_FILE" \
+    && retry curl --proto '=https' --tlsv1.2 -fsSL "https://nodejs.org/dist/v$version/SHASUMS256.txt" -o "$NODE_SUMS" \
+    && node_checksum_matches "$TEMP_FILE" "$NODE_SUMS" "$name.tar.gz" \
+    && mkdir -p "$(dirname "$dir")" \
+    && NODE_STAGE=$(mktemp -d "$(dirname "$dir")/.v$version.XXXXXX") \
+    && tar -xzf "$TEMP_FILE" -C "$NODE_STAGE" --strip-components=1 \
+    && [ -x "$NODE_STAGE/bin/node" ] \
+    && mv "$NODE_STAGE" "$dir"; then
+    NODE_STAGE=""
     say "Node $version is under $dir/bin; put it first on PATH for the test gates"
-    return 0
+  else
+    note "Node $version could not be installed; the test gates need it (see CONTRIBUTING.md#linux-x64-callback-gates)"
   fi
-  rm -rf -- "$TEMP_FILE" "$sums" "$dir"
+  rm -f -- ${TEMP_FILE:+"$TEMP_FILE"} ${NODE_SUMS:+"$NODE_SUMS"}
+  [ -z "$NODE_STAGE" ] || rm -rf -- "$NODE_STAGE"
   TEMP_FILE=""
-  note "Node $version could not be installed; the test gates need it (see CONTRIBUTING.md#linux-x64-callback-gates)"
+  NODE_SUMS=""
+  NODE_STAGE=""
 }
 
 # node_checksum_matches FILE SUMS NAME: FILE's sha256 is NAME's line in SUMS.
 node_checksum_matches() {
   local expected actual
-  expected=$(sed -n "s/^\([0-9a-f]\{64\}\)  $3\$/\1/p" "$2" | head -n 1)
+  expected=$(awk -v name="$3" '$2 == name && length($1) == 64 { print $1; exit }' "$2")
   [ -n "$expected" ] || return 1
   if have sha256sum; then
     actual=$(sha256sum "$1" | cut -d' ' -f1)
