@@ -195,7 +195,7 @@ test('upstream mode warns for a missing frontend path and fails for a missing in
   const warned = checkAt(frontendMiss.root, '--upstream');
   assert.equal(warned.status, 0, warned.stdout + warned.stderr);
   assert.match(warned.stdout, /::warning::app-guide-sources: .*:3: packages\/cloudlands-fe\/src\/later\.ts \(from packages\/cloudlands-fe\/src\/\{one,later\}\.ts\) is missing/);
-  assert.match(warned.stdout, /say what apps without these controls do \(AGENTS\.md, Assistant app guide\)/);
+  assert.match(warned.stdout, /if the frontend PR has not merged \(cross-component feature\), say what apps without these controls do \(AGENTS\.md, Assistant app guide\)/);
   assert.match(warned.stdout, /; 1 upstream warning\(s\)$/m);
 
   const intentdMiss = fixture(t, { guide: `${GOOD}<!-- Sources: packages/intentd/crates/x/gone.rs. -->\n`, ...GOOD_FILES });

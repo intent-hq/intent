@@ -286,7 +286,7 @@ export function check({ root, upstream = false }) {
     const at = `${cite.component} ${revisions[cite.component].slice(0, 7)}`;
     const shown = cite.citation === cite.file ? cite.file : `${cite.file} (from ${cite.citation})`;
     if (upstream && cite.component !== GUIDE_COMPONENT) {
-      warnings.push(`${guide}:${cite.line}: ${shown} is missing at ${at}; the auto/submodule-bump PR fails until the guide cites a file the pinned ${cite.component} has; if the text names app controls that have not shipped, say what apps without these controls do (AGENTS.md, Assistant app guide)`);
+      warnings.push(`${guide}:${cite.line}: ${shown} is missing at ${at}; the auto/submodule-bump PR fails until the guide cites a file the pinned ${cite.component} has; if the frontend PR has not merged (cross-component feature), say what apps without these controls do (AGENTS.md, Assistant app guide)`);
     } else {
       errors.push(`${guide}:${cite.line}: error: ${shown} is missing at ${at}`);
     }
