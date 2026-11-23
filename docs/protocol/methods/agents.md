@@ -154,6 +154,7 @@ see [workspace discussions](multiplayer.md#555-workspace-discussions).
   `effectivePermissionPolicy` is the policy the agent's next local process start uses — the override, else the daemon default (`INTENTD_PERMISSION_POLICY` when set, else the `agents.permissionPolicy` setting, §5.12) — overlaid on `agent.get` / `agent.list` / mutation results. It is **omitted** for a remote agent (its machine applies `remoteAgents.permission`, §5.50) and when no agent runtime is attached. Clients offer the per-chat control only for rows that carry it.
   The override is a preference, not activity: a request whose keys are only `permissionPolicy`, `pinned` and/or `notificationsMuted` never advances `updatedAt`. `agent:updated` carries the canonical written value (`{ agentId, permissionPolicy }`).
 - **`goal` (additive, presence-detected):** the user-set [conversation goal](#conversation-goal) (string, 1–1,000 characters) on `AgentLite` (`agent.list`, `agent.get`, the §6.9 collection rows) and the `agent.getSession` session form. **Omitted when unset** (absent, never `null` or `""`). Written only through a `/goal` command or `agent.setGoal`; `agent.update` rejects the key. A goal change is a preference, not activity: it never advances `updatedAt`. Clients show goal UI only when `conversationGoal: 1` is advertised, so an absent field on an older daemon means "unsupported", and on a supporting daemon means "unset".
+- **`goalSetBy` (additive, presence-detected):** who wrote the current [conversation goal](#conversation-goal-attribution): `{ principalId: string, displayName: string | null, login: string | null }`, on the same rows as `goal`. Present only while `goal` is present and the writer was a known principal; absent on goals written by a daemon that predates the field, and omitted (never `null`) otherwise.
 - **Live-turn preview overlay ([intent-hq/intentd#786](https://github.com/intent-hq/intentd/pull/786), read-path):** while a turn is in flight (`isResponding` with the live-turn slot held by a busy worker — orphan slots without a busy worker are ignored, the same gate as the STAB-125 turn-liveness reads below), `lastAgentResponse`/`digest` are derived from the live turn's streamed-so-far text (the same extraction that derives the persisted-preview fields from the newest assistant row) instead of the persisted last-assistant-message preview, with a **per-field** fallback: a turn that has streamed no text (or no digest) yet keeps the persisted value, so an early turn never blanks the previous preview.
   Mid-turn `lastAgentResponse` is additionally **clipped at the last completed newline** ([intent-hq/intentd#795](https://github.com/intent-hq/intentd/pull/795)) — the still-streaming trailing partial line is excluded, and a turn with no completed line yet keeps the persisted value (same per-field fallback); `digest` derives from the **unclipped** text, since its capture requires the closing tag (an unclosed opener never leaks).
   Terminal `agent:stream:end` and persisted previews are unclipped (§7).
@@ -1487,6 +1488,7 @@ Result (both methods):
     "name": "goal",
     "action": "set" | "updated" | "unchanged" | "shown",
     "goal": "string" | null,      // the goal after the command
+    "goalSetBy"?: { "principalId": "string", "displayName": "string" | null, "login": "string" | null },
     "noticeMessageId"?: "string"  // id of the persisted notice row
   }
 }
@@ -1500,7 +1502,7 @@ optimistic user bubble, launch animation or thinking state for a command send, a
 clear the composer only on success.
 
 **`agent.setGoal`.** `{ agentId, workspaceId?, goal: string | null }` →
-`{ action, goal, noticeMessageId? }`. Used by the goal strip's Edit and Remove. The goal
+`{ action, goal, goalSetBy?, noticeMessageId? }`. Used by the goal strip's Edit and Remove. The goal
 is trimmed; empty or `null` removes it. Over 1,000 Unicode scalar values is `-32602`
 with `data.code: "goal-too-long"`. An unknown or deleted agent is `-32602`
 (`agent not found`); a retired agent is `-32602` (`agent is retired`,
@@ -1541,11 +1543,33 @@ has no other effect: it does not
 advance `updatedAt`, mark the agent or workspace unread, move the sender's
 new-messages divider, send push or desktop notifications, or change attention state.
 
-**Events.** A goal write emits `agent:updated` with data `{ agentId, goal }`
-(`goal: null` on remove, §6.5). `unchanged` and `shown` emit no `agent:updated`. A
-client that merges `agent:updated` as a patch deletes its `goal` on `null`. §6.9
-collection `updated` deltas carry full rows, so a row without `goal` replaces the
+**Events.** A goal write emits `agent:updated` with data `{ agentId, goal, goalSetBy }`
+(`goal: null` and `goalSetBy: null` on remove, §6.5; `goalSetBy: null` also when the
+writer was not a known principal). `unchanged` and `shown` emit no `agent:updated`. A
+client that merges `agent:updated` as a patch deletes `goal` / `goalSetBy` on `null`.
+§6.9 collection `updated` deltas carry full rows, so a row without `goal` replaces the
 previous one as unset.
+
+<a id="conversation-goal-attribution"></a>
+**Attribution.** Every goal write (`set`, `updated`) records who made it in
+`agent_session.goal_set_by` (the writer's principal ID, plus a `displayName` / `login`
+snapshot taken from the principal profile at write time), in the same atomic write as
+the goal. `cleared` removes it with the goal; `unchanged` and `shown` keep it. The
+daemon stamps the bound principal in every workspace, personal or shared, so the
+attribution is already right if the workspace is shared later. A write with no
+resolvable principal stores no attribution. It is served as `goalSetBy` on `AgentLite`,
+the `agent.getSession` session form, the command result and the `agent.setGoal`
+result, and survives retire/restore with the goal.
+
+Clients show attribution only in a **shared** workspace: one whose `Workspace.memberCount`
+is greater than 1. `memberCount` counts the owner, direct collaborators and, under
+`hostMembership: 1`, host members (§5.49), so this one rule covers shared workspaces
+and shared instances. A personal workspace (`memberCount` absent or 1) shows no
+attribution even when `goalSetBy` is present. For the name, clients prefer the
+principal's current entry in `workspace.members.list`, then the `goalSetBy` snapshot
+(`displayName`, then `login`), then a generic "a former member"; the caller's own
+principal (`principal.me`) reads as "you". Goal notice rows in shared workspaces are
+attributed the same way from `metadata.fromPrincipalId`.
 
 **Lifecycle.** The goal stays on the session through `agent.retire` / `agent.restore`
 and is deleted with the agent. It is not copied by `agent.importSession` or into any
