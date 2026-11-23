@@ -376,7 +376,8 @@ all current members. Under `discussionManagement: 1`, every new conversation is
 workspace-wide; earlier direct/group histories remain private and read-only.
 These are separate from agent conversations and note comments. The desktop entry point remains behind Multiplayer Labs. Replies and reactions use
 the independently gated message-actions extension below. Binary attachments,
-message edits, and changes to a conversation's participants are outside this contract.
+message edits, and changes to a conversation's participants are outside this contract;
+images travel as body references (see [Image references](#image-references)).
 
 Exactly integer `discussionConversations: 1` in the server capabilities advertises
 the complete multiple-conversation contract. Clients must check this capability
@@ -595,6 +596,24 @@ Workspace references may be represented by existing canonical workspace links
 in the plain-text body and rendered as navigable chips. The client must preserve
 the target workspace/backend and validate link kinds; reference text is never
 HTML, executable code, or permission to invoke an agent.
+
+#### Image references
+
+A message carries images as Markdown image lines at the end of its plain-text
+`body`; no field, method, or capability is added. Each line is exactly
+`![name](workspace-asset://<workspaceId>/<assetId>)`. A client uploads the bytes
+first with `note.saveAsset` and uses the returned `url`.
+
+- Only a trailing run of such lines counts as attachments. Text, if any, ends
+  with a blank line before them. The same Markdown elsewhere in the body stays text.
+- `<workspaceId>` must equal the message's workspace. `<assetId>` must end in
+  `.png`, `.jpg`, `.jpeg`, `.gif`, or `.webp`. Other lines stay text.
+- `name` is display text without `[`, `]`, `(`, `)`, `\`, or line breaks.
+- The lines count toward the 16384-byte body limit and are part of retry identity.
+- Asset reads use `note.readAsset` and its workspace membership check. An agent
+  recipient gets the body unchanged and may read the asset with `ws.note.readAsset(asset)`, passing the URL.
+- Deleting a message or conversation does not delete its assets.
+- Older clients show the lines as text.
 
 #### Correlated agent activity and controls
 
