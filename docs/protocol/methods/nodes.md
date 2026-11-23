@@ -1538,9 +1538,11 @@ settings (`northflank.diskGiB`, `agent37.diskGiB`).
   `-32602` `invalid-params`. The backend stays the only check; a client
   uses these values only to show and limit its field.
 - **Size cap.** With `sizeMaxGiB`, a new machine gets the smaller of
-  `diskGiB` and `sizeMaxGiB[instanceType][size]`. A client keeps the value it
-  sends at or under the cap of the size and type it saves, and tells the user
-  when a change of size or type lowers the value.
+  `diskGiB` and `sizeMaxGiB[instanceType][size]`. A saved `diskGiB` above the
+  cap is valid: `configure` accepts the whole `minGiB`-`maxGiB` range on any
+  type and size. A client therefore leaves a saved value as it is when it
+  opens an entry. It lowers the value only after the user changes the size or
+  type, and then tells the user.
 - **New machines only.** A changed `diskGiB` applies to machines started
   after the save. Running and paused machines keep their disk.
 
