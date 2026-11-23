@@ -8,7 +8,7 @@ import test from 'node:test';
 
 import {
   DEFINITIONS_FILE, DOCS_FILE, FE_DIR, FE_FILE, INTENTD_DIR, REGISTRY_FILE,
-  compare, parseDefinitionPaths, parseDocsPaths, parseFePaths, parseKnownPaths, run, stripComments,
+  compare, crateFileReader, parseDefinitionPaths, parseDocsPaths, parseFePaths, parseKnownPaths, run, stripComments,
 } from './check-agent-feature-toggles.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -99,7 +99,8 @@ test('the pinned component sources parse', () => {
   // A shape change in either component fails here and in the check itself;
   // the set comparison is left to `make check-agent-feature-toggles`.
   const daemon = parseDefinitionPaths(readFileSync(path.join(root, INTENTD_DIR, DEFINITIONS_FILE), 'utf8'));
-  const known = parseKnownPaths(readFileSync(path.join(root, INTENTD_DIR, REGISTRY_FILE), 'utf8'));
+  const registry = path.join(root, INTENTD_DIR, REGISTRY_FILE);
+  const known = parseKnownPaths(readFileSync(registry, 'utf8'), REGISTRY_FILE, crateFileReader(path.dirname(registry)));
   const { featurePaths, featureEntries } = parseFePaths(readFileSync(path.join(root, FE_DIR, FE_FILE), 'utf8'));
   const { listed } = parseDocsPaths(readFileSync(path.join(root, DOCS_FILE), 'utf8'));
   for (const values of [daemon, known, featurePaths, featureEntries, listed]) {
@@ -218,7 +219,69 @@ test('unrecognized intentd shapes fail closed', () => {
   assert.throws(() => parseDefinitionPaths(definitionsRs(BASE, '        let key = "agentFeatures.viaConst";\n')), /agentFeatures\.viaConst outside a definition constructor/);
   assert.throws(() => parseDefinitionPaths(definitionsRs(BASE, '        x.with_requires("agentFeatures.hostExec"),\n')), /agentFeatures\.hostExec outside a definition constructor/);
   assert.throws(() => parseKnownPaths(registryRs(BASE).replace('pub(crate) const KNOWN_PATHS', 'pub const PATHS')), /KNOWN_PATHS.*not found/);
-  assert.throws(() => parseKnownPaths(registryRs(BASE).replace('];', '    EXTRA,\n];')), /KNOWN_PATHS holds something other than string literals/);
+  assert.throws(() => parseKnownPaths(registryRs(BASE).replace('];', '    format!("x"),\n];')), /KNOWN_PATHS holds something other than string literals or constant paths/);
+});
+
+// intentd#3696 named a KNOWN_PATHS entry by the constant its reader uses and
+// the check rejected it (consumer-checks job 137450667465).
+const sentryOps = (decl = 'pub(crate) const ORGANIZATION_SETTING_PATH: &str = "accounts.sentry.organization";') => `use intent_sentry::SentryEngine;
+
+/// Settings path of the Sentry organization slug.
+${decl}
+// const TOKEN_SETTING_PATH: &str = "commented.out";
+
+#[cfg(test)]
+mod tests {
+    const TOKEN_SETTING_PATH: &str = "test.only";
+}
+`;
+const withEntry = (entry) => registryRs(BASE).replace('    "prMonitor.debounceSeconds",\n', `    ${entry},\n    "prMonitor.debounceSeconds",\n`);
+const reader = (files) => (rel) => files[rel] ?? null;
+
+test('a KNOWN_PATHS constant resolves to the string its const holds', () => {
+  const entry = 'crate::sentry_ops::ORGANIZATION_SETTING_PATH';
+  const paths = (files, source = withEntry(entry)) => parseKnownPaths(source, REGISTRY_FILE, reader(files)).length;
+  assert.equal(paths({ 'sentry_ops.rs': sentryOps() }), BASE.length);
+  const nested = withEntry('crate::agent::flags::HOST_EXEC_PATH');
+  assert.deepEqual(
+    parseKnownPaths(nested, REGISTRY_FILE, reader({ 'agent/flags/mod.rs': 'pub const HOST_EXEC_PATH: &\'static str = "agentFeatures.viaConst";\n' })),
+    [...BASE, 'agentFeatures.viaConst'],
+  );
+  const local = `const LOCAL_PATH: &str = "agentFeatures.local";\n\n${withEntry('LOCAL_PATH')}`;
+  assert.deepEqual(parseKnownPaths(local, REGISTRY_FILE), [...BASE, 'agentFeatures.local']);
+  const dir = fixture();
+  try {
+    const registry = path.join(dir, INTENTD_DIR, REGISTRY_FILE);
+    writeFileSync(registry, withEntry(entry).replace('"agentFeatures.hostExec",\n', ''));
+    writeFileSync(path.join(path.dirname(registry), 'sentry_ops.rs'), sentryOps('pub(crate) const ORGANIZATION_SETTING_PATH: &str = "agentFeatures.hostExec";'));
+    const out = cli(dir);
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /3 agentFeatures\.\* settings have Settings toggles/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an unresolvable KNOWN_PATHS constant fails closed', () => {
+  const parse = (entry, files = {}) => () => parseKnownPaths(withEntry(entry), REGISTRY_FILE, reader(files));
+  const entry = 'crate::sentry_ops::ORGANIZATION_SETTING_PATH';
+  assert.throws(parse(entry), /crate::sentry_ops::ORGANIZATION_SETTING_PATH cannot be resolved: neither .*sentry_ops\.rs nor .*sentry_ops\/mod\.rs exists/);
+  assert.throws(parse('crate::sentry_ops::TOKEN_SETTING_PATH', { 'sentry_ops.rs': sentryOps() }), /no top-level `const TOKEN_SETTING_PATH: &str = "\.\.\.";` in .*sentry_ops\.rs/);
+  const computed = sentryOps('pub(crate) const ORGANIZATION_SETTING_PATH: &str = concat!("accounts.", "sentry");');
+  assert.throws(parse(entry, { 'sentry_ops.rs': computed }), /`const ORGANIZATION_SETTING_PATH` in .*sentry_ops\.rs is not a plain `&str` string literal/);
+  const twice = sentryOps(`pub(crate) const ORGANIZATION_SETTING_PATH: &str = "a";\nconst ORGANIZATION_SETTING_PATH: &str = "b";`);
+  assert.throws(parse(entry, { 'sentry_ops.rs': twice }), /2 top-level `const ORGANIZATION_SETTING_PATH/);
+  assert.throws(parse('EXTRA'), /EXTRA cannot be resolved: no top-level `const EXTRA: &str = "\.\.\.";` in .*settings_registry\.rs/);
+  assert.throws(parse('super::sentry_ops::ORGANIZATION_SETTING_PATH'), /holds something other than string literals or constant paths/);
+  const dir = fixture();
+  try {
+    writeFileSync(path.join(dir, INTENTD_DIR, REGISTRY_FILE), withEntry(entry));
+    const out = cli(dir);
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /KNOWN_PATHS entry crate::sentry_ops::ORGANIZATION_SETTING_PATH cannot be resolved/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('unrecognized FE shapes fail closed', () => {
