@@ -1323,9 +1323,9 @@ interface AgentRetrySetupResult {
 ```
 
 `server.capabilities.remoteSetupRetry: 1` gates it; older daemons answer
-`-32601`. `agent.retrySetup` runs a script on the machine, so like saved-script
-writes it is not on the collaborator allowlist: the owner and host members may
-call it, a guest is refused. It is allowed when the
+`-32601`. `agent.retrySetup` runs a script on the machine, so it is on neither
+the collaborator nor the member allowlist: only the owner (a host
+administrator) may call it; members and guests are refused `-32003`. It is allowed when the
 agent's `setup.state` is `failed` (any `exitCode` or `error` code), or
 `running`: the backend keeps no record of which run is a retry, so for
 `running` the machine decides (it joins a retry under way, and refuses a
@@ -1383,8 +1383,10 @@ interface SetupRetryOutcome {
 `state: "running"` means the wait ended first (at once when the timeout is
 5 s or less); calling it again waits for the same run. `ws.workspace.details().setupStatus` follows the run. A refusal
 is the error message with the codes above. A local agent's call fails
-`setup-retry-not-remote`. The first-turn setup-failure notice names the call
-on a protocol 21 link.
+`setup-retry-not-remote`. The call is not in the `workspace_api` tool
+description (only a remote agent can use it): a remote agent on a protocol 21
+link finds it in `ws.help("workspace")`, and the first-turn setup-failure
+notice names it.
 
 ##### Forge token for remote agents
 
