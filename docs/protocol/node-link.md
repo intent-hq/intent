@@ -2956,7 +2956,9 @@ the repository itself.
 
 **When it runs.** The machine runs `setup` only when it has just **created** the
 agent's checkout: at the agent's first launch, and at a
-[relaunch without a checkout](#relaunch-without-a-checkout). It runs after the
+[relaunch without a checkout](#relaunch-without-a-checkout), including a launch
+that replaces a checkout an earlier launch did not finish before its setup
+started ([setup status](#setup-status-and-output)). It runs after the
 submodules are ready and before the provider starts. A launch that keeps an
 existing checkout (model switch, reconnect, daemon restart) does not run it
 again. Every remote agent has its own checkout, so setup runs for each one,
@@ -2999,7 +3001,10 @@ and `started`:
 
 A fresh checkout whose submodules are ready journals one `setupFinished`
 before `started`. A failed checkout journals none (it is removed, and the next
-launch is fresh). A stop or machine restart during setup leaves the result
+launch is fresh). The machine records a fresh checkout's setup as pending
+before it makes the checkout; a stop or machine restart before the script
+starts leaves it pending, and the next launch removes that checkout, makes a
+fresh one and runs the script. A stop or machine restart during setup leaves the result
 unrecorded; the next launch keeps that checkout and journals one
 `setupFinished` `failed` with `node-setup-interrupted`, without running the
 script ([failures](#setup-status-and-output)). Any other launch that keeps its
@@ -3035,6 +3040,7 @@ backend worktree.
 | The script exits non-zero | `failed` with `exitCode`; the agent starts, and its first turn carries the local setup-failure notice |
 | The script cannot be written or spawned | `failed`, `error: "node-setup-failed: <detail>"`; the agent starts with the notice |
 | The script runs past `timeoutSecs` | Its process group is killed; `failed`, `error: "node-setup-timeout: <detail>"`; the agent starts with the notice |
+| A `stop` or machine restart while the checkout is made, before the script starts | `exited` is journaled with no `setupFinished` or `started`; the next launch removes the partial checkout, makes a fresh one and runs the script |
 | A `stop` during setup | The process group is killed; `exited` is journaled with no `setupFinished` or `started`; the next launch keeps the checkout and records `failed`, `error: "node-setup-interrupted: <detail>"`, without a re-run |
 | The machine restarts during setup | At its next launch of that agent the machine records `failed`, `error: "node-setup-interrupted: <detail>"`, without a re-run |
 
