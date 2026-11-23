@@ -522,7 +522,7 @@ FE_BUILD_HEAP_MB ?= 16384
 .PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	ensure-fe-toolchain fe-verify-changed \
 	update \
-	build build-intentd build-sidecar gate test test-intentd test-scripts test-scripts-changed mine-ws-usage test-changed test-select test-stress list-tests coverage-changed coverage-e2e coverage-all \
+	build build-intentd build-sidecar gate test test-intentd test-scripts test-scripts-changed mine-ws-usage test-changed test-select test-stress flake-triage list-tests coverage-changed coverage-e2e coverage-all \
 	fmt clippy shear check-windows check-macos lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell lint-workflows bash3 check clean clean-dev \
 	sweep sweep-all sweep-gates seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
@@ -903,7 +903,7 @@ gate: check | check-callback-fixture check-transfer-fixture ## Run all local Rus
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures, HERMETIC=1 hides provider CLIs like CI)
 
 test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
-	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_gate_storage scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_nextest_stress scripts.test_host_load scripts.test_watch_capacity scripts.test_intentd_tree_preflight scripts.test_sandbox_shot_target
+	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_gate_storage scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_flake_triage scripts.test_nextest_stress scripts.test_host_load scripts.test_watch_capacity scripts.test_intentd_tree_preflight scripts.test_sandbox_shot_target
 
 # DRY_RUN must never start real work: run every target whose help or recipe
 # mentions DRY_RUN, plus every coverage-*, with DRY_RUN=1 and stub cargo/rustup,
@@ -1144,6 +1144,25 @@ test-stress: ensure-intentd-submodule | check-transfer-fixture ## Repeat the Rus
 	@$(RUST_TEST_RUNNER) --label test-stress --filterset '$(TEST_SELECT_E)'$(TEST_SELECT_FEATURES) \
 		--stress-count '$(COUNT)' --load '$(strip $(LOAD))'$(if $(strip $(LOAD_CPUS)), --load-cpus '$(strip $(LOAD_CPUS))')$(if $(strip $(LOAD_CORES)), --load-cores '$(strip $(LOAD_CORES))') \
 		--stall '$(strip $(STALL))'$(if $(strip $(STALL_MS)), --stall-ms '$(strip $(STALL_MS))')$(if $(strip $(STALL_EVERY_MS)), --stall-every-ms '$(strip $(STALL_EVERY_MS))')
+
+# Whose fault is a merge-queue ejection? Runs make test-stress on main (BASE,
+# default a fresh origin/main), main merged with the intentd PR, and the PR
+# alone, each in its own worktree, and prints a table with a verdict per test:
+# "fails on main", "caused by this PR" or "inconclusive"
+# (`make flake-triage RUN=<merge_group run URL> COUNT=200 LOAD=1`). RUN reads
+# the failing tests and the PR from the run with gh; otherwise pass E and PR
+# (or BRANCH). The stress knobs pass on to test-stress. E, PR, BRANCH, RUN,
+# BASE and the knobs count only from the make command line. See the header of
+# scripts/flake_triage.py.
+FLAKE_TRIAGE_ARGS = COUNT LOAD LOAD_CPUS LOAD_CORES STALL STALL_MS STALL_EVERY_MS HERMETIC TEST_THREADS BUILD_JOBS
+CLI_VALUE = $(if $(filter command line,$(origin $(1))),$(subst ','\'',$(value $(1))))
+unexport PR BRANCH RUN
+flake-triage: ensure-intentd-submodule ## Stress E='<filterset>' (or the failing tests of RUN=<merge_group run URL>) on main, main + PR=<n> (or BRANCH=<ref>) and the PR alone, then print whether it fails on main or is caused by the PR (BASE, COUNT, LOAD, STALL, FEATURES as for test-stress)
+	@python3 scripts/flake_triage.py --repo-root '$(subst ','\'',$(CURDIR))' \
+		--intentd-dir '$(subst ','\'',$(INTENTD_DIR))' --cache-dir '$(subst ','\'',$(GATE_CACHE_DIR))' \
+		--filterset '$(call CLI_VALUE,E)' --pr '$(call CLI_VALUE,PR)' --branch '$(call CLI_VALUE,BRANCH)' \
+		--run '$(call CLI_VALUE,RUN)' --base '$(call CLI_VALUE,BASE)'$(foreach v,$(FLAKE_TRIAGE_ARGS),$(if $(filter command line,$(origin $(v))), --stress-arg '$(v)=$(subst ','\'',$(strip $($(v))))')) \
+		$(if $(TEST_SELECT_FEATURES_LIST),--stress-arg 'FEATURES=$(subst ','\'',$(TEST_SELECT_FEATURES_LIST))')
 
 # Local equivalent of intentd's pull_request `coverage-changed` CI job: the
 # same changed-tests.sh selection as test-changed, run under the cargo-llvm-cov

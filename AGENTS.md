@@ -266,7 +266,8 @@ with no rollback.
     `ws.pr.snapshot(N).requirements.threads.unresolved` is 0 before enqueueing.
   - A `merge_group` failure ejects the PR without landing it (`mergeQueueEjection` in
     `ws.pr.snapshot` / `ws.pr.monitor`; a check that times out counts as failed). It is
-    not re-queued on its own: fix the cause and re-enqueue.
+    not re-queued on its own: fix the cause (for an intentd test, `make flake-triage RUN=<run URL>`
+    says if it fails on main) and re-enqueue.
   - The squash title is the commit headline on a single-commit PR and the PR title on a
     multi-commit PR, and the body includes every branch commit message. Make that title
     a valid conventional commit (amend auto-commits like "Coordinator" before pushing;
