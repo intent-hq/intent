@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
+import fcntl
 import hashlib
 import http.server
 import json
@@ -34,6 +36,7 @@ import tarfile
 import tempfile
 import threading
 import time
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -221,14 +224,6 @@ def leftovers(provider: str, items: list[dict], backend_id: str) -> list[str]:
     raise RigError(f"cloud provider {provider!r} is not known to the rig")
 
 
-def guard_no_rig(state_path: Path) -> None:
-    if state_path.exists():
-        raise RigError(
-            f"a rig is already recorded in {state_path}; run 'make live-rig-down' first "
-            "(its folder may still hold copied secrets)"
-        )
-
-
 def rig_env(rig_dir: Path, base: dict) -> dict:
     env = {k: v for k, v in base.items() if not k.startswith("INTENTD_")}
     data = rig_dir / "data"
@@ -363,18 +358,109 @@ class Rpc:
 # ---------------------------------------------------------------------- state
 
 
-def load_state() -> dict | None:
+@contextlib.contextmanager
+def state_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_name(path.name + ".lock"), "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def load_state(path: Path | None = None) -> dict | None:
     try:
-        return json.loads(STATE.read_text(encoding="utf-8"))
+        return json.loads((path or STATE).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None
 
 
-def save_state(state: dict) -> None:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = STATE.with_suffix(".tmp")
+def write_state(state: dict, path: Path) -> None:
+    tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(STATE)
+    tmp.replace(path)
+
+
+def reserve_state(state: dict, path: Path | None = None) -> None:
+    """Claim the one rig slot of this worktree, or fail if a rig holds it."""
+    path = path or STATE
+    with state_lock(path):
+        if path.exists():
+            raise RigError(
+                f"a rig is already recorded in {path}; run 'make live-rig-down' first "
+                "(its folder may still hold copied secrets)"
+            )
+        write_state(state, path)
+
+
+def save_state(state: dict, path: Path | None = None) -> bool:
+    """Write the state only while this rig instance still owns the slot."""
+    path = path or STATE
+    with state_lock(path):
+        current = load_state(path)
+        if current is None or current.get("instanceId") != state.get("instanceId"):
+            return False
+        write_state(state, path)
+        return True
+
+
+def clear_state(state: dict, path: Path | None = None) -> bool:
+    path = path or STATE
+    with state_lock(path):
+        current = load_state(path)
+        if current is None or current.get("instanceId") != state.get("instanceId"):
+            return False
+        path.unlink()
+        return True
+
+
+def identity(pid: int) -> str | None:
+    """What tells this process apart from a later one that reuses its pid."""
+    stat = Path(f"/proc/{pid}/stat")
+    if stat.exists():
+        try:
+            fields = stat.read_text().rsplit(")", 1)[1].split()
+            boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+            return f"{boot}:{fields[19]}"
+        except (OSError, IndexError):
+            return None
+    shown = subprocess.run(["ps", "-o", "lstart=", "-o", "comm=", "-p", str(pid)], capture_output=True, text=True)
+    return shown.stdout.strip() or None
+
+
+def proc_record(pid: int | None) -> dict | None:
+    if not pid:
+        return None
+    return {"pid": pid, "identity": identity(pid)}
+
+
+def owned(record: dict | None) -> bool:
+    if not record or not alive(record.get("pid")):
+        return False
+    return record.get("identity") is not None and identity(record["pid"]) == record["identity"]
+
+
+def stop_owned(record: dict | None, grace: float = 20) -> bool:
+    """Stop a recorded process group only while it is still ours; True once ours is gone."""
+    if not owned(record):
+        return True
+    pid = record["pid"]
+    for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 5)):
+        if not owned(record):
+            return True
+        try:
+            os.killpg(pid, sig)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            os.kill(pid, sig)
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline:
+            if not owned(record):
+                return True
+            time.sleep(0.2)
+    return not owned(record)
 
 
 def alive(pid: int | None) -> bool:
@@ -640,10 +726,10 @@ def wait_ready(rpc: Rpc, process: subprocess.Popen | None, timeout: float) -> di
     raise RigError(f"intentd was not ready within {timeout:.0f}s")
 
 
-def stop_daemon(intentd: Path, env: dict, pid: int | None) -> bool:
-    if alive(pid):
+def stop_daemon(intentd: Path | None, env: dict, record: dict | None) -> bool:
+    if owned(record) and intentd is not None:
         subprocess.run([str(intentd), "stop"], env=env, capture_output=True, timeout=60)
-    return stop_group(pid)
+    return stop_owned(record)
 
 
 # -------------------------------------------------------------------- copying
@@ -690,50 +776,71 @@ def copy_entries(host: Rpc, rig: Rpc, wanted: str, overrides: dict, on_copied) -
 # ------------------------------------------------------------------------ up
 
 
-def cmd_up(args: argparse.Namespace) -> int:
-    guard_no_rig(STATE)
-    host = Rpc(host_socket(), timeout=60)
-    baseline = host_fingerprint(host)
-    intentd = build_intentd(args)
-    tailcat = find_tailcat(intentd, args.tailcat_bin)
-    root = Path(args.rig_root or os.environ.get("TMPDIR") or "/tmp")
+def make_rig_dir(root: Path) -> Path:
     rig_dir = Path(tempfile.mkdtemp(prefix="intent-live-rig.", dir=root))
     if len(str(rig_dir / "data" / "intentd.sock")) > 100:
         shutil.rmtree(rig_dir)
         rig_dir = Path(tempfile.mkdtemp(prefix="intent-live-rig.", dir="/tmp"))
     os.chmod(rig_dir, 0o700)
     (rig_dir / "data").mkdir(mode=0o700)
-    env = rig_env(rig_dir, os.environ)
-    env["INTENTD_TAILCAT_BIN"] = str(tailcat)
+    return rig_dir
+
+
+def cmd_up(args: argparse.Namespace) -> int:
+    host = Rpc(host_socket(), timeout=60)
+    baseline = host_fingerprint(host)
+    rig_dir = make_rig_dir(Path(args.rig_root or os.environ.get("TMPDIR") or "/tmp"))
     state = {
-        "rigDir": str(rig_dir), "intentdBin": str(intentd), "tailcatBin": str(tailcat),
-        "supervisorPid": os.getpid(), "orchestrator": args.orchestrator, "hostBaseline": baseline,
+        "instanceId": uuid.uuid4().hex, "rigDir": str(rig_dir), "supervisor": proc_record(os.getpid()),
+        "orchestrator": args.orchestrator, "hostBaseline": baseline,
         "startedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "entries": [], "profiles": [],
     }
-    save_state(state)
+    try:
+        reserve_state(state)
+    except RigError:
+        shutil.rmtree(rig_dir, ignore_errors=True)
+        raise
     relay = daemon = None
+    intentd: Path | None = None
+    env = rig_env(rig_dir, os.environ)
     stop = threading.Event()
     toggle = threading.Event()
     park = threading.Event()
+
+    def mine() -> dict | None:
+        current = load_state()
+        return current if current and current.get("instanceId") == state["instanceId"] else None
 
     def on_stop(*_args) -> None:
         stop.set()
         if not state.get("ready"):
             raise RigError("stopped before the rig was ready")
 
+    def on_park(*_args) -> None:
+        park.set()
+        if not state.get("ready"):
+            raise RigError("removed by make live-rig-down before the rig was ready")
+
     signal.signal(signal.SIGTERM, on_stop)
     signal.signal(signal.SIGINT, on_stop)
     signal.signal(signal.SIGUSR1, lambda *_: toggle.set())
-    signal.signal(signal.SIGUSR2, lambda *_: park.set())
+    signal.signal(signal.SIGUSR2, on_park)
+    code = 1
     try:
+        intentd = build_intentd(args)
+        tailcat = find_tailcat(intentd, args.tailcat_bin)
+        env["INTENTD_TAILCAT_BIN"] = str(tailcat)
+        state.update({"intentdBin": str(intentd), "tailcatBin": str(tailcat)})
+        save_state(state)
         if args.relay:
             relay = Relay(args, rig_dir)
-            state["relay"] = {"kind": relay.kind, "mapUrl": relay.url, "pid": relay.up(), "up": True,
-                              "node": f"{relay.host}:{relay.port}"}
+            state["relay"] = {"kind": relay.kind, "mapUrl": relay.url, "process": proc_record(relay.up()),
+                              "up": True, "node": f"{relay.host}:{relay.port}"}
+            save_state(state)
             OUT.say(f"relay ({relay.kind}) node {relay.host}:{relay.port}, map {relay.url}")
         (rig_dir / "data" / "config.toml").write_text(rig_config(relay.url if relay else None))
         daemon = start_daemon(intentd, env, rig_dir, args.orchestrator)
-        state["daemonPid"] = daemon.pid
+        state["daemon"] = proc_record(daemon.pid)
         save_state(state)
         rpc = Rpc(rig_dir / "data" / "intentd.sock")
         status = wait_ready(rpc, daemon, args.ready_timeout)
@@ -749,35 +856,22 @@ def cmd_up(args: argparse.Namespace) -> int:
 
         copy_entries(host, rpc, args.cloud, overrides, record)
         state["ready"] = True
-        save_state(state)
+        if not save_state(state):
+            raise RigError("another rig took this worktree's state; stopping this one")
         OUT.say(f"ready: intentd {state['version']} in {rig_dir} (state {STATE.relative_to(REPO)})")
         OUT.say("drive it with: make live-rig-call METHOD=<method> PARAMS='<json>'; remove it with: make live-rig-down")
-        while not stop.is_set():
-            if park.is_set() and daemon is not None:
-                # live-rig-down removes the rig; exiting would let a service
-                # manager restart this command and copy the secrets again.
-                if relay is not None:
-                    relay.close()
-                    relay = None
-                stop_daemon(intentd, env, daemon.pid)
-                daemon = None
-                current = load_state() or state
-                current.update({"parked": True, "daemonPid": None, "ready": False})
-                if current.get("relay"):
-                    current["relay"].update({"pid": None, "up": False})
-                save_state(current)
-                OUT.say("the rig was removed by make live-rig-down; stop this service")
-            if daemon is None:
-                stop.wait(1)
-                continue
+        while not stop.is_set() and not park.is_set():
             if toggle.is_set() and relay:
                 toggle.clear()
-                current = load_state() or state
+                current = mine()
+                if current is None:
+                    break
                 want = current.get("relay", {}).get("want", "up")
                 if want == "down":
                     relay.down()
+                    current["relay"]["process"] = None
                 else:
-                    current["relay"]["pid"] = relay.up()
+                    current["relay"]["process"] = proc_record(relay.up())
                 current["relay"]["up"] = want != "down"
                 save_state(current)
                 OUT.say(f"relay is {want}")
@@ -785,21 +879,36 @@ def cmd_up(args: argparse.Namespace) -> int:
                 OUT.say(f"intentd exited with status {daemon.returncode}; run 'make live-rig-down' to clean up", err=True)
                 return 1
             stop.wait(1)
-        OUT.say("stopping; the rig folder and its copied secrets stay until 'make live-rig-down'")
+        code = 0
+        if not park.is_set():
+            OUT.say("stopping; the rig folder and its copied secrets stay until 'make live-rig-down'")
         return 0
     except RigError as error:
-        OUT.say(f"ERROR: {error}", err=True)
-        OUT.say("run 'make live-rig-down' to remove what was started", err=True)
-        return 1
+        if not park.is_set():
+            OUT.say(f"ERROR: {error}", err=True)
+            OUT.say("run 'make live-rig-down' to remove what was started", err=True)
+        return code
     finally:
         if daemon is not None:
-            stop_daemon(intentd, env, daemon.pid)
+            stop_daemon(intentd, env, proc_record(daemon.pid))
         if relay is not None:
             relay.close()
-        current = load_state()
-        if current and not current.get("parked"):
-            current.update({"supervisorPid": None, "ready": False})
+        current = mine()
+        if current:
+            current.update({"ready": False, "daemon": None, "parked": park.is_set()})
+            if current.get("relay"):
+                current["relay"].update({"process": None, "up": False})
+            if not park.is_set():
+                current["supervisor"] = None
             save_state(current)
+        if park.is_set():
+            # live-rig-down removes the rig; exiting would let a service
+            # manager restart this command and copy the secrets again.
+            OUT.say("the rig was removed by make live-rig-down; stop this service")
+            signal.signal(signal.SIGTERM, lambda *_: stop.set())
+            signal.signal(signal.SIGINT, lambda *_: stop.set())
+            while not stop.is_set():
+                stop.wait(1)
 
 
 # ---------------------------------------------------------------------- down
@@ -891,19 +1000,39 @@ def cmd_down(args: argparse.Namespace) -> int:
         OUT.say("no rig is recorded; nothing to remove")
         return 0
     rig_dir = Path(state["rigDir"])
-    intentd = Path(state["intentdBin"])
+    intentd = Path(state["intentdBin"]) if state.get("intentdBin") else None
     env = rig_env(rig_dir, os.environ)
     env["INTENTD_TAILCAT_BIN"] = state.get("tailcatBin", "")
     rpc = Rpc(rig_dir / "data" / "intentd.sock")
     report: list[tuple[str, bool, str]] = []
+
+    # Park, not stop, the supervisor first: a service manager restarts one
+    # that exits, and a parked one no longer copies entries or moves the relay.
+    supervisor = state.get("supervisor")
+    parked = not owned(supervisor)
+    if not parked:
+        os.kill(supervisor["pid"], signal.SIGUSR2)
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and owned(supervisor):
+            if (load_state() or {}).get("parked"):
+                parked = True
+                break
+            time.sleep(0.5)
+        parked = parked or not owned(supervisor)
+    state = load_state() or state
+
     temp = None
     removal_ok = True
     entries = list(state.get("entries", []))
-    if (rig_dir / "data" / "intentd.db").exists():
-        if not rpc.accepts() and os.access(intentd, os.X_OK):
-            OUT.say("the rig daemon is not running; starting it to remove its cloud entries")
+    if not parked:
+        removal_ok = False
+        report.append(("cloud entries removed with stopAgents", False,
+                       f"the rig supervisor (pid {supervisor['pid']}) did not park within 60s; nothing was removed"))
+    elif (rig_dir / "data" / "intentd.db").exists():
+        if not rpc.accepts() and intentd is not None and os.access(intentd, os.X_OK):
+            OUT.say("starting the rig daemon to remove its cloud entries")
             temp = start_daemon(intentd, env, rig_dir, state.get("orchestrator", False))
-            state["daemonPid"] = temp.pid
+            state["daemon"] = proc_record(temp.pid)
             save_state(state)
         try:
             wait_ready(rpc, temp, args.ready_timeout)
@@ -949,22 +1078,10 @@ def cmd_down(args: argparse.Namespace) -> int:
         sandboxes_ok = False
         report.append(("providers list no rig sandboxes", False, str(error)))
 
-    supervisor = state.get("supervisorPid")
-    parked = not alive(supervisor)
-    if not parked:
-        # Park, not stop: a service manager restarts a supervisor that exits.
-        os.kill(supervisor, signal.SIGUSR2)
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline and alive(supervisor):
-            if (load_state() or {}).get("parked"):
-                parked = True
-                break
-            time.sleep(0.5)
-        parked = parked or not alive(supervisor)
     state = load_state() or state
-    daemon_gone = stop_daemon(intentd, env, state.get("daemonPid"))
-    relay_gone = stop_group((state.get("relay") or {}).get("pid"))
-    supervisor_note = "gone" if not alive(supervisor) else "parked (stop its service)" if parked else "ALIVE"
+    daemon_gone = stop_daemon(intentd, env, state.get("daemon"))
+    relay_gone = stop_owned((state.get("relay") or {}).get("process"))
+    supervisor_note = "gone" if not owned(supervisor) else "parked (stop its service)" if parked else "ALIVE"
     processes_ok = daemon_gone and relay_gone and parked
     report.append(("rig processes stopped", processes_ok,
                    f"intentd {'gone' if daemon_gone else 'ALIVE'}, relay {'gone' if relay_gone else 'ALIVE'}, "
@@ -997,7 +1114,7 @@ def cmd_down(args: argparse.Namespace) -> int:
                                     "checks": [{"claim": c, "pass": p, "detail": d} for c, p, d in report]}, indent=2) + "\n")
     OUT.say(f"evidence: {evidence.relative_to(REPO)}")
     if not keep:
-        STATE.unlink(missing_ok=True)
+        clear_state(state)
     return 0 if ok else 1
 
 
@@ -1019,7 +1136,7 @@ def cmd_status(_args: argparse.Namespace) -> int:
     rpc = Rpc(Path(state["rigDir"]) / "data" / "intentd.sock")
     view = {k: v for k, v in state.items() if k != "hostBaseline"}
     view["running"] = rpc.accepts()
-    view["supervisorAlive"] = alive(state.get("supervisorPid"))
+    view["supervisorAlive"] = owned(state.get("supervisor"))
     if view["running"]:
         try:
             listed = rpc.call("cloudMachines.list", timeout=30)
@@ -1049,11 +1166,11 @@ def cmd_relay(args: argparse.Namespace) -> int:
     state = load_state()
     if not state or not state.get("relay"):
         raise RigError("no rig relay is running (start the rig with RELAY=fake or RELAY=derper)")
-    if not alive(state.get("supervisorPid")):
+    if not owned(state.get("supervisor")):
         raise RigError("the rig supervisor is not running")
     state["relay"]["want"] = args.action
     save_state(state)
-    os.kill(state["supervisorPid"], signal.SIGUSR1)
+    os.kill(state["supervisor"]["pid"], signal.SIGUSR1)
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         if (load_state() or {}).get("relay", {}).get("up") == (args.action == "up"):

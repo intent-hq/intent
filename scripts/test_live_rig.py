@@ -5,6 +5,8 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -331,14 +333,49 @@ class RedactTests(unittest.TestCase):
 
 
 class StateTests(unittest.TestCase):
-    def test_a_second_rig_is_refused_while_one_exists(self):
+    def test_a_second_rig_is_refused_while_one_is_reserved(self):
         with tempfile.TemporaryDirectory() as root:
             state = Path(root) / "state.json"
-            MODULE.guard_no_rig(state)
-            state.write_text(json.dumps({"rigDir": "/tmp/x", "supervisorPid": os.getpid()}))
+            MODULE.reserve_state({"instanceId": "a"}, state)
             with self.assertRaises(MODULE.RigError) as caught:
-                MODULE.guard_no_rig(state)
+                MODULE.reserve_state({"instanceId": "b"}, state)
             self.assertIn("live-rig-down", str(caught.exception))
+            self.assertEqual(MODULE.load_state(state)["instanceId"], "a")
+
+    def test_only_the_owning_instance_can_write_or_clear_the_state(self):
+        with tempfile.TemporaryDirectory() as root:
+            state = Path(root) / "state.json"
+            MODULE.reserve_state({"instanceId": "a", "n": 1}, state)
+            self.assertFalse(MODULE.save_state({"instanceId": "b", "n": 2}, state))
+            self.assertTrue(MODULE.save_state({"instanceId": "a", "n": 3}, state))
+            self.assertEqual(MODULE.load_state(state)["n"], 3)
+            self.assertFalse(MODULE.clear_state({"instanceId": "b"}, state))
+            self.assertTrue(state.exists())
+            self.assertTrue(MODULE.clear_state({"instanceId": "a"}, state))
+            self.assertFalse(MODULE.save_state({"instanceId": "a", "n": 4}, state))
+            self.assertFalse(state.exists())
+
+    def test_a_process_is_owned_only_while_its_identity_matches(self):
+        mine = MODULE.proc_record(os.getpid())
+        self.assertTrue(MODULE.owned(mine))
+        self.assertFalse(MODULE.owned(dict(mine, identity="another process")))
+        self.assertFalse(MODULE.owned(None))
+        child = subprocess.Popen([sys.executable, "-c", "pass"])
+        record = MODULE.proc_record(child.pid)
+        child.wait()
+        self.assertFalse(MODULE.owned(record))
+
+    def test_a_process_not_owned_is_never_signalled(self):
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+        try:
+            record = dict(MODULE.proc_record(child.pid), identity="reused pid")
+            self.assertTrue(MODULE.stop_owned(record, grace=1))
+            self.assertIsNone(child.poll())
+            self.assertTrue(MODULE.stop_owned(MODULE.proc_record(child.pid), grace=5))
+            self.assertIsNotNone(child.wait(timeout=5))
+        finally:
+            if child.poll() is None:
+                child.kill()
 
     def test_rig_env_never_inherits_the_callers_intentd_settings(self):
         env = MODULE.rig_env(
