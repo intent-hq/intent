@@ -206,6 +206,17 @@ existing numeric codes: `-32602` `order-stale` from `remoteMachines.setOrder`
 session import or a local model server on an orchestrator). No new numeric error
 is introduced.
 
+The [setup retry](./methods/nodes.md#retrying-a-remote-agents-setup) adds
+`data.code` values on `-32602` from `agent.retrySetup` and the remote agent's
+`ws.workspace.retrySetup()`: `setup-retry-not-remote`, `setup-retry-not-failed`,
+`setup-retry-shared-checkout`, `setup-retry-no-script`, `agent-busy` and
+`agent-not-running`, plus
+`machine-update-required` with `reason: "setup-retry"`; `-32603`
+`machine-unreachable` when the machine does not answer. On the executor link,
+`setupRetryReply.error` starts with `node-setup-retry-not-running`,
+`node-setup-retry-shared` or `node-setup-retry-not-failed`. No new numeric
+error is introduced.
+
 [Workspace homes](./methods/nodes.md#workspace-homes) add `-32603`
 `home-unavailable` (data `{ nodeId?, cloudMachineId?, name, lastBackupAt?,
 moving?, starting?, retryable: true }`: the workspace's home is detached,

@@ -42,6 +42,17 @@ when unset), `agent:updated { agentId, goal }` (`null` = removed), and transcrip
 `interpretCommands`, deliver `/goal …` as text, and answer `agent.setGoal` with
 `-32601`.
 
+Also within 18.1 (additive method and capability; capability-gated, so no version
+bump): **remote setup retry** ([§5.50](./methods/nodes.md#retrying-a-remote-agents-setup)).
+`server.capabilities.remoteSetupRetry: 1` gates the router method
+`agent.retrySetup { workspaceId, agentId }` → `{ agentId, setup }`, which runs a
+remote agent's failed setup script again in its kept checkout; the remote agent's
+`ws.workspace.retrySetup()` does the same for its own checkout. **nodeProtocol 22**
+adds the `setupRetry` / `setupRetryReply` frames
+([link contract](./node-link.md#setup-retry-nodeprotocol-22)); daemons offer
+`{ min: 7, max: 22 }`. Older daemons answer `-32601`. No store migration; the
+router surface gains one method. The documented surface is **511 / 456 / 55**.
+
 Also within 18.1 (additive row field, no capability change): **conversation goal
 attribution** ([§5.5](./methods/agents.md#conversation-goal-attribution)). The
 presence-detected `goalSetBy: { principalId, displayName, login }` rides `AgentLite`,
