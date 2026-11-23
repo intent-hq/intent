@@ -2,7 +2,7 @@
 
 // Check that every `agentFeatures.*` setting intentd registers for
 // `settings.list` has a toggle in cloudlands-fe's Settings → Agent features
-// list. intentd#2804 added `agentFeatures.secretRequests` (off by default) and
+// list. intentd#2804 added `agentFeatures.secretRequests` (then off by default) and
 // it shipped in cloudlands-fe v2.253.2 and v2.255.0 with no way to turn it on;
 // nothing compared the two lists until this check (fixed in cloudlands-fe#3890).
 //
