@@ -56,7 +56,7 @@ reset_case() {
   mkdir -p "$fixture/scripts" "$bin_dir" "$home" "$main_checkout"
   cp "$script" "$repo_root/scripts/retry.sh" "$fixture/scripts/"
   ln -s "$setup_bash" "$bin_dir/bash"
-  for command in sh cat chmod cp dirname env grep mkdir mktemp mv rm sed tar gzip uname; do
+  for command in sh awk cat chmod cp cut dirname env grep head mkdir mktemp mv rm sed tar gzip uname; do
     ln -s "$(command -v "$command")" "$bin_dir/$command"
   done
   : >"$log"
@@ -313,6 +313,87 @@ if script -qec true /dev/null >/dev/null 2>&1; then
   assert_step_times "remote machine terminal" "rust toolchain" "cargo-sweep"
 else
   echo "workspace-setup tests: util-linux script is unavailable; PTY cases skipped"
+fi
+
+# 7. The Node the callback fixture pins (Linux only) is unpacked under
+#    ~/.nvm/versions/node once; a checksum mismatch installs nothing and still
+#    finishes setup with a note.
+if [[ "$(uname -s)" == Linux ]] && command -v sha256sum >/dev/null 2>&1; then
+  node_version=24.1.0
+  case "$(uname -m)" in aarch64|arm64) node_arch=arm64 ;; *) node_arch=x64 ;; esac
+  node_name="node-v$node_version-linux-$node_arch"
+  node_src="$temp_dir/node-src/$node_name/bin"
+  mkdir -p "$node_src"
+  printf '#!/usr/bin/env bash\necho v%s\n' "$node_version" >"$node_src/node"
+  chmod +x "$node_src/node"
+  tar -czf "$temp_dir/node.tar.gz" -C "$temp_dir/node-src" "$node_name"
+  node_sum=$(sha256sum "$temp_dir/node.tar.gz" | cut -d' ' -f1)
+  # stub_node_case SHA256: the SHASUMS256.txt line the curl stub serves.
+  stub_node_case() {
+    local sum=$1
+    reset_case
+    stub_id; stub_make; stub_git; stub_rust; stub_cc
+    stub cargo-nextest 'exit 0'
+    stub cargo-sweep 'exit 0'
+    ln -s "$(command -v sha256sum)" "$bin_dir/sha256sum"
+    mkdir -p "$fixture/packages/intentd/scripts"
+    printf '{\n  "node_version": "%s"\n}\n' "$node_version" >"$fixture/packages/intentd/scripts/claude-callback-runtime.json"
+    stub curl "out=''; url=''
+while [ \$# -gt 0 ]; do
+  case \"\$1\" in -o) out=\$2; shift 2 ;; http*) url=\$1; shift ;; *) shift ;; esac
+done
+echo \"curl \$url\" >>\"\$CALL_LOG\"
+case \"\$url\" in
+  */$node_name.tar.gz) cp \"$temp_dir/node.tar.gz\" \"\$out\" ;;
+  */SHASUMS256.txt) printf '%s  $node_name.tar.gz\n' \"$sum\" >\"\$out\" ;;
+  *) exit 22 ;;
+esac"
+  }
+  stub_node_case "$node_sum"
+  run_setup
+  assert_status 0 "pinned node"
+  assert_called "curl https://nodejs.org/dist/v$node_version/$node_name.tar.gz" "pinned node"
+  [[ -x "$home/.nvm/versions/node/v$node_version/bin/node" ]] || fail "pinned node: not unpacked under ~/.nvm"
+  assert_step_times "pinned node" "pinned node"
+  : >"$log"
+  run_setup
+  assert_status 0 "pinned node rerun"
+  assert_not_called "curl" "pinned node rerun"
+
+  # assert_no_node_leftovers CASE: no download, checksum list, staging folder
+  # or install is left behind.
+  assert_no_node_leftovers() {
+    local leftover
+    [[ ! -e "$home/.nvm/versions/node/v$node_version" ]] || fail "$1: a bad download was installed"
+    for leftover in "$case_dir"/node.* "$case_dir"/node-sums.* "$home/.nvm/versions/node"/.v*; do
+      [[ ! -e "$leftover" ]] || fail "$1: left $leftover behind"
+    done
+  }
+
+  stub_node_case "$(printf '0%.0s' $(seq 64))"
+  run_setup
+  assert_status 0 "pinned node checksum mismatch"
+  assert_output "Node $node_version could not be installed" "pinned node checksum mismatch"
+  assert_no_node_leftovers "pinned node checksum mismatch"
+
+  # A tarball that matches its checksum but does not unpack (a truncated
+  # mirror file) installs nothing and leaves no staging folder.
+  printf 'not a tarball' >"$temp_dir/node.tar.gz"
+  stub_node_case "$(sha256sum "$temp_dir/node.tar.gz" | cut -d' ' -f1)"
+  run_setup
+  assert_status 0 "pinned node bad tarball"
+  assert_output "Node $node_version could not be installed" "pinned node bad tarball"
+  assert_no_node_leftovers "pinned node bad tarball"
+
+  # A version folder without bin/node (an interrupted nvm install) is left
+  # alone: nothing is downloaded and nothing is deleted.
+  stub_node_case "$node_sum"
+  mkdir -p "$home/.nvm/versions/node/v$node_version/lib"
+  run_setup
+  assert_status 0 "pinned node partial folder"
+  assert_output "exists without bin/node" "pinned node partial folder"
+  assert_not_called "curl https://nodejs.org" "pinned node partial folder"
+  [[ -d "$home/.nvm/versions/node/v$node_version/lib" ]] || fail "pinned node: deleted a folder it did not create"
 fi
 
 echo "workspace-setup tests passed under $("$setup_bash" -c 'echo "bash $BASH_VERSION"')"

@@ -8,9 +8,12 @@
 #   2. initialize the submodules (required: a failure fails setup);
 #   3. install rustup (stable, minimal profile + clippy/rustfmt) into HOME when
 #      cargo is missing, and put it on PATH;
-#   4. install cargo-nextest (prebuilt) and cargo-sweep (cargo install).
+#   4. install cargo-nextest (prebuilt) and cargo-sweep (cargo install);
+#   5. install the Node the ACP callback fixture pins (Linux) under
+#      ~/.nvm/versions/node, where scripts/prepare-acp-callback-fixture.py
+#      looks for it.
 # Missing system tools (make, curl, a C compiler) come from apt-get when the
-# node has root or passwordless sudo. Steps 3-4 are optional: a failure prints
+# node has root or passwordless sudo. Steps 3-5 are optional: a failure prints
 # a NOTE naming `make bootstrap-dev-host` and setup still succeeds.
 #
 # The output is a log (Intent keeps it as setup.log): each step prints a start
@@ -43,7 +46,9 @@ fi
 APT_UPDATED=0
 TEMP_FILE=""
 APT_LOG=""
-trap 'rm -f -- ${TEMP_FILE:+"$TEMP_FILE"} ${APT_LOG:+"$APT_LOG"}' EXIT
+NODE_SUMS=""
+NODE_STAGE=""
+trap 'rm -f -- ${TEMP_FILE:+"$TEMP_FILE"} ${APT_LOG:+"$APT_LOG"} ${NODE_SUMS:+"$NODE_SUMS"}; [ -z "$NODE_STAGE" ] || rm -rf -- "$NODE_STAGE"' EXIT
 
 say() { printf '[setup] %s\n' "$*"; }
 note() { printf '[setup] NOTE: %s\n' "$*" >&2; }
@@ -196,6 +201,74 @@ install_sweep() {
   cargo install cargo-sweep --locked --quiet || note "cargo-sweep could not be installed; run make bootstrap-dev-host"
 }
 
+# The Node the callback fixture descriptor pins, e.g. 24.21.0; empty when the
+# descriptor is missing.
+pinned_node_version() {
+  sed -n 's/.*"node_version"[[:space:]]*:[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' \
+    "$ROOT_DIR/packages/intentd/scripts/claude-callback-runtime.json" 2>/dev/null | head -n 1
+}
+
+install_pinned_node() {
+  local version arch name dir
+  [ "$(uname -s)" = Linux ] || return 0
+  version=$(pinned_node_version)
+  [ -n "$version" ] || return 0
+  dir="${NVM_DIR:-$HOME/.nvm}/versions/node/v$version"
+  [ -x "$dir/bin/node" ] && return 0
+  if [ -e "$dir" ]; then
+    note "$dir exists without bin/node; remove it to let setup install Node $version for the test gates"
+    return 0
+  fi
+  case "$(uname -m)" in
+    x86_64) arch=x64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) note "no prebuilt Node $version for $(uname -m); install it for the test gates"; return 0 ;;
+  esac
+  if ! have curl || ! have tar; then
+    note "Node $version needs curl and tar; install it for the test gates"
+    return 0
+  fi
+  name="node-v$version-linux-$arch"
+  say "installing Node $version into $dir"
+  # Unpack into a sibling staging folder and rename it into place, so an
+  # interrupted run never leaves a partial install the next run accepts.
+  if TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/node.XXXXXX") \
+    && NODE_SUMS=$(mktemp "${TMPDIR:-/tmp}/node-sums.XXXXXX") \
+    && retry curl --proto '=https' --tlsv1.2 -fsSL "https://nodejs.org/dist/v$version/$name.tar.gz" -o "$TEMP_FILE" \
+    && retry curl --proto '=https' --tlsv1.2 -fsSL "https://nodejs.org/dist/v$version/SHASUMS256.txt" -o "$NODE_SUMS" \
+    && node_checksum_matches "$TEMP_FILE" "$NODE_SUMS" "$name.tar.gz" \
+    && mkdir -p "$(dirname "$dir")" \
+    && NODE_STAGE=$(mktemp -d "$(dirname "$dir")/.v$version.XXXXXX") \
+    && tar -xzf "$TEMP_FILE" -C "$NODE_STAGE" --strip-components=1 \
+    && [ -x "$NODE_STAGE/bin/node" ] \
+    && mv "$NODE_STAGE" "$dir"; then
+    NODE_STAGE=""
+    say "Node $version is under $dir/bin; put it first on PATH for the test gates"
+  else
+    note "Node $version could not be installed; the test gates need it (see CONTRIBUTING.md#linux-x64-callback-gates)"
+  fi
+  rm -f -- ${TEMP_FILE:+"$TEMP_FILE"} ${NODE_SUMS:+"$NODE_SUMS"}
+  [ -z "$NODE_STAGE" ] || rm -rf -- "$NODE_STAGE"
+  TEMP_FILE=""
+  NODE_SUMS=""
+  NODE_STAGE=""
+}
+
+# node_checksum_matches FILE SUMS NAME: FILE's sha256 is NAME's line in SUMS.
+node_checksum_matches() {
+  local expected actual
+  expected=$(awk -v name="$3" '$2 == name && length($1) == 64 { print $1; exit }' "$2")
+  [ -n "$expected" ] || return 1
+  if have sha256sum; then
+    actual=$(sha256sum "$1" | cut -d' ' -f1)
+  elif have shasum; then
+    actual=$(shasum -a 256 "$1" | cut -d' ' -f1)
+  else
+    return 1
+  fi
+  [ "$actual" = "$expected" ]
+}
+
 step "env files" copy_config_files
 step "system tools" install_system_tools
 step "submodules" init_submodules || { echo "[setup] ERROR: submodule initialization failed" >&2; exit 1; }
@@ -203,4 +276,5 @@ if step "rust toolchain" install_rust; then
   step "cargo-nextest" install_nextest
   step "cargo-sweep" install_sweep
 fi
+step "pinned node" install_pinned_node
 say "workspace setup complete in ${SECONDS}s"
