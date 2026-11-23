@@ -51,8 +51,8 @@ eligibility with false flags on draining overlays. Enable queue optimism only fo
 `1`; missing, malformed and unknown versions use confirmed queue display.
 The numeric protocol version and a partially present field are not support tests.
 
-**Remote setup retry.** Exact integer `server.capabilities.remoteSetupRetry: 1`, also
-returned by `system.capabilities`, advertises
+**Remote setup retry.** Exact integer `server.capabilities.remoteSetupRetry: 1`, sent
+with `remoteMachines: 1`, advertises
 [`agent.retrySetup`](./nodes.md#retrying-a-remote-agents-setup). Clients offer
 **Retry setup** on a remote agent's failed setup only when it is present; a machine
 on an older link still refuses with `machine-update-required`. Missing, malformed or

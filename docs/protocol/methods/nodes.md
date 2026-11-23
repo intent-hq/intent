@@ -1323,7 +1323,9 @@ interface AgentRetrySetupResult {
 ```
 
 `server.capabilities.remoteSetupRetry: 1` gates it; older daemons answer
-`-32601`. `agent.retrySetup` has the authority of `agent.stop`. It is allowed when the
+`-32601`. `agent.retrySetup` runs a script on the machine, so like saved-script
+writes it is not on the collaborator allowlist: the owner and host members may
+call it, a guest is refused. It is allowed when the
 agent's `setup.state` is `failed` (any `exitCode` or `error` code). The backend
 resolves the setup script again with the launch rule, so a script fixed since
 the launch runs. The reply comes once the machine has started the script;
@@ -1337,7 +1339,7 @@ Refusals are `-32602` with `data.code`, before anything reaches the machine:
 | Code | When |
 | --- | --- |
 | `setup-retry-not-remote` | The agent is not a remote agent with a prepared checkout (no `setup`) |
-| `setup-retry-not-failed` | `setup.state` is `pending`, `completed` or `skipped`, or `running` without a retry |
+| `setup-retry-not-failed` | `setup.state` is `pending`, `completed` or `skipped`, or `running` without a retry; or the workspace has no setup script now |
 | `setup-retry-shared-checkout` | The agent works in another agent's checkout or in a workspace home; retry the owner's setup |
 | `agent-busy` | A user's call while the agent runs a turn; retry when the turn ends |
 | `agent-not-running` | The agent does not run on its machine now; start it (send it a message), then retry |
