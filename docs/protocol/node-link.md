@@ -2050,6 +2050,15 @@ run's `exitReason` (script runtime and `lastRun`, `terminal:exit`,
 `host:exec:exit` of a home exec). A daemon that implements it offers
 `{ min: 7, max: 20 }` on both sides.
 
+**nodeProtocol 21** is protocol 20 plus the provider session `_meta` of a
+launch: optional `sessionMeta` on `launch`, whose `new` and `load` objects the
+machine passes unchanged as `_meta` on the provider's `session/new` and
+`session/load`, as a local session gets them
+([launch](#launch-and-agent-lifecycle)). The backend relies on the machine using it (it then sends
+no first-prompt copy of the instructions), so it sends the field only on a link
+that negotiated 21. A daemon that implements it offers `{ min: 7, max: 21 }` on
+both sides.
+
 ### Frames
 
 Each WebSocket binary message on `/node/link` is one JSON frame of at most
@@ -2532,6 +2541,7 @@ interface LaunchCommand {
   newMachine?: string;             // any protocol; see Relaunch without a checkout
   resumedFromDisk?: true;          // any protocol; see Cloud machines
   harnessVersion?: string;         // any protocol; see below
+  sessionMeta?: { new?: object; load?: object }; // protocol 21 only; provider session _meta, see below
   agentName?: string;              // any protocol; display label, see Display labels
   workspaceTitle?: string;         // any protocol; display label, see Display labels
 }
@@ -2585,7 +2595,20 @@ provider with the machine's own temp variables, shared with its other agents, wh
 the backend's instructions still describe a private `$TMPDIR` (they also tell the
 agent to use `mktemp`). The machine opens the provider session without prompt
 injection, so the backend sends the agent's assembled instructions with its
-first prompt. A remote agent's provider, profile or model changes only through
+first prompt, unless the launch carries them in `sessionMeta`.
+
+`sessionMeta` (protocol 21) is the provider session `_meta` the backend builds
+for the agent as for a local session, from the instructions it stored: `new`
+for `session/new`, `load` for `session/load` of a recorded session (after a
+disk resume). For Claude Code both are `{ "claudeCode": { "options": {
+"disallowedTools": ["Task", ...] } }, "systemPrompt": "<instructions>" }`, so
+the agent's instructions replace the provider's own system prompt and its
+native sub-agent tool is denied (orchestrators also lose the file-write
+tools). For Codex, `new` is `{ "sessionTitle": "<agent name>" }` and `load` is
+absent. A member or the whole field is absent for a provider with no `_meta`
+injection. When `new` holds `systemPrompt`, the backend sends no `<system>`
+copy of the instructions with the first prompt. On a link below 21 the backend sends none and the
+instructions ride the first prompt as before. A remote agent's provider, profile or model changes only through
 a validated `agent.setModel` or quota failover; the backend then stops the run
 and sends a new `launch` to the same machine
 ([switching a remote agent's model](./methods/nodes.md#switching-a-remote-agents-model)).
