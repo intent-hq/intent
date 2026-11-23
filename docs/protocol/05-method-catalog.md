@@ -134,9 +134,9 @@ The [Agent Plugins contract (§5.57)](./methods/plugins.md) adds five
 administrator-only router methods that install, update, remove, enable and list
 app-wide plugins; `agentPlugins: 1` gates support.
 
-The documented surface reserves **510 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The documented surface reserves **511 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
 
-- **Router methods:** 455 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 456 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 55 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 0; use canonical Git read names
 
@@ -157,12 +157,12 @@ methods and four socket-private control notifications. Their individual hello
 capabilities gate support; catalog entries do not grant permission or establish
 which desktop release contains the feature. All existing methods remain present.
 
-### Router methods by namespace (455 total)
+### Router methods by namespace (456 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
 | accept-changes | 7 | addRemote, execute, getStatus, mergePR, prepare, reconcile, release — the "accept the agent's work" pipeline (§5.18; `workspaceId` req) |
-| agent | 57 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getCreationPreferences, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, importSession, importableSessions.list, list, listActive, listInterrupted, listUserMessages, markSeen, memoryUsage, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, resolveProposal, resolveRpcProposal, respondPermission, restore, retire, retry, rpcMethods, sendMessage, sendQueuedMessageNow, sendQueuedMessagesNow, sendToTask, setGoal, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate, workers.list, workers.stop |
+| agent | 58 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getCreationPreferences, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, importSession, importableSessions.list, list, listActive, listInterrupted, listUserMessages, markSeen, memoryUsage, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, resolveProposal, resolveRpcProposal, respondPermission, restore, retire, retry, retrySetup, rpcMethods, sendMessage, sendQueuedMessageNow, sendQueuedMessagesNow, sendToTask, setGoal, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate, workers.list, workers.stop |
 | client | 1 | list — live hello'd connections grouped by logical `clientId` (§5.17; v9.9, daemon-global result; optional routing-only `workspaceId`). The handshake itself (`client.hello`) is a fast-path method, below |
 | cloudMachines | 5 | configure, kill, list, pause, remove — E2B, Northflank, Agent37 and Vercel cloud machines (§5.50) from named entries, daemon-global; configure/remove owner-only, list owner and members, pause/kill owner or starter |
 | comment | 6 | add, delete, getThread, list, resolveThread, respond |

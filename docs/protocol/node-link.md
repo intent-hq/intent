@@ -2050,6 +2050,14 @@ run's `exitReason` (script runtime and `lastRun`, `terminal:exit`,
 `host:exec:exit` of a home exec). A daemon that implements it offers
 `{ min: 7, max: 20 }` on both sides.
 
+**nodeProtocol 21** is protocol 20 plus the [setup retry](#setup-retry-nodeprotocol-21):
+the `setupRetry` and `setupRetryReply` frames. They are new frame types, which
+an older peer rejects as `node-link-protocol`, and they run the setup script in
+a kept checkout, so they need a new version. A daemon that implements it offers
+`{ min: 7, max: 21 }` on both sides. On a link below 21 the backend sends no
+`setupRetry`, and a retry of an agent on that machine fails with
+`machine-update-required`.
+
 ### Frames
 
 Each WebSocket binary message on `/node/link` is one JSON frame of at most
@@ -2105,6 +2113,8 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `homeCall` / `homeCallCancel` | backend → machine | rpc | Protocol 19 or later: see [files and git on the home](#files-and-git-on-the-home) |
 | `homeCallReply` | machine → backend | rpc | Protocol 19 or later: `requestId`, `outcome`, `result?`, `error?` |
 | `homeEvents` | machine → backend | script | Protocol 19 or later: see [file and git events of a home](#file-and-git-events-of-a-home) |
+| `setupRetry` | backend → machine | control | Protocol 21 or later: `requestId`, `agentId`, `setup`; see [setup retry](#setup-retry-nodeprotocol-21) |
+| `setupRetryReply` | machine → backend | control | Protocol 21 or later: `requestId`, `agentId`, `outcome`, `startedAt?`, `error?` |
 
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
 Heartbeats run every 15 s and a link silent for 45 s is dead. The backend
@@ -2127,6 +2137,7 @@ constant with a golden test: `hello`, `heartbeat` / `heartbeatReply`, `launch`,
 `oneShot` and `oneShotCancel` (protocol 18 or later),
 `homeOpen`, `homeStop`, `homePush`, `ptyOpen`, `ptyInput`, `ptyResize`,
 `ptyKill`, `ptyAck`, `homeCall` and `homeCallCancel` (protocol 19 or later),
+`setupRetry` (protocol 21 or later),
 and git sessions on `/node/git` for agents on that credential's binding. Any
 other frame is `node-link-protocol`.
 `stopAck` travels machine → backend, so it is not in that list; the backend
@@ -2141,7 +2152,8 @@ accepts it only on a protocol 7 or later link. Likewise the backend accepts
 `oneShotReply` only on a protocol 18 or later link,
 and `homeOpenReply`, `homeStopAck`, `homePushReply`, `ptyOutput`, `ptyExited`,
 `homeCallReply`, `homeEvents` and the `homePushed` journal body only on a
-protocol 19 or later link.
+protocol 19 or later link, and `setupRetryReply` only on a protocol 21 or
+later link.
 
 ### Stop acknowledgement (nodeProtocol 7)
 
@@ -2962,8 +2974,9 @@ started ([setup status](#setup-status-and-output)). It runs after the
 submodules are ready and before the provider starts. A launch that keeps an
 existing checkout (model switch, reconnect, daemon restart) does not run it
 again. Every remote agent has its own checkout, so setup runs for each one,
-sub-agents included. There is no automatic re-run; the agent or user can run
-the script by hand in the checkout.
+sub-agents included. There is no automatic re-run. On a protocol 21 link the
+user or the agent can [retry](#setup-retry-nodeprotocol-21) a failed setup in
+the kept checkout; on a lower link the script can only be run by hand there.
 
 **Environment.**
 
@@ -2991,7 +3004,8 @@ and the shared caches, so it changes nothing for other agents.
 #### Setup status and output
 
 Journal records, durable and replayed like the others, between checkout ready
-and `started`:
+and `started` (and, for a [setup retry](#setup-retry-nodeprotocol-21), while
+the agent runs):
 
 - `setupStarted { startedAt }` when the script starts.
 - `setupFinished { state, exitCode?, error?, finishedAt }`. `completed` and
@@ -3052,6 +3066,78 @@ backend worktree.
 
 The `node-setup-*` codes appear only in `setupFinished.error`; they never end
 the agent and never set `placementError`.
+
+#### Setup retry (nodeProtocol 21)
+
+On a link that negotiated protocol 21, the backend can run the setup script
+again in a running agent's own kept checkout, for the user
+([`agent.retrySetup`](./methods/nodes.md#retrying-a-remote-agents-setup)) or
+for the agent itself (`ws.workspace.retrySetup()`, [forwarded](#workspace-api-on-the-machine)
+to the backend). The agent keeps running; it is not recreated or relaunched.
+
+```ts
+interface SetupRetryFrame {        // backend → machine, closed
+  type: "setupRetry";
+  requestId: string;               // UUID, echoed by the reply
+  agentId: string;
+  setup: SetupCommand;             // resolved again, with the launch rule
+}
+interface SetupRetryReplyFrame {   // machine → backend, closed
+  type: "setupRetryReply";
+  requestId: string;
+  agentId: string;
+  outcome: "started" | "refused";
+  startedAt?: string;              // started: the run's setupStarted time
+  error?: string;                  // refused: "<code>: <detail>"
+}
+```
+
+The backend resolves `setup` with the [launch rule](#setup-script-on-the-machine)
+at the time of the retry, so a script fixed since the launch runs. It sends
+`setupRetry` only for an agent whose `setup.state` is `failed`, or `running`
+because of a retry; the method checks are in
+[`agent.retrySetup`](./methods/nodes.md#retrying-a-remote-agents-setup).
+
+**On the machine.** The machine accepts a `setupRetry` only for an agent that
+runs on the link's binding, in its own checkout, whose launch has settled its
+setup. Then it:
+
+1. Answers `started` at once with the run's `startedAt`, after it records the
+   setup `running` and journals `setupStarted`.
+2. Streams the script's output as `setupOutput` from `seq` 0, so the backend
+   replaces the agent's stored output. It keeps the tail and the log as for
+   the first run.
+3. Runs `setup` with the same wrapper, environment, timeout, process group and
+   [setup-file excludes](#setup-script-on-the-machine) as the first run. The
+   excludes of this run replace the earlier run's.
+4. Journals `setupFinished` with the result, and records it with the checkout.
+   The agent's `ws.workspace.details().setupStatus` shows the new state from
+   the start of the run.
+
+A `setupRetry` that arrives while a retry of that agent runs starts nothing:
+the machine answers `started` with that run's `startedAt`. A retry runs while
+the agent works; the backend decides when it may start (a user's retry waits
+for the turn to end). The machine answers `refused` with:
+
+| Code | Meaning |
+| --- | --- |
+| `node-setup-retry-not-running` | The agent does not run on this binding, or its launch has not settled its setup yet |
+| `node-setup-retry-shared` | The agent works in another agent's checkout or in a home: only the checkout's owner runs its setup |
+| `node-setup-retry-not-failed` | The checkout's recorded setup is not `failed` and no retry runs |
+
+The backend waits 10 s for the reply; without one the retry fails
+`machine-unreachable`, and a run that started anyway still journals its
+records.
+
+**Stop and restart.** A `stop` of the agent during a retry kills the script's
+process group and journals `setupFinished` `failed` with
+`error: "node-setup-interrupted: <detail>"` before `exited`. A machine restart
+during a retry leaves it recorded `running`; the next launch records it
+interrupted, as for a first run. A final stop or the bind sweep stops the
+agent first, so no retry outlives its checkout.
+
+**Notice.** On a protocol 21 link the first-turn setup-failure notice tells
+the agent it can call `ws.workspace.retrySetup()` once it has fixed the cause.
 
 #### Older peers
 
@@ -3294,7 +3380,11 @@ agent's hook runs on the backend (its `ws.host.exec` sees the backend's worktree
 not the machine's checkout), and its wakes reach the agent as agent messages. On
 protocol 10 the machine replaces `setupStatus` in the forwarded
 `workspace.details` reply with its own checkout's
-[setup status](#setup-status-and-output).
+[setup status](#setup-status-and-output), which follows a
+[setup retry](#setup-retry-nodeprotocol-21). On protocol 21 a forwarded
+`workspace.retrySetup` that the backend answers with `state: "running"` is
+then held on the machine until the run finishes or the call's budget
+(less 5 s) ends; the machine replaces the reply with the run's result.
 
 ### Skills on the machine (nodeProtocol 12)
 

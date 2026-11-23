@@ -1277,6 +1277,8 @@ interface RemoteSetupStatus {
   only). Neither is set when every populated submodule is a pin.
   `unsentSubmodules` is agent-facing only: it is not a `RemoteSetupStatus`
   member and is not on the backend's agent rows.
+- A failed setup can [run again](#retrying-a-remote-agents-setup) in the
+  kept checkout (nodeProtocol 21).
 - `setup` describes the agent's checkout on its machine, never the backend
   worktree. The workspace's own `setupStatus` and `workspace:setup:*` events
   are unchanged.
@@ -1304,6 +1306,72 @@ whose machine later links below 10 does not start: it gets
 backend supported nodeProtocol 10 have no pins, omit `submodules` and `setup`,
 and keep running as before on every link. Workspaces that need neither run on
 every supported link.
+
+##### Retrying a remote agent's setup
+
+A failed setup can run again in the agent's kept checkout, on a machine whose
+link negotiates nodeProtocol 21 ([setup retry](../node-link.md#setup-retry-nodeprotocol-21)).
+The agent keeps its checkout, session and work; it is not recreated.
+
+```ts
+// agent.retrySetup
+interface AgentRetrySetupParams { workspaceId: string; agentId: string }
+interface AgentRetrySetupResult {
+  agentId: string;
+  setup: RemoteSetupStatus;      // row form: state "running", startedAt
+}
+```
+
+`server.capabilities.remoteSetupRetry: 1` gates it; older daemons answer
+`-32601`. `agent.retrySetup` has the authority of `agent.stop`. It is allowed when the
+agent's `setup.state` is `failed` (any `exitCode` or `error` code). The backend
+resolves the setup script again with the launch rule, so a script fixed since
+the launch runs. The reply comes once the machine has started the script;
+progress and the result then follow as for the first run: `agent:updated` with
+`setup.state` `running`, the new output (the stored output starts over), then
+`completed` or `failed`. A call while a retry of that agent runs starts
+nothing and answers with that run's status.
+
+Refusals are `-32602` with `data.code`, before anything reaches the machine:
+
+| Code | When |
+| --- | --- |
+| `setup-retry-not-remote` | The agent is not a remote agent with a prepared checkout (no `setup`) |
+| `setup-retry-not-failed` | `setup.state` is `pending`, `completed` or `skipped`, or `running` without a retry |
+| `setup-retry-shared-checkout` | The agent works in another agent's checkout or in a workspace home; retry the owner's setup |
+| `agent-busy` | A user's call while the agent runs a turn; retry when the turn ends |
+| `agent-not-running` | The agent does not run on its machine now; start it (send it a message), then retry |
+| `machine-update-required` | The link negotiates below 21; data `{ update: "machine", reason: "setup-retry" }` |
+
+The machine's own refusals map to the same codes, with the machine's detail in
+the message: `node-setup-retry-not-running` is `agent-not-running`,
+`node-setup-retry-shared` is `setup-retry-shared-checkout` and
+`node-setup-retry-not-failed` is `setup-retry-not-failed`. No link, or no
+reply within 10 s, is `-32603` `machine-unreachable`.
+
+**The agent's own retry.** A remote agent calls `ws.workspace.retrySetup()` for
+its own checkout, during its turn (the turn rule above does not apply). The
+call is forwarded to the backend, which runs the same checks with the agent
+as the caller; then the machine waits for the run to finish within the call's
+budget (less 5 s) and answers:
+
+```ts
+// ws.workspace.retrySetup() → SetupRetryOutcome
+interface SetupRetryOutcome {
+  state: "running" | "completed" | "failed";
+  exitCode?: number;
+  error?: string;                // "<code>: <detail>"
+  startedAt?: string;
+  finishedAt?: string;
+  output?: string;               // the last 4 KiB of this run's output
+}
+```
+
+`state: "running"` means the budget ended first; calling it again waits for
+the same run. `ws.workspace.details().setupStatus` follows the run. A refusal
+is the error message with the codes above. A local agent's call fails
+`setup-retry-not-remote`. The first-turn setup-failure notice names the call
+on a protocol 21 link.
 
 ##### Forge token for remote agents
 
