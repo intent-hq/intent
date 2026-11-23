@@ -20,7 +20,9 @@
 // intentd, so the same PR can fix it) and a missing cloudlands-fe file only
 // warns: either the intentd PR documents a frontend change that has not been
 // pinned yet, or the frontend PR removes a cited file before the guide
-// follows. The auto/submodule-bump PR runs in monorepo mode and stays strict.
+// follows. The warning points at the AGENTS.md rule for guide text about
+// unshipped app controls (intentd#3683 lost two review rounds to it). The
+// auto/submodule-bump PR runs in monorepo mode and stays strict.
 //
 // Comment format needs no pin, so both modes also parse the checked-out guide
 // file (uncommitted edits included) and fail on its malformed comments: a
@@ -284,7 +286,7 @@ export function check({ root, upstream = false }) {
     const at = `${cite.component} ${revisions[cite.component].slice(0, 7)}`;
     const shown = cite.citation === cite.file ? cite.file : `${cite.file} (from ${cite.citation})`;
     if (upstream && cite.component !== GUIDE_COMPONENT) {
-      warnings.push(`${guide}:${cite.line}: ${shown} is missing at ${at}; the auto/submodule-bump PR fails until the guide cites a file the pinned ${cite.component} has`);
+      warnings.push(`${guide}:${cite.line}: ${shown} is missing at ${at}; the auto/submodule-bump PR fails until the guide cites a file the pinned ${cite.component} has; if the frontend PR has not merged (cross-component feature), say what apps without these controls do (AGENTS.md, Assistant app guide)`);
     } else {
       errors.push(`${guide}:${cite.line}: error: ${shown} is missing at ${at}`);
     }
@@ -314,7 +316,7 @@ export function checkFormat(file) {
 }
 
 const FORMAT_HINT = "hint: a Sources comment starts with 'Sources:' or 'Sources (paths relative to packages/<component>):'; put any other words after the colon, e.g. '<!-- Sources (paths relative to packages/cloudlands-fe): src/a.ts (Labs device rail). -->'.";
-const VERSION_HINT = "hint: describe how the app behaves now, without app version numbers, and merge the guide PR after the frontend PR it describes. A remote daemon can be newer than the desktop, so write 'older versions may differ' where behavior changed recently.";
+const VERSION_HINT = "hint: describe how the app behaves now, without app version numbers, and follow the AGENTS.md Assistant app guide rule for when the guide PR merges. A remote daemon can be newer than the desktop, so write 'older versions may differ' where behavior changed recently.";
 const MISSING_HINT = 'hint: point the comment at the file that implements the behavior, or remove the guide text that describes code the component does not have (fix it in intentd, then let auto-bump-submodules advance the pin).';
 
 function main() {
