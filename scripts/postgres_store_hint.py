@@ -70,7 +70,9 @@ def gated_changes(paths):
 def hint(label, intentd_dir, base, features, filterset):
     enabled = set(features.replace(",", " ").split())
     covered = set()
-    if f"{ORCHESTRATOR}/postgres" in enabled:
+    # A bare `postgres` turns on every selected member's postgres feature
+    # (test-select runs --workspace), the orchestrator's included.
+    if f"{ORCHESTRATOR}/postgres" in enabled or "postgres" in enabled:
         covered |= {STORE, ORCHESTRATOR}
     if f"{STORE}/postgres" in enabled:
         covered.add(STORE)

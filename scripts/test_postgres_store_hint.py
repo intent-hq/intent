@@ -98,7 +98,9 @@ class PostgresStoreHintTests(unittest.TestCase):
 
     def test_enabled_feature_with_a_database_is_silent(self):
         self.commit(PARITY)
-        for features in ("intent-store/postgres", "a intent-store/postgres", "intent-store/postgres,b"):
+        # A bare `postgres` turns on every selected member's postgres feature
+        # under test-select's --workspace.
+        for features in ("intent-store/postgres", "a intent-store/postgres", "intent-store/postgres,b", "postgres"):
             with self.subTest(features=features):
                 self.assertEqual(self.hint(features, env={"INTENT_STORE_TEST_PG_URL": "postgres://x"}), "")
 
@@ -127,8 +129,10 @@ class PostgresStoreHintTests(unittest.TestCase):
                 stderr = self.hint(features, filterset="package(intentd-orchestrator)",
                                    env={"INTENT_STORE_TEST_PG_URL": "postgres://x"})
                 self.assertIn("FEATURES=intentd-orchestrator/postgres", stderr)
-        self.assertEqual(self.hint("intentd-orchestrator/postgres", filterset="package(intentd-orchestrator)",
-                                   env={"INTENT_STORE_TEST_PG_URL": "postgres://x"}), "")
+        for features in ("intentd-orchestrator/postgres", "postgres"):
+            self.assertEqual(self.hint(features, filterset="package(intentd-orchestrator)",
+                                       env={"INTENT_STORE_TEST_PG_URL": "postgres://x"}), "")
+        self.assertIn("INTENT_STORE_TEST_PG_URL is unset", self.hint("postgres"))
 
     def test_bad_base_or_missing_checkout_never_fails_the_run(self):
         self.commit(PARITY)
