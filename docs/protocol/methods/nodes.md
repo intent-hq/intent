@@ -1278,7 +1278,7 @@ interface RemoteSetupStatus {
   `unsentSubmodules` is agent-facing only: it is not a `RemoteSetupStatus`
   member and is not on the backend's agent rows.
 - A failed setup can [run again](#retrying-a-remote-agents-setup) in the
-  kept checkout (nodeProtocol 21).
+  kept checkout (nodeProtocol 22).
 - `setup` describes the agent's checkout on its machine, never the backend
   worktree. The workspace's own `setupStatus` and `workspace:setup:*` events
   are unchanged.
@@ -1310,7 +1310,7 @@ every supported link.
 ##### Retrying a remote agent's setup
 
 A failed setup can run again in the agent's kept checkout, on a machine whose
-link negotiates nodeProtocol 21 ([setup retry](../node-link.md#setup-retry-nodeprotocol-21)).
+link negotiates nodeProtocol 22 ([setup retry](../node-link.md#setup-retry-nodeprotocol-22)).
 The agent keeps its checkout, session and work; it is not recreated.
 
 ```ts
@@ -1348,7 +1348,7 @@ the setup script; then the machine's own checks run.
 | `setup-retry-shared-checkout` | The agent works in another agent's checkout (retry that agent's setup), or in a workspace home (a home's setup is not retried this way) |
 | `setup-retry-not-failed` | `setup.state` is `pending`, `completed` or `skipped`, or the machine runs no retry for a `running` one |
 | `agent-busy` | A user's call while the agent runs a turn, also while a retry runs; retry when the turn ends |
-| `machine-update-required` | The link negotiates below 21; data `{ update: "machine", reason: "setup-retry" }` |
+| `machine-update-required` | The link negotiates below 22; data `{ update: "machine", reason: "setup-retry" }` |
 | `setup-retry-no-script` | The workspace has no setup script now, so there is nothing to run |
 | `agent-not-running` | The agent does not run on its machine now, or is still starting; send it a message, then retry once that turn ends |
 
@@ -1384,7 +1384,7 @@ interface SetupRetryOutcome {
 5 s or less); calling it again waits for the same run. `ws.workspace.details().setupStatus` follows the run. A refusal
 is the error message with the codes above. A local agent's call fails
 `setup-retry-not-remote`. The call is not in the `workspace_api` tool
-description (only a remote agent can use it): a remote agent on a protocol 21
+description (only a remote agent can use it): a remote agent on a protocol 22
 link finds it in `ws.help("workspace")`, and the first-turn setup-failure
 notice names it.
 
@@ -1470,7 +1470,7 @@ authority.
 | Method | Who | Params | Result |
 | --- | --- | --- | --- |
 | cloudMachines.configure | Owner | cloudMachineId? (the entry to update; omit to create one), name? (1-64 UTF-8 bytes; required to create a new entry), provider? (`CloudProviderKind`; default `"e2b"` on create; on update it must equal the entry's provider), apiKey? (secret: an E2B API key, a Northflank API token, an Agent37 API key, or a Vercel access token; required to create an entry unless `apiKeyFrom` is given), apiKeyFrom? (the `cloudMachineId` of another entry of the same provider whose saved key this entry copies), size? (one of the entry's `sizes`; default `"4x8"`), idlePauseMinutes? (1-1440, default 10), pausedDeleteDays? (1-30, default 7), validateOnly? (boolean, default false); E2B only: templateProject? (E2B project slug that publishes the templates; default Intent's E2B project); Northflank only ([settings](#northflank-entries)): projectId? (required to create), plans?, image?, diskGiB?; Agent37 only ([settings](#agent37-entries)): instanceType?, region?, diskGiB?; Vercel only ([settings](#vercel-entries)): teamId? (required to create), projectId? (required to create), image? | `{ provider: CloudMachineProvider }`; creates or updates one entry ([which entry](#named-e2b-entries)); with `apiKey` or `apiKeyFrom`, tests the key with one provider read before it saves anything; an omitted member keeps its saved value. A member of the other provider is `-32602` `invalid-params`. With `validateOnly: true` it saves nothing and emits no event ([validation](#cloud-machine-methods)) |
-| cloudMachines.list | Owner, members | — | `{ providers: CloudMachineProvider[], machines: RemoteMachine[], providerKinds?: CloudProviderKind[] }`; `providers` are the entries, in creation order; `machines` are the live cloud machines of every entry, each with `cloud`; `providerKinds` (only with `cloudMachineProviders: 1`) are the providers this backend can configure, in the order a client offers them, for example `["e2b", "northflank", "agent37", "vercel"]`; a member sees only the machines of workspaces they can manage; never returns a key |
+| cloudMachines.list | Owner, members | — | `{ providers: CloudMachineProvider[], machines: RemoteMachine[], providerKinds?: CloudProviderKind[], diskSettings?: Partial<Record<CloudProviderKind, CloudDiskSetting>> }`; `providers` are the entries, in creation order; `machines` are the live cloud machines of every entry, each with `cloud`; `providerKinds` (only with `cloudMachineProviders: 1`) are the providers this backend can configure, in the order a client offers them, for example `["e2b", "northflank", "agent37", "vercel"]`; `diskSettings` (only with `cloudMachineProviders: 1`) holds the [disk setting](#disk-setting) of each kind whose entries take `diskGiB`; a member sees only the machines of workspaces they can manage; never returns a key |
 | cloudMachines.remove | Owner | cloudMachineId? (the entry; default `"e2b"`), provider? (`CloudProviderKind`; when given, it must equal the entry's provider), stopAgents? (boolean, default false) | `{ ok: true, unconfirmedStops: string[] }`; removes one entry; with any sandbox of that entry (running or paused) and no `stopAgents: true` fails `-32602` `machine-in-use` with `runningAgents`; with `stopAgents: true` sends each agent on that entry's sandboxes a final stop, waits at most 90 s, then deletes those sandboxes (on Northflank, each service with its volume; on Agent37, each instance with its disk; on Vercel, each sandbox with its snapshots), their machine rows, the entry and its key ([removing an entry](#named-e2b-entries)); an id that names no entry is a no-op, and a `provider` that is not the entry's is `-32602` `invalid-params` |
 | cloudMachines.pause | Owner, starter | machineId (req) | `{ machine: RemoteMachine }`; pauses the sandbox now; while an agent on it has a running turn fails `-32602` `machine-in-use` with `runningAgents`; an already paused sandbox is returned unchanged |
 | cloudMachines.kill | Owner, starter | machineId (req) | `{ ok: true, unconfirmedStops: string[] }`; sends each agent on the sandbox a final stop (resuming a paused sandbox first), waits at most 90 s, then deletes the sandbox and its machine row even when stops are unconfirmed |
@@ -1551,6 +1551,13 @@ interface CloudMachineSizeInfo {
   plan?: "hobby" | "pro-raised-limits";    // E2B only: the lowest E2B plan that allows it
   deploymentPlan?: string;                 // Northflank only: the deployment plan id, for example "nf-compute-400"
 }
+
+interface CloudDiskSetting {                // the `diskGiB` that entries of one kind take
+  minGiB: number;                          // the smallest `diskGiB` that `configure` accepts
+  maxGiB: number;                          // the largest `diskGiB` that `configure` accepts
+  defaultGiB: number;                      // the disk of an entry saved without `diskGiB`
+  sizeMaxGiB?: Record<string, Partial<Record<CloudMachineSize, number>>>; // by `instanceType`, then size: the largest disk a new machine gets
+}
 ```
 
 On E2B, each size is its own template. With every intentd release Intent publishes, under
@@ -1595,6 +1602,32 @@ The rules below are for E2B entries; Northflank sizes are in
   refuses the create because the project's plan or limits do not allow the size,
   the agent gets `cloud-quota` with `limit: "plan"`. The backend never starts a
   smaller size in its place.
+
+###### Disk setting
+
+`cloudMachines.list` `diskSettings` tells a client which kinds take
+`diskGiB`, and its limits, so the client does not keep its own copy. A kind
+that is not a key takes no `diskGiB`: on E2B and Vercel entries it is
+`-32602` `invalid-params`. A client that gets no `diskSettings` (an older
+backend) shows no disk setting. The saved value is in the entry's own
+settings (`northflank.diskGiB`, `agent37.diskGiB`).
+
+| Kind | `minGiB` | `maxGiB` | `defaultGiB` | `sizeMaxGiB` |
+| --- | --- | --- | --- | --- |
+| `northflank` | 6 | 500 | 20 | absent |
+| `agent37` | 4 | 100 | 20 | `default`: `2x4` 12, `4x8` 20, `4x16` 40, `4x32` 80; `vm`: 100 at each size |
+
+- **Limits.** `configure` accepts `minGiB`-`maxGiB`; a value outside is
+  `-32602` `invalid-params`. The backend stays the only check; a client
+  uses these values only to show and limit its field.
+- **Size cap.** With `sizeMaxGiB`, a new machine gets the smaller of
+  `diskGiB` and `sizeMaxGiB[instanceType][size]`. A saved `diskGiB` above the
+  cap is valid: `configure` accepts the whole `minGiB`-`maxGiB` range on any
+  type and size. A client therefore leaves a saved value as it is when it
+  opens an entry. It lowers the value only after the user changes the size or
+  type, and then tells the user.
+- **New machines only.** A changed `diskGiB` applies to machines started
+  after the save. Running and paused machines keep their disk.
 
 ###### Named E2B entries
 

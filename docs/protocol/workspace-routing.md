@@ -298,7 +298,7 @@ they do not touch the agent's checkout on the machine. A forwarded
 the turn rule (the agent asks during its own turn), and answers with the started
 run (`{ state: "running", startedAt }`); the machine then holds the reply until
 the run ends or the `workspace_api` call's timeout less 5 s does
-([setup retry](./node-link.md#setup-retry-nodeprotocol-21)). `git.listRoots` lists only
+([setup retry](./node-link.md#setup-retry-nodeprotocol-22)). `git.listRoots` lists only
 the secondary git roots the agent's machine has: the registered roots that are
 submodules carried in the agent's pins ([node-link.md § Submodule pins](node-link.md#submodule-pins)). The backend answers each such
 row with its `path` relative to the checkout (`"a/b"`) and without `branch`; the

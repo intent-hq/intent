@@ -2050,11 +2050,20 @@ run's `exitReason` (script runtime and `lastRun`, `terminal:exit`,
 `host:exec:exit` of a home exec). A daemon that implements it offers
 `{ min: 7, max: 20 }` on both sides.
 
-**nodeProtocol 21** is protocol 20 plus the [setup retry](#setup-retry-nodeprotocol-21):
+**nodeProtocol 21** is protocol 20 plus the provider session `_meta` of a
+launch: optional `sessionMeta` on `launch`, whose `new` and `load` objects the
+machine passes unchanged as `_meta` on the provider's `session/new` and
+`session/load`, as a local session gets them
+([launch](#launch-and-agent-lifecycle)). The backend relies on the machine using it (it then sends
+no first-prompt copy of the instructions), so it sends the field only on a link
+that negotiated 21. A daemon that implements it offers `{ min: 7, max: 21 }` on
+both sides.
+
+**nodeProtocol 22** is protocol 21 plus the [setup retry](#setup-retry-nodeprotocol-22):
 the `setupRetry` and `setupRetryReply` frames. They are new frame types, which
 an older peer rejects as `node-link-protocol`, and they run the setup script in
 a kept checkout, so they need a new version. A daemon that implements it offers
-`{ min: 7, max: 21 }` on both sides. On a link below 21 the backend sends no
+`{ min: 7, max: 22 }` on both sides. On a link below 22 the backend sends no
 `setupRetry`, and a retry of an agent on that machine fails with
 `machine-update-required`.
 
@@ -2113,8 +2122,8 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `homeCall` / `homeCallCancel` | backend → machine | rpc | Protocol 19 or later: see [files and git on the home](#files-and-git-on-the-home) |
 | `homeCallReply` | machine → backend | rpc | Protocol 19 or later: `requestId`, `outcome`, `result?`, `error?` |
 | `homeEvents` | machine → backend | script | Protocol 19 or later: see [file and git events of a home](#file-and-git-events-of-a-home) |
-| `setupRetry` | backend → machine | control | Protocol 21 or later: `requestId`, `agentId`, `setup`; see [setup retry](#setup-retry-nodeprotocol-21) |
-| `setupRetryReply` | machine → backend | control | Protocol 21 or later: `requestId`, `agentId`, `outcome`, `startedAt?`, `error?` |
+| `setupRetry` | backend → machine | control | Protocol 22 or later: `requestId`, `agentId`, `setup`; see [setup retry](#setup-retry-nodeprotocol-22) |
+| `setupRetryReply` | machine → backend | control | Protocol 22 or later: `requestId`, `agentId`, `outcome`, `startedAt?`, `error?` |
 
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
 Heartbeats run every 15 s and a link silent for 45 s is dead. The backend
@@ -2137,7 +2146,7 @@ constant with a golden test: `hello`, `heartbeat` / `heartbeatReply`, `launch`,
 `oneShot` and `oneShotCancel` (protocol 18 or later),
 `homeOpen`, `homeStop`, `homePush`, `ptyOpen`, `ptyInput`, `ptyResize`,
 `ptyKill`, `ptyAck`, `homeCall` and `homeCallCancel` (protocol 19 or later),
-`setupRetry` (protocol 21 or later),
+`setupRetry` (protocol 22 or later),
 and git sessions on `/node/git` for agents on that credential's binding. Any
 other frame is `node-link-protocol`.
 `stopAck` travels machine → backend, so it is not in that list; the backend
@@ -2152,7 +2161,7 @@ accepts it only on a protocol 7 or later link. Likewise the backend accepts
 `oneShotReply` only on a protocol 18 or later link,
 and `homeOpenReply`, `homeStopAck`, `homePushReply`, `ptyOutput`, `ptyExited`,
 `homeCallReply`, `homeEvents` and the `homePushed` journal body only on a
-protocol 19 or later link, and `setupRetryReply` only on a protocol 21 or
+protocol 19 or later link, and `setupRetryReply` only on a protocol 22 or
 later link.
 
 ### Stop acknowledgement (nodeProtocol 7)
@@ -2544,6 +2553,7 @@ interface LaunchCommand {
   newMachine?: string;             // any protocol; see Relaunch without a checkout
   resumedFromDisk?: true;          // any protocol; see Cloud machines
   harnessVersion?: string;         // any protocol; see below
+  sessionMeta?: { new?: object; load?: object }; // protocol 21 only; provider session _meta, see below
   agentName?: string;              // any protocol; display label, see Display labels
   workspaceTitle?: string;         // any protocol; display label, see Display labels
 }
@@ -2597,7 +2607,20 @@ provider with the machine's own temp variables, shared with its other agents, wh
 the backend's instructions still describe a private `$TMPDIR` (they also tell the
 agent to use `mktemp`). The machine opens the provider session without prompt
 injection, so the backend sends the agent's assembled instructions with its
-first prompt. A remote agent's provider, profile or model changes only through
+first prompt, unless the launch carries them in `sessionMeta`.
+
+`sessionMeta` (protocol 21) is the provider session `_meta` the backend builds
+for the agent as for a local session, from the instructions it stored: `new`
+for `session/new`, `load` for `session/load` of a recorded session (after a
+disk resume). For Claude Code both are `{ "claudeCode": { "options": {
+"disallowedTools": ["Task", ...] } }, "systemPrompt": "<instructions>" }`, so
+the agent's instructions replace the provider's own system prompt and its
+native sub-agent tool is denied (orchestrators also lose the file-write
+tools). For Codex, `new` is `{ "sessionTitle": "<agent name>" }` and `load` is
+absent. A member or the whole field is absent for a provider with no `_meta`
+injection. When `new` holds `systemPrompt`, the backend sends no `<system>`
+copy of the instructions with the first prompt. On a link below 21 the backend sends none and the
+instructions ride the first prompt as before. A remote agent's provider, profile or model changes only through
 a validated `agent.setModel` or quota failover; the backend then stops the run
 and sends a new `launch` to the same machine
 ([switching a remote agent's model](./methods/nodes.md#switching-a-remote-agents-model)).
@@ -2974,8 +2997,8 @@ started ([setup status](#setup-status-and-output)). It runs after the
 submodules are ready and before the provider starts. A launch that keeps an
 existing checkout (model switch, reconnect, daemon restart) does not run it
 again. Every remote agent has its own checkout, so setup runs for each one,
-sub-agents included. There is no automatic re-run. On a protocol 21 link the
-user or the agent can [retry](#setup-retry-nodeprotocol-21) a failed setup in
+sub-agents included. There is no automatic re-run. On a protocol 22 link the
+user or the agent can [retry](#setup-retry-nodeprotocol-22) a failed setup in
 the kept checkout; on a lower link the script can only be run by hand there.
 
 **Environment.**
@@ -3004,7 +3027,7 @@ and the shared caches, so it changes nothing for other agents.
 #### Setup status and output
 
 Journal records, durable and replayed like the others, between checkout ready
-and `started` (and, for a [setup retry](#setup-retry-nodeprotocol-21), while
+and `started` (and, for a [setup retry](#setup-retry-nodeprotocol-22), while
 the agent runs):
 
 - `setupStarted { startedAt }` when the script starts.
@@ -3063,15 +3086,15 @@ backend worktree.
 | The machine restarts while the agent's own checkout is made, before the script starts | No `setupFinished` or `started` is journaled, and no exit record is guaranteed (the backend reads the process as lost); the next launch with `checkout` removes the partial checkout, makes a fresh one and runs the script |
 | A `stop` during setup (first run) | The process group is killed; `exited` is journaled with no `setupFinished` or `started`; the next launch keeps the checkout and records `failed`, `error: "node-setup-interrupted: <detail>"`, without a re-run |
 | The machine restarts during setup (first run) | At its next launch of that agent the machine records `failed`, `error: "node-setup-interrupted: <detail>"`, without a re-run |
-| A `stop` during a [setup retry](#setup-retry-nodeprotocol-21) | The process group is killed; `setupFinished` `failed`, `error: "node-setup-interrupted: <detail>"` is journaled before `exited` |
+| A `stop` during a [setup retry](#setup-retry-nodeprotocol-22) | The process group is killed; `setupFinished` `failed`, `error: "node-setup-interrupted: <detail>"` is journaled before `exited` |
 | The machine restarts during a setup retry | The checkout keeps the retry recorded `running`; the next launch journals one `setupFinished` `failed`, `error: "node-setup-interrupted: <detail>"`, before `started`, without a re-run |
 
 The `node-setup-*` codes appear only in `setupFinished.error`; they never end
 the agent and never set `placementError`.
 
-#### Setup retry (nodeProtocol 21)
+#### Setup retry (nodeProtocol 22)
 
-On a link that negotiated protocol 21, the backend can run the setup script
+On a link that negotiated protocol 22, the backend can run the setup script
 again in a running agent's own kept checkout, for the user
 ([`agent.retrySetup`](./methods/nodes.md#retrying-a-remote-agents-setup)) or
 for the agent itself (`ws.workspace.retrySetup()`, [forwarded](#workspace-api-on-the-machine)
@@ -3141,7 +3164,7 @@ restart leaves the same record); the next launch journals one `setupFinished`
 `failed` with `node-setup-interrupted` before `started`, without a re-run. A final stop or the bind sweep stops the
 agent first, so no retry outlives its checkout.
 
-**Notice.** On a protocol 21 link the first-turn setup-failure notice tells
+**Notice.** On a protocol 22 link the first-turn setup-failure notice tells
 the agent it can call `ws.workspace.retrySetup()` once it has fixed the cause.
 
 #### Older peers
@@ -3386,7 +3409,7 @@ not the machine's checkout), and its wakes reach the agent as agent messages. On
 protocol 10 the machine replaces `setupStatus` in the forwarded
 `workspace.details` reply with its own checkout's
 [setup status](#setup-status-and-output), which follows a
-[setup retry](#setup-retry-nodeprotocol-21). On protocol 21 a forwarded
+[setup retry](#setup-retry-nodeprotocol-22). On protocol 22 a forwarded
 `workspace.retrySetup` that the backend answers with the started run
 (`{ state: "running", startedAt }`) is then held on the machine until the
 run finishes or the `workspace_api` call's timeout less 5 s ends; the machine

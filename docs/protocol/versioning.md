@@ -47,10 +47,10 @@ bump): **remote setup retry** ([§5.50](./methods/nodes.md#retrying-a-remote-age
 `server.capabilities.remoteSetupRetry: 1` gates the router method
 `agent.retrySetup { workspaceId, agentId }` → `{ agentId, setup }`, which runs a
 remote agent's failed setup script again in its kept checkout; the remote agent's
-`ws.workspace.retrySetup()` does the same for its own checkout. **nodeProtocol 21**
+`ws.workspace.retrySetup()` does the same for its own checkout. **nodeProtocol 22**
 adds the `setupRetry` / `setupRetryReply` frames
-([link contract](./node-link.md#setup-retry-nodeprotocol-21)); daemons offer
-`{ min: 7, max: 21 }`. Older daemons answer `-32601`. No store migration; the
+([link contract](./node-link.md#setup-retry-nodeprotocol-22)); daemons offer
+`{ min: 7, max: 22 }`. Older daemons answer `-32601`. No store migration; the
 router surface gains one method. The documented surface is **511 / 456 / 55**.
 
 Also within 18.1 (additive row field, no capability change): **conversation goal
@@ -222,6 +222,12 @@ run, `host.exec` or terminal killed by the limit carries
 negotiated 20; [link contract](./node-link.md#version-range)); daemons offer
 `{ min: 7, max: 20 }`. Clients detect every field by presence. The surface
 counts are unchanged.
+
+Also within 18.0 (private node link only; no client-visible change):
+**nodeProtocol 21** carries the provider session `_meta` of a remote agent's
+launch (`sessionMeta`, [link contract](./node-link.md#launch-and-agent-lifecycle)), so a remote
+Claude Code agent gets its instructions as the system prompt and the native
+sub-agent tool denied, as a local one does; daemons offer `{ min: 7, max: 21 }`.
 
 Also within 18.0 (additive methods and setting; prepared, off by default, so no
 version bump): **push relay linking**. The router methods `push.createLink`,
@@ -1578,6 +1584,17 @@ details, as for any unknown kind. No method or event is added or renamed, so
 the method and event catalogs and the surface counts are unchanged, and no
 `AgentLite` or `Workspace` field is added. The public protocol version is
 unchanged.
+
+**Cloud machine disk setting — `cloudMachines.list` `diskSettings` (additive).**
+`cloudMachines.list` gains the optional member `diskSettings`, only with
+`cloudMachineProviders: 1`: for each kind whose entries take `diskGiB`
+(`northflank`, `agent37`), a `CloudDiskSetting` with `minGiB`, `maxGiB`,
+`defaultGiB` and, for Agent37, `sizeMaxGiB` by instance type and size
+([disk setting](./methods/nodes.md#disk-setting)). The `diskGiB` rules of
+`configure` do not change. Clients that do not read it show no disk setting,
+as before. No method or event is added or renamed, so the method and event
+catalogs and the surface counts are unchanged, and no `AgentLite` or
+`Workspace` field is added. The public protocol version is unchanged.
 
 **Secrets for remote agents — nodeProtocol 14 (additive result fields and error code; no method-catalog change, so no version bump).**
 A remote top-level agent can now request and use secrets
