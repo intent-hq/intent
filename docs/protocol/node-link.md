@@ -3061,8 +3061,10 @@ backend worktree.
 | The script runs past `timeoutSecs` | Its process group is killed; `failed`, `error: "node-setup-timeout: <detail>"`; the agent starts with the notice |
 | A `stop` while the agent's own checkout is made, before the script starts | `exited` is journaled with no `setupFinished` or `started`; the next launch with `checkout` removes the partial checkout, makes a fresh one and runs the script |
 | The machine restarts while the agent's own checkout is made, before the script starts | No `setupFinished` or `started` is journaled, and no exit record is guaranteed (the backend reads the process as lost); the next launch with `checkout` removes the partial checkout, makes a fresh one and runs the script |
-| A `stop` during setup | The process group is killed; `exited` is journaled with no `setupFinished` or `started`; the next launch keeps the checkout and records `failed`, `error: "node-setup-interrupted: <detail>"`, without a re-run |
-| The machine restarts during setup | At its next launch of that agent the machine records `failed`, `error: "node-setup-interrupted: <detail>"`, without a re-run |
+| A `stop` during setup (first run) | The process group is killed; `exited` is journaled with no `setupFinished` or `started`; the next launch keeps the checkout and records `failed`, `error: "node-setup-interrupted: <detail>"`, without a re-run |
+| The machine restarts during setup (first run) | At its next launch of that agent the machine records `failed`, `error: "node-setup-interrupted: <detail>"`, without a re-run |
+| A `stop` during a [setup retry](#setup-retry-nodeprotocol-21) | The process group is killed; `setupFinished` `failed`, `error: "node-setup-interrupted: <detail>"` is journaled before `exited` |
+| The machine restarts during a setup retry | The checkout keeps the retry recorded `running`; the next launch journals one `setupFinished` `failed`, `error: "node-setup-interrupted: <detail>"`, before `started`, without a re-run |
 
 The `node-setup-*` codes appear only in `setupFinished.error`; they never end
 the agent and never set `placementError`.
@@ -3080,7 +3082,7 @@ interface SetupRetryFrame {        // backend → machine, closed
   type: "setupRetry";
   requestId: string;               // UUID, echoed by the reply
   agentId: string;
-  setup: SetupCommand;             // resolved again, with the launch rule
+  setup: SetupCommand;             // as in launch.checkout.setup, resolved again with the launch rule
 }
 interface SetupRetryReplyFrame {   // machine → backend, closed
   type: "setupRetryReply";
@@ -3094,8 +3096,9 @@ interface SetupRetryReplyFrame {   // machine → backend, closed
 
 The backend resolves `setup` with the [launch rule](#setup-script-on-the-machine)
 at the time of the retry, so a script fixed since the launch runs. It sends
-`setupRetry` only for an agent whose `setup.state` is `failed`, or `running`
-because of a retry; the method checks are in
+`setupRetry` only for an agent whose `setup.state` is `failed` or `running`
+(it keeps no record of which run is a retry; the machine joins one under way
+or refuses); the method checks are in
 [`agent.retrySetup`](./methods/nodes.md#retrying-a-remote-agents-setup).
 
 **On the machine.** The machine accepts a `setupRetry` only for an agent that
@@ -3109,7 +3112,8 @@ setup. Then it:
    the first run.
 3. Runs `setup` with the same wrapper, environment, timeout, process group and
    [setup-file excludes](#setup-script-on-the-machine) as the first run. The
-   excludes of this run replace the earlier run's.
+   files this run creates are added to the earlier runs' excludes, which
+   stay.
 4. Journals `setupFinished` with the result, and records it with the checkout.
    The agent's `ws.workspace.details().setupStatus` shows the new state from
    the start of the run.
@@ -3126,14 +3130,15 @@ for the turn to end). The machine answers `refused` with:
 | `node-setup-retry-not-failed` | The checkout's recorded setup is not `failed` and no retry runs |
 
 The backend waits 10 s for the reply; without one the retry fails
-`machine-unreachable`, and a run that started anyway still journals its
-records.
+`machine-unreachable`, a later `setupRetryReply` for that `requestId` is
+ignored, and a run that started anyway still journals its records.
 
 **Stop and restart.** A `stop` of the agent during a retry kills the script's
 process group and journals `setupFinished` `failed` with
 `error: "node-setup-interrupted: <detail>"` before `exited`. A machine restart
-during a retry leaves it recorded `running`; the next launch records it
-interrupted, as for a first run. A final stop or the bind sweep stops the
+during a retry leaves it recorded `running` with the checkout (a first run's
+restart leaves the same record); the next launch journals one `setupFinished`
+`failed` with `node-setup-interrupted` before `started`, without a re-run. A final stop or the bind sweep stops the
 agent first, so no retry outlives its checkout.
 
 **Notice.** On a protocol 21 link the first-turn setup-failure notice tells
@@ -3382,9 +3387,10 @@ protocol 10 the machine replaces `setupStatus` in the forwarded
 `workspace.details` reply with its own checkout's
 [setup status](#setup-status-and-output), which follows a
 [setup retry](#setup-retry-nodeprotocol-21). On protocol 21 a forwarded
-`workspace.retrySetup` that the backend answers with `state: "running"` is
-then held on the machine until the run finishes or the call's budget
-(less 5 s) ends; the machine replaces the reply with the run's result.
+`workspace.retrySetup` that the backend answers with the started run
+(`{ state: "running", startedAt }`) is then held on the machine until the
+run finishes or the `workspace_api` call's timeout less 5 s ends; the machine
+replaces the reply with the run's result.
 
 ### Skills on the machine (nodeProtocol 12)
 

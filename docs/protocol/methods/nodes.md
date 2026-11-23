@@ -1326,7 +1326,10 @@ interface AgentRetrySetupResult {
 `-32601`. `agent.retrySetup` runs a script on the machine, so like saved-script
 writes it is not on the collaborator allowlist: the owner and host members may
 call it, a guest is refused. It is allowed when the
-agent's `setup.state` is `failed` (any `exitCode` or `error` code). The backend
+agent's `setup.state` is `failed` (any `exitCode` or `error` code), or
+`running`: the backend keeps no record of which run is a retry, so for
+`running` the machine decides (it joins a retry under way, and refuses a
+first run that has not settled as `agent-not-running`). The backend
 resolves the setup script again with the launch rule, so a script fixed since
 the launch runs. The reply comes once the machine has started the script;
 progress and the result then follow as for the first run: `agent:updated` with
@@ -1334,28 +1337,36 @@ progress and the result then follow as for the first run: `agent:updated` with
 `completed` or `failed`. A call while a retry of that agent runs starts
 nothing and answers with that run's status.
 
-Refusals are `-32602` with `data.code`, before anything reaches the machine:
+Refusals are `-32602` with `data.code`. The backend checks in this order, and
+answers the first that applies before anything reaches the machine: not
+remote, shared checkout or home, state, the turn rule, the machine's link,
+the setup script; then the machine's own checks run.
 
 | Code | When |
 | --- | --- |
 | `setup-retry-not-remote` | The agent is not a remote agent with a prepared checkout (no `setup`) |
-| `setup-retry-not-failed` | `setup.state` is `pending`, `completed` or `skipped`, or `running` without a retry; or the workspace has no setup script now |
-| `setup-retry-shared-checkout` | The agent works in another agent's checkout or in a workspace home; retry the owner's setup |
-| `agent-busy` | A user's call while the agent runs a turn; retry when the turn ends |
-| `agent-not-running` | The agent does not run on its machine now; start it (send it a message), then retry |
+| `setup-retry-shared-checkout` | The agent works in another agent's checkout (retry that agent's setup), or in a workspace home (a home's setup is not retried this way) |
+| `setup-retry-not-failed` | `setup.state` is `pending`, `completed` or `skipped`, or the machine runs no retry for a `running` one |
+| `agent-busy` | A user's call while the agent runs a turn, also while a retry runs; retry when the turn ends |
 | `machine-update-required` | The link negotiates below 21; data `{ update: "machine", reason: "setup-retry" }` |
+| `setup-retry-no-script` | The workspace has no setup script now, so there is nothing to run |
+| `agent-not-running` | The agent does not run on its machine now, or is still starting; send it a message, then retry once that turn ends |
 
 The machine's own refusals map to the same codes, with the machine's detail in
 the message: `node-setup-retry-not-running` is `agent-not-running`,
 `node-setup-retry-shared` is `setup-retry-shared-checkout` and
 `node-setup-retry-not-failed` is `setup-retry-not-failed`. No link, or no
-reply within 10 s, is `-32603` `machine-unreachable`.
+reply within 10 s, is `-32603` `machine-unreachable`, for the user's call and
+the agent's alike; a run that started anyway still reports through
+`agent:updated`.
 
 **The agent's own retry.** A remote agent calls `ws.workspace.retrySetup()` for
 its own checkout, during its turn (the turn rule above does not apply). The
 call is forwarded to the backend, which runs the same checks with the agent
-as the caller; then the machine waits for the run to finish within the call's
-budget (less 5 s) and answers:
+as the caller and answers the forwarded call with the started run (the
+result's `setup`, `{ state: "running", startedAt }`). The machine then waits
+for the run to finish within the `workspace_api` call's timeout (30 s by
+default) less 5 s, and replaces that answer with:
 
 ```ts
 // ws.workspace.retrySetup() → SetupRetryOutcome
@@ -1369,8 +1380,8 @@ interface SetupRetryOutcome {
 }
 ```
 
-`state: "running"` means the budget ended first; calling it again waits for
-the same run. `ws.workspace.details().setupStatus` follows the run. A refusal
+`state: "running"` means the wait ended first (at once when the timeout is
+5 s or less); calling it again waits for the same run. `ws.workspace.details().setupStatus` follows the run. A refusal
 is the error message with the codes above. A local agent's call fails
 `setup-retry-not-remote`. The first-turn setup-failure notice names the call
 on a protocol 21 link.

@@ -295,8 +295,9 @@ proposals). `workspace.archive` and `workspace.unarchive` act on the agent's
 workspace on the backend, with the same checks and events as a local agent's call;
 they do not touch the agent's checkout on the machine. A forwarded
 `workspace.retrySetup` runs `agent.retrySetup` for the calling agent only, without
-the turn rule (the agent asks during its own turn); the machine then holds the
-reply until the run ends or the call's budget does
+the turn rule (the agent asks during its own turn), and answers with the started
+run (`{ state: "running", startedAt }`); the machine then holds the reply until
+the run ends or the `workspace_api` call's timeout less 5 s does
 ([setup retry](./node-link.md#setup-retry-nodeprotocol-21)). `git.listRoots` lists only
 the secondary git roots the agent's machine has: the registered roots that are
 submodules carried in the agent's pins ([node-link.md § Submodule pins](node-link.md#submodule-pins)). The backend answers each such

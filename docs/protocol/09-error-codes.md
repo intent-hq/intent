@@ -209,7 +209,8 @@ is introduced.
 The [setup retry](./methods/nodes.md#retrying-a-remote-agents-setup) adds
 `data.code` values on `-32602` from `agent.retrySetup` and the remote agent's
 `ws.workspace.retrySetup()`: `setup-retry-not-remote`, `setup-retry-not-failed`,
-`setup-retry-shared-checkout`, `agent-busy` and `agent-not-running`, plus
+`setup-retry-shared-checkout`, `setup-retry-no-script`, `agent-busy` and
+`agent-not-running`, plus
 `machine-update-required` with `reason: "setup-retry"`; `-32603`
 `machine-unreachable` when the machine does not answer. On the executor link,
 `setupRetryReply.error` starts with `node-setup-retry-not-running`,

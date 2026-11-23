@@ -51,7 +51,7 @@ remote agent's failed setup script again in its kept checkout; the remote agent'
 adds the `setupRetry` / `setupRetryReply` frames
 ([link contract](./node-link.md#setup-retry-nodeprotocol-21)); daemons offer
 `{ min: 7, max: 21 }`. Older daemons answer `-32601`. No store migration; the
-router surface gains one method.
+router surface gains one method. The documented surface is **511 / 456 / 55**.
 
 Also within 18.1 (additive row field, no capability change): **conversation goal
 attribution** ([§5.5](./methods/agents.md#conversation-goal-attribution)). The
