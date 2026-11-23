@@ -42,6 +42,14 @@ when unset), `agent:updated { agentId, goal }` (`null` = removed), and transcrip
 `interpretCommands`, deliver `/goal …` as text, and answer `agent.setGoal` with
 `-32601`.
 
+Also within 18.1 (additive row field, no capability change): **conversation goal
+attribution** ([§5.5](./methods/agents.md#conversation-goal-attribution)). The
+presence-detected `goalSetBy: { principalId, displayName, login }` rides `AgentLite`,
+`agent.getSession`, the `/goal` command result, the `agent.setGoal` result and
+`agent:updated` (`null` when removed or unattributed). Clients show it only when
+`Workspace.memberCount > 1`. Store migration adds `agent_session.goal_set_by`. Daemons
+without it omit the field, and clients show no attribution.
+
 **Version 18.0 — guided Antigravity setup retirement (breaking).**
 Antigravity now runs the user's `agy` CLI as `agy acp` (agy 1.5.0 or later;
 [intent-hq/intentd#3267](https://github.com/intent-hq/intentd/pull/3267)). The fast-path
@@ -2663,3 +2671,4 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 | `Workspace` | `home` | [Workspace homes](./methods/nodes.md#workspace-homes) | Pending cloudlands-fe homes PR (home on the workspace card and the detached banner); emitted only on an orchestrator serving homes |
 | `AgentLite` | `nodeName` | [Placed agent projection](./methods/nodes.md#placement-and-creation) | Pending: the complete node contract that advertises `agentNodes`; agents placed on [remote machines](./methods/nodes.md#placement-subset) carry it on detail reads, but the app does not read it yet |
 | `AgentLite` | `goal` | [Conversation goal](./methods/agents.md#conversation-goal) | [cloudlands-fe#4947](https://github.com/intent-hq/cloudlands-fe/pull/4947) |
+| `AgentLite` | `goalSetBy` | [Conversation goal attribution](./methods/agents.md#conversation-goal-attribution) | Pending cloudlands-fe goal attribution PR ([intent-hq/intent#9646](https://github.com/intent-hq/intent/issues/9646)) |
