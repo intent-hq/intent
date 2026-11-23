@@ -189,6 +189,12 @@ redaction applies. Deleting the file removes every profile.
   leaves the file untouched. `providers.profiles.*` then return `-32603` with
   `data.code: "provider-profiles-unreadable"`, and qualified references fail with
   `provider-profile-replacement-required` (`reason: "profile-missing"`).
+- **Unknown bases.** A profile whose `baseProvider` the daemon does not know (one a
+  newer daemon saved) does not make the file unreadable. The daemon does not load it:
+  it is absent from every read, and its qualified reference fails like a deleted
+  profile's. Each write keeps the entry unchanged, and the daemon never reuses its id,
+  so the profile returns after an upgrade. Its `id` must still be valid and unique, or
+  the file is malformed.
 
 Environment values never enter `config.toml`, the profile file, the ordinary
 `providers.*` map, the settings database, `settings.list`, `settings:changed`,
@@ -1185,7 +1191,9 @@ daemon past this change while a Grok, Droid, Auggie or Cursor profile is saved m
 older daemon read the whole profile file as malformed (it accepts only the bases it
 knows): every `providers.profiles.*` call returns `provider-profiles-unreadable` and
 qualified references need a replacement, as described under **Reads**, until the daemon
-is upgraded again. The file is left untouched, so nothing is lost.
+is upgraded again. The file is left untouched, so nothing is lost. A daemon that keeps
+profiles of [unknown bases](#storage) instead loads the others and skips only those, so
+a later added base no longer makes the file unreadable after a downgrade.
 
 Clients detect Default configuration overrides by the presence of `defaults` on the
 `providers.profiles.list` result. When it is absent, a client may still offer the
