@@ -19,7 +19,7 @@ permission.
 ### Agent feature availability
 
 `agentFeatures.secretRequests` is a boolean Agent Feature labelled **Secret
-requests**, default **false** (see [settings](./settings.md)). It follows the
+requests**, default **true** (see [settings](./settings.md)). It follows the
 captured-at-creation rule of the other agent features: each new agent session
 captures the effective value, persists it in its feature snapshot, and uses it
 for the prompt, MCP bridge, help and dispatch checks. A setting change applies
