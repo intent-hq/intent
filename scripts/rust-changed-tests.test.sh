@@ -92,6 +92,13 @@ mkdir -p "$mk/scripts" "$mk/packages/intentd/scripts" "$mk/packages/intentd/.git
 cp "$repo_root/Makefile" "$mk/Makefile"
 cp "$repo_root/scripts/check_watch_capacity.py" "$mk/scripts/"
 cp "$repo_root/scripts/intentd_tree_preflight.py" "$mk/scripts/"
+# The Postgres feature hint logs its argv; HINT_STUB_EXIT makes it fail.
+cat >"$mk/scripts/postgres_store_hint.py" <<'PY'
+import os, sys
+with open(os.environ["PLANNER_TEST_LOG"] + ".hint", "a") as log:
+    log.write("\n".join(sys.argv[1:]) + "\n")
+sys.exit(int(os.environ.get("HINT_STUB_EXIT", "0")))
+PY
 cat >"$mk/packages/intentd/scripts/changed-tests.sh" <<'SH'
 #!/usr/bin/env bash
 {
@@ -116,6 +123,7 @@ make_bin=$(command -v make 2>/dev/null) || make_bin=""
 # make variables go on the command line after the target.
 run_make() {
   : >"$temp_dir/planner.log"
+  : >"$temp_dir/planner.log.hint"
   : >"$temp_dir/cargo.log"
   set +e
   PATH="$bin_dir" PLANNER_TEST_LOG="$temp_dir/planner.log" CARGO_TEST_LOG="$temp_dir/cargo.log" \
@@ -127,6 +135,7 @@ run_make() {
   stderr=$(<"$temp_dir/stderr")
   planner_log=$(<"$temp_dir/planner.log")
   cargo_log=$(<"$temp_dir/cargo.log")
+  hint_log=$(<"$temp_dir/planner.log.hint")
 }
 
 expect_make_ok() {
@@ -164,6 +173,16 @@ else
   [[ "$stdout" != *"NO_FAIL_FAST=1"* ]] || fail "$case_name: knob line printed with NO_FAIL_FAST unset: $stdout"
 
   no_fail_fast_line="[test-changed] NO_FAIL_FAST=1: nextest runs with --no-fail-fast"
+  # The branch's Postgres store tests need a feature test-changed never
+  # enables; the hint names them (intentd#3672) and cannot fail the run.
+  case_name="test-changed recipe runs the Postgres feature hint with its BASE"
+  expected_hint="--label"$'\n'"test-changed"$'\n'"--intentd-dir"$'\n'"packages/intentd"$'\n'"--base"$'\n'"other"
+  [[ "$hint_log" == "$expected_hint" ]] || fail "$case_name: hint argv was"$'\n'"$hint_log"
+  HINT_STUB_EXIT=1 run_make test-changed
+  expect_make_ok
+  [[ "$hint_log" == *$'\n'"--base"$'\n'"origin/main" ]] || fail "$case_name: default base missing: $hint_log"
+  expect_planner "" "" "" -2 -2 none never
+
   case_name="test-changed recipe passes NO_FAIL_FAST=1 through without announcing it outside DRY_RUN"
   run_make test-changed NO_FAIL_FAST=1
   expect_make_ok
@@ -317,6 +336,7 @@ else
   cp "$repo_root/scripts/gate_storage.py" "$mono/scripts/gate_storage.py"
   cp "$repo_root/scripts/check_watch_capacity.py" "$mono/scripts/"
   cp "$repo_root/scripts/intentd_tree_preflight.py" "$mono/scripts/"
+  cp "$repo_root/scripts/postgres_store_hint.py" "$mono/scripts/"
   cp "$repo_root/scripts/check-transfer-selection-contract.mjs" "$mono/scripts/"
   mkdir -p "$mono/docs/protocol/fixtures"
   cp -R "$repo_root/docs/protocol/fixtures/transfer-selection" "$mono/docs/protocol/fixtures/"

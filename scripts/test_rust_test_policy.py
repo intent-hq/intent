@@ -88,7 +88,7 @@ class RustTestPolicyTests(unittest.TestCase):
             + shlex.quote(shutil.which("node")) + ' "$@";; esac\n')
         # bootstrap-dev-host.sh: make check's cargo-shear preflight (--check-cargo-shear).
         for name in ("resumable_nextest.py", "gate_storage.py", "check_watch_capacity.py", "bootstrap-dev-host.sh",
-                     "intentd_tree_preflight.py"):
+                     "intentd_tree_preflight.py", "postgres_store_hint.py"):
             shutil.copy(ROOT / "scripts" / name, self.root / "scripts")
         shutil.copytree(ROOT / "scripts/_vendor", self.root / "scripts/_vendor",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -570,6 +570,29 @@ if is_test:
                 self.assertNotIn(['shear', '--deny-warnings'], [c['args'] for c in calls])
                 self.assertNotIn('clippy', [c['args'][0] for c in calls])
 
+    def test_check_lints_the_postgres_store_tests_like_store_postgres_ci(self):
+        """The workspace Clippy builds intent-store without its postgres
+        feature, so the Postgres store tests compile to empty binaries there;
+        an unused doc comment on a parity_test! call passed make check and
+        failed CI store-postgres (intentd#3672). make check also runs that
+        job's Clippy step in the component."""
+        for forwarded in (False, True):
+            with self.subTest(forwarded=forwarded):
+                result, calls = self.make('check', forwarded=forwarded)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                clippy = [c for c in calls if c['args'][:1] == ['clippy']]
+                self.assertEqual(len(clippy), 2, calls)
+                postgres = clippy[1]['args']
+                self.assertEqual(postgres[:5], ['clippy', '-p', 'intent-store', '--features', 'postgres'], postgres)
+                self.assertIn('--all-targets', postgres)
+                self.assertNotIn('--workspace', postgres)
+                self.assertEqual(postgres[postgres.index('--') + 1:], ['-D', 'warnings'])
+                self.assertEqual(Path(clippy[1]['cwd']).resolve(), self.component.resolve())
+        result, calls = self.make('clippy-postgres')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([c['args'][:3] for c in calls if c['args'][:1] == ['clippy']],
+                         [['clippy', '-p', 'intent-store']])
+
     def test_valid_mixed_gate_goals_preserve_policy_without_duplicate_checks(self):
         for forwarded in (False, True):
             for goals in (('gate', 'check'), ('check', 'gate')):
@@ -578,8 +601,8 @@ if is_test:
                                               override='0', extra=(goals[1], '-j4'))
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assert_policy(calls, inherited='0')
-                    for command in ('fmt', 'clippy', 'test'):
-                        self.assertEqual(sum(c['args'][0] == command for c in calls), 1, calls)
+                    for command, count in (('fmt', 1), ('clippy', 2), ('test', 1)):
+                        self.assertEqual(sum(c['args'][0] == command for c in calls), count, calls)
 
 
 @unittest.skipUnless((COMPONENT / "scripts/with-test-policy.sh").is_file(),

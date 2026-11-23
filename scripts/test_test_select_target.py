@@ -24,6 +24,12 @@ with open(os.environ["TEST_SELECT_LOG"], "a") as log:
 POLICY_STUB = """#!/usr/bin/env bash
 POLICY_WRAPPED=1 exec "$@"
 """
+# Records the Postgres feature hint's argv; HINT_STUB_EXIT makes it fail.
+HINT_STUB = """import json, os, sys
+with open(os.environ["HINT_LOG"], "a") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\\n")
+sys.exit(int(os.environ.get("HINT_STUB_EXIT", "0")))
+"""
 CARGO_STUB = """#!/usr/bin/env bash
 printf '%s\\n' "$*" >>"$TEST_SELECT_CARGO_LOG"
 """
@@ -43,6 +49,7 @@ class TestSelectTargetTests(unittest.TestCase):
         shutil.copy(ROOT / "Makefile", self.root / "Makefile")
         (scripts / "resumable_nextest.py").write_text(RUNNER_STUB)
         (scripts / "check_watch_capacity.py").write_text("")
+        (scripts / "postgres_store_hint.py").write_text(HINT_STUB)
         shutil.copy(ROOT / "scripts/intentd_tree_preflight.py", scripts)
         policy = intentd_scripts / "with-test-policy.sh"
         policy.write_text(POLICY_STUB)
@@ -53,13 +60,14 @@ class TestSelectTargetTests(unittest.TestCase):
         cargo.chmod(0o755)
         self.log = Path(temporary.name) / "runner.jsonl"
         self.cargo_log = Path(temporary.name) / "cargo.log"
+        self.hint_log = Path(temporary.name) / "hint.jsonl"
 
     def run_make(self, *arguments, env=None):
         environment = {k: v for k, v in os.environ.items()
                        if k not in {"MAKEFLAGS", "MFLAGS", "MAKELEVEL", "E", "RESUME", "GATE_FORCE",
                                     "NO_FAIL_FAST", "FEATURES", "HERMETIC", "COMPACT", "BUILD_JOBS",
-                                    "TEST_THREADS", "GATE_CACHE_DIR"}}
-        environment.update(TEST_SELECT_LOG=str(self.log), TEST_SELECT_CARGO_LOG=str(self.cargo_log),
+                                    "TEST_THREADS", "GATE_CACHE_DIR", "BASE", "HINT_STUB_EXIT"}}
+        environment.update(TEST_SELECT_LOG=str(self.log), HINT_LOG=str(self.hint_log), TEST_SELECT_CARGO_LOG=str(self.cargo_log),
                            **(env or {}))
         result = subprocess.run(
             ["make", "--no-print-directory", "test-select", *arguments,
@@ -131,6 +139,23 @@ class TestSelectTargetTests(unittest.TestCase):
                 result, calls = self.run_make("E=test(/one/)", *arguments, env=env)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertNotIn("--features", self.selection_call(calls)["runner"])
+
+    def test_postgres_feature_hint_gets_the_selection_and_never_fails_the_run(self):
+        # Without intent-store/postgres a filtered run silently skips the
+        # Postgres store tests (intentd#3672); the hint names them.
+        expression = "test(/it's/)"
+        for arguments, base in (((), "origin/main"), (("BASE=feature base",), "feature base")):
+            with self.subTest(arguments=arguments):
+                self.hint_log.unlink(missing_ok=True)
+                result, calls = self.run_make(f"E={expression}", "FEATURES=intent-store/postgres,b", *arguments)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                hints = [json.loads(line) for line in self.hint_log.read_text().splitlines()]
+                self.assertEqual(hints, [["--label", "test-select", "--intentd-dir", "packages/intentd",
+                                          "--base", base, "--features", "intent-store/postgres b",
+                                          "--filterset", expression]])
+        result, calls = self.run_make("E=test(/one/)", env={"HINT_STUB_EXIT": "1"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue([call for call in calls if "--filterset" in call["runner"]], calls)
 
 if __name__ == "__main__":
     unittest.main()
