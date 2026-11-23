@@ -85,6 +85,13 @@ class CiLogTests(unittest.TestCase):
             ("intentd-sitter::supervisor_e2e", "start_waits"),
         ], "a test that passed on retry (FLAKY) did not eject the PR")
 
+    def test_a_failure_in_one_job_survives_a_pass_in_another(self):
+        log = "\n".join([
+            ci_line(colored("  TRY 2 FAIL", "intentd::suite_uds", "uds", "x"), job="coverage-all"),
+            ci_line(colored("        PASS", "intentd::suite_uds", "uds", "x", color="32;1"), job="coverage-e2e"),
+        ])
+        self.assertEqual(triage.failing_tests(log), [("intentd::suite_uds", "uds::x")])
+
     def test_no_failure_lines(self):
         self.assertEqual(triage.failing_tests(ci_line("error: could not compile `intentd`")), [])
 
@@ -172,7 +179,10 @@ else:
             status = 1
 summary = {"iterations": 0 if status == 4 else count, "failed_iterations": failed_iterations,
            "by_test": by_test, "failures": failures, "stress_count": count, "exit_code": status,
-           "load": args.get("LOAD") == "1", "stall": args.get("STALL") == "1"}
+           "load": args.get("LOAD") == "1", "stall": args.get("STALL") == "1", "stalls": 0,
+           # nextest_stress keeps exit 1 when the load died but a test also failed.
+           "load_failures": ["yes exited 1"] if os.path.exists(os.path.join(tree, "loadfail")) else [],
+           "stall_failures": []}
 json.dump(summary, open(os.path.join(record, "summary.json"), "w"))
 print(f"[test-stress] stress: {count}/{count} iterations")
 print(f"[test-stress] record: {record}")
@@ -185,7 +195,8 @@ with open(os.environ["STUB_LOG"], "a") as log:
     log.write(json.dumps({"gh": sys.argv[1:]}) + "\n")
 if "--json" in sys.argv:
     print(json.dumps({"headBranch": os.environ["STUB_HEAD_BRANCH"], "event": "merge_group",
-                      "headSha": "0" * 40, "url": "https://github.com/x/y/actions/runs/1"}))
+                      "headSha": os.environ.get("STUB_HEAD_SHA", "0" * 40),
+                      "url": "https://github.com/x/y/actions/runs/1"}))
 elif "--log-failed" in sys.argv:
     sys.stdout.write(open(os.environ["STUB_FAILED_LOG"]).read())
 else:
@@ -265,7 +276,8 @@ class EndToEndTests(unittest.TestCase):
         return json.loads((directory / "report.json").read_text()), (directory / "report.md").read_text()
 
     def test_flaky_on_main_with_a_pr_number(self):
-        old = self.commit({"flaky": f"{TEST} 54\n", "a": "1"}, "base")
+        # A broad E also selects a healthy test; it must not make the verdict inconclusive.
+        old = self.commit({"flaky": f"{TEST} 54\nintentd::bin/intentd stable 0\n", "a": "1"}, "base")
         pr = self.commit({"feature": "x"}, "feature", branch="feature", parent=old)
         main = self.commit({"a": "2"}, "newer main", parent=old)
         self.push("main", f"{pr}:refs/pull/7/head")
@@ -300,6 +312,8 @@ class EndToEndTests(unittest.TestCase):
         self.assertIn("| main |", markdown)
         self.assertIn("54/200", result.stdout)
         self.assertIn("src/lib.rs:7", result.stdout, "the table names where the failures panicked")
+        self.assertEqual(report["tests"][1]["verdict"], "no failures")
+        self.assertNotIn("no revision failed", result.stdout, "a healthy test adds no advice")
 
         # A second run reuses the worktrees (warm builds), even one left mid-merge.
         merged_tree = next(Path(a.split("=", 1)[1]) for a in merged_call["argv"] if a.startswith("INTENTD_DIR="))
@@ -389,6 +403,57 @@ class EndToEndTests(unittest.TestCase):
             "intentd-sitter::supervisor_e2e start_waits": "fails on main",
         })
         self.assertEqual(self.verdict_line(result), "[flake-triage] verdict: caused by this PR")
+        self.assertIn("could not fetch the queue commit", result.stdout, "an unknown headSha falls back to a remerge")
+
+    def test_run_url_stresses_the_tree_the_queue_tested(self):
+        base = self.commit({"flaky": f"{TEST} 0\n"}, "main when the PR was queued")
+        pr = self.commit({"feature": "x"}, "pr", branch="feature", parent=base)
+        # The queue commit also carries a PR queued ahead, which made the test fail.
+        queued = self.commit({"feature": "x", "flaky": f"{TEST} 50\n"}, "queue entry", branch="queue", parent=base)
+        newer = self.commit({"flaky": f"{TEST} 0\n", "fixed": ""}, "newer main", parent=base)
+        git(self.origin, "config", "uploadpack.allowAnySHA1InWant", "true")
+        self.push("main", f"{pr}:refs/pull/12/head", f"{queued}:refs/heads/gh-readonly-queue/main/pr-12-{base}")
+        git(self.src, "push", "-q", "origin", f":refs/heads/gh-readonly-queue/main/pr-12-{base}")
+        log = self.tmp / "failed.log"
+        log.write_text(ci_line(colored("  TRY 2 FAIL", "intentd::bin/intentd", "executor::scripts::tests", "list_race")))
+        result, calls = self.triage(
+            "--run", "https://github.com/intent-hq/intentd/actions/runs/1",
+            env={"STUB_HEAD_BRANCH": f"gh-readonly-queue/main/pr-12-{base}", "STUB_HEAD_SHA": queued,
+                 "STUB_FAILED_LOG": str(log)})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([call["head"] for call in self.stress_calls(calls)], [base, queued, pr],
+                         "main = the queue base, merged = the queue commit, not today's main")
+        self.assertNotEqual(base, newer)
+        self.assertEqual(self.verdict_line(result), "[flake-triage] verdict: caused by this PR")
+
+    def test_a_run_whose_load_died_is_invalid_even_with_failures(self):
+        main = self.commit({"flaky": f"{TEST} 2\n", "loadfail": ""}, "base")
+        self.commit({"flaky": f"{TEST} 40\n", "loadfail": None}, "pr", branch="feature", parent=main)
+        self.push("main", "feature")
+        result, _ = self.triage("--branch", "feature", "--filterset", "test(=list_race)", "--stress-arg", "LOAD=1")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(self.verdict_line(result), "[flake-triage] verdict: inconclusive")
+        self.assertIn("INVALID", result.stdout)
+
+    def test_a_pr_alone_that_does_not_build_keeps_the_verdict(self):
+        old = self.commit({"flaky": f"{TEST} 0\n", "broken": ""}, "main before a build fix")
+        self.commit({"flaky": f"{TEST} 80\n"}, "pr", branch="feature", parent=old)
+        self.commit({"broken": None}, "build fix", parent=old)
+        self.push("main", "feature")
+        result, _ = self.triage("--branch", "feature", "--filterset", "test(=list_race)")
+        self.assertEqual(result.returncode, 0, "the PR-alone run only adds notes" + result.stdout + result.stderr)
+        self.assertEqual(self.verdict_line(result), "[flake-triage] verdict: caused by this PR")
+        self.assertIn("exit 101", result.stdout)
+
+    def test_a_remote_tracking_base_is_fetched(self):
+        old = self.commit({"flaky": f"{TEST} 0\n"}, "base")
+        self.commit({"x": "1"}, "pr", branch="feature", parent=old)
+        new = self.commit({"y": "1"}, "newer main", parent=old)
+        self.push("main", "feature")
+        git(self.src, "update-ref", "refs/remotes/origin/main", old)
+        result, calls = self.triage("--branch", "feature", "--base", "origin/main", "--filterset", "test(=list_race)")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.stress_calls(calls)[0]["head"], new, "BASE=origin/main must not test a stale copy")
 
     def test_usage_errors_before_any_work(self):
         self.commit({"flaky": f"{TEST} 0\n"}, "base")

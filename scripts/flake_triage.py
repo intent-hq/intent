@@ -17,7 +17,10 @@ adds notes (a failure that needs newer main, or one main already fixed).
 E is a nextest filterset. RUN=<GitHub Actions run URL> reads the run's failed
 logs with gh, builds E from the tests whose final status failed (a test that
 passed on retry did not eject anything), and takes the PR from the merge-queue
-branch name (gh-readonly-queue/main/pr-<N>-<sha>).
+branch name (gh-readonly-queue/main/pr-<N>-<sha>). Unless BASE is set, it then
+replays that queue entry: main is the <sha> it was built on and merged is the
+run's own head commit, so PRs queued ahead and later pushes to main or the PR
+do not change what is compared.
 
 The worktrees live at stable paths under GATE_CACHE_DIR/flake-triage/worktrees/
 <checkout hash>/{main,merged,pr}, so a repeat run reuses their Cargo outputs; a
@@ -26,8 +29,9 @@ already stressed is not run again. Each run's output and a report (report.md,
 report.json) are kept under GATE_CACHE_DIR/flake-triage/runs/<id>/ for seven
 days.
 
-Exit status: 0 with a verdict, 1 when a stress run did not complete (the
-verdict is then inconclusive), 2 on a usage or setup error.
+Exit status: 0 with a verdict, 1 when the main or merged stress run did not
+complete or its load or stalls did not hold (the verdict is then
+inconclusive), 2 on a usage or setup error.
 """
 
 from __future__ import annotations
@@ -57,6 +61,8 @@ LABEL = "[flake-triage]"
 FAILS_ON_MAIN = "fails on main"
 CAUSED_BY_PR = "caused by this PR"
 INCONCLUSIVE = "inconclusive"
+# A test the filter selected that never failed anywhere: it takes no part in the verdict.
+NO_FAILURES = "no failures"
 ALPHA = 0.05
 ROLES = ("main", "merged", "pr")
 # make test-stress knobs passed through unchanged; make test-stress validates the rest.
@@ -68,9 +74,9 @@ DEFAULT_REPO = "intent-hq/intentd"
 RUN_URL_RE = re.compile(
     r"^https://github\.com/(?P<repo>[\w.-]+/[\w.-]+)/actions/runs/(?P<run>\d+)"
     r"(?:/attempts/(?P<attempt>\d+))?(?:/job/(?P<job>\d+))?(?:/attempts/(?P<attempt2>\d+))?/?(?:[?#].*)?$")
-QUEUE_BRANCH_RE = re.compile(r"^gh-readonly-queue/.+/pr-(?P<pr>\d+)-[0-9a-f]{7,}$")
+QUEUE_BRANCH_RE = re.compile(r"^gh-readonly-queue/.+/pr-(?P<pr>\d+)-(?P<base>[0-9a-f]{7,})$")
 # `gh run view --log-failed` prefixes every line with "<job>\t<step>\t<timestamp> ".
-LOG_PREFIX_RE = re.compile(r"^[^\t\n]*\t[^\t\n]*\t\d{4}-\d\d-\d\dT[\d:.]+Z ?")
+LOG_PREFIX_RE = re.compile(r"^(?P<job>[^\t\n]*)\t[^\t\n]*\t\d{4}-\d\d-\d\dT[\d:.]+Z ?")
 # ...and prints each color code's escape byte as the text "^[".
 LOG_COLOR_RE = re.compile(r"(?:\x1b|\^\[)\[[0-9;?]*[A-Za-z]")
 # A nextest status line: "  TRY 2 FAIL [   2.063s] (12042/18563) intentd::bin/intentd mod::test".
@@ -108,11 +114,22 @@ def queue_pr(head_branch: str) -> int | None:
     return int(match["pr"]) if match else None
 
 
+def queue_base(head_branch: str) -> str | None:
+    """The commit a merge-queue entry was built on (main, or the entry queued ahead of it)."""
+    match = QUEUE_BRANCH_RE.match(head_branch or "")
+    return match["base"] if match else None
+
+
 def failing_tests(log: str) -> list[tuple[str, str]]:
-    """(binary id, test) of every test whose last status in the log is a failure, in first-seen order."""
-    last: dict[tuple[str, str], bool] = {}
+    """(binary id, test) of every test whose last status in some job's log is a failure, in first-seen order.
+
+    --log-failed joins the logs of every failed job, so a pass in one job must not hide a failure in another.
+    """
+    last: dict[tuple[str, str, str], bool] = {}
     for raw in log.splitlines():
-        line = LOG_COLOR_RE.sub("", LOG_PREFIX_RE.sub("", raw, count=1)).replace("\r", "")
+        prefix = LOG_PREFIX_RE.match(raw)
+        job = prefix["job"] if prefix else ""
+        line = LOG_COLOR_RE.sub("", raw[prefix.end():] if prefix else raw).replace("\r", "")
         match = STATUS_RE.match(line)
         if not match:
             continue
@@ -123,9 +140,8 @@ def failing_tests(log: str) -> list[tuple[str, str]]:
             failed = True
         else:
             continue
-        key = (match["binary"], match["test"])
-        last[key] = failed
-    return [key for key, failed in last.items() if failed]
+        last[(job, match["binary"], match["test"])] = failed
+    return list(dict.fromkeys(key[1:] for key, failed in last.items() if failed))
 
 
 def filterset_for(tests: list[tuple[str, str]]) -> str:
@@ -255,16 +271,25 @@ def fetch(src: Path, remote: str, refspec: str) -> bool:
 
 
 def resolve_base(src: Path, remote: str, base: str) -> tuple[str, str]:
-    if not base:
-        if not fetch(src, remote, f"+refs/heads/main:refs/remotes/{remote}/main"):
-            say(f"WARNING: could not fetch {remote} main; using the local {remote}/main")
-        base = f"{remote}/main"
+    base = base or f"{remote}/main"
+    if base.startswith(f"{remote}/"):
+        branch = base[len(remote) + 1:]
+        if not fetch(src, remote, f"+refs/heads/{branch}:refs/remotes/{base}"):
+            say(f"WARNING: could not fetch {base}; using the local copy")
     commit = rev_parse(src, base)
     if commit is None and fetch(src, remote, base):
         commit = rev_parse(src, "FETCH_HEAD")
     if commit is None:
         raise TriageError(f"BASE={base} is not a commit in {src} or on {remote}")
     return commit, "BASE" if commit.startswith(base.lower()) else base
+
+
+def resolve_queue_commit(src: Path, remote: str, sha: str) -> str | None:
+    """The merge-queue commit a run tested; its branch is usually deleted, so fetch it by SHA."""
+    commit = rev_parse(src, sha)
+    if commit is None and fetch(src, remote, f"+{sha}:refs/flake-triage/queue"):
+        commit = rev_parse(src, "refs/flake-triage/queue")
+    return commit
 
 
 def resolve_pr(src: Path, remote: str, pr: int) -> str:
@@ -405,12 +430,21 @@ def stress(revision: Revision, path: Path, args, stress_args: list[str], run_dir
     revision.summary = summary
     status = summary.get("exit_code")
     failed = any(entry.get("failed") for entry in summary.get("by_test", {}).values())
-    if status == 0 or (status == 1 and failed):
-        revision.state = "ran"
-    elif status == 4:
+    # nextest_stress keeps exit 1 when a test failed, even if the load or stalls did not hold.
+    if summary.get("load_failures"):
+        invalid = "a load worker stopped early"
+    elif summary.get("stall_failures"):
+        invalid = "the stall helper stopped early"
+    elif summary.get("stall") and summary.get("iterations") and not summary.get("stalls"):
+        invalid = "no stall froze a test"
+    else:
+        invalid = "the load or stalls did not hold" if status == 3 else ""
+    if status == 4:
         revision.state = "absent"
-    elif status == 3:
-        revision.state, revision.detail = "invalid", "INVALID: the load or stalls did not hold"
+    elif invalid:
+        revision.state, revision.detail = "invalid", f"INVALID: {invalid}; see {revision.record}"
+    elif status == 0 or (status == 1 and failed):
+        revision.state = "ran"
     else:
         revision.state, revision.detail = "error", f"exit {status}; see {revision.record}"
 
@@ -465,6 +499,7 @@ def triage(args) -> int:
         raise TriageError("make flake-triage needs PR=<number> or BRANCH=<ref> for the intentd change")
 
     repo = DEFAULT_REPO
+    queue_head = ""
     if args.run:
         repo, meta, tests = read_run(args.run)
         head_branch = meta.get("headBranch") or ""
@@ -483,6 +518,10 @@ def triage(args) -> int:
                                   "(a build or setup failure?); pass E='<nextest filterset>'")
             say("failing tests: " + ", ".join(f"{binary} {test}" for binary, test in tests))
             args.filterset = filterset_for(tests)
+        # Replay the queue entry itself: its base and the merged commit it tested. An explicit BASE
+        # asks for a different main, so the PR is merged onto that instead.
+        if not args.base and meta.get("event") == "merge_group" and queue_base(head_branch) and meta.get("headSha"):
+            args.base, queue_head = queue_base(head_branch), meta["headSha"]
 
     repo_root = Path(args.repo_root)
     src = (repo_root / args.intentd_dir).resolve()
@@ -497,10 +536,18 @@ def triage(args) -> int:
             target = f"{repo} {args.branch}"
             head = resolve_branch(src, args.remote, args.branch)
         revisions = {
-            "main": Revision("main", base, base_name),
+            "main": Revision("main", base, "the queue base" if queue_head else base_name),
             "merged": Revision("merged", "", "main + the PR head, as the merge queue tests it"),
             "pr": Revision("pr", head, "the PR head"),
         }
+        if queue_head:
+            queued = resolve_queue_commit(src, args.remote, queue_head)
+            if queued:
+                revisions["merged"].commit = queued
+                revisions["merged"].describe = "the merge-queue commit the run tested"
+            else:
+                say(f"WARNING: could not fetch the queue commit {queue_head[:10]}; "
+                    "rebuilding merged as the queue base + the PR head")
         knobs = ", ".join(args.stress_arg) or "make test-stress defaults"
         say(f"{target} against {base_name} {base[:10]} ({knobs}); E={args.filterset}")
         runs_dir = cache_dir / "flake-triage" / "runs"
@@ -508,10 +555,11 @@ def triage(args) -> int:
         run_dir = runs_dir / uuid.uuid4().hex
         run_dir.mkdir(parents=True)
         seen: dict[str, Revision] = {}
+        remerge = not revisions["merged"].commit
         for role in ROLES:
             rev = revisions[role]
             path = root / role
-            if role == "merged":
+            if role == "merged" and remerge:
                 checkout(src, path, base)
                 if not merge(path, head):
                     rev.state = "conflict"
@@ -525,7 +573,7 @@ def triage(args) -> int:
                 rev.summary, rev.record = same.summary, same.record
                 say(f"{role}: same tree as {same.role}; not stressed again")
                 continue
-            if role != "merged":
+            if not (role == "merged" and remerge):
                 checkout(src, path, rev.commit)
             say(f"{role}: stressing {rev.commit[:10]} ({rev.describe}) in {path}")
             stress(rev, path, args, args.stress_arg, run_dir)
@@ -539,12 +587,20 @@ def triage(args) -> int:
     tests, notes = [], []
     for name in names or ["(the selected tests)"]:
         cells = {role: revisions[role].cell(name) for role in ROLES}
-        result, test_notes = verdict(cells["main"], cells["merged"], cells["pr"])
+        healthy = (any(c.state == "ran" for c in cells.values())
+                   and all(c.state in ("ran", "absent") and not c.failed for c in cells.values()))
+        if healthy:
+            result, test_notes = NO_FAILURES, []
+        else:
+            result, test_notes = verdict(cells["main"], cells["merged"], cells["pr"])
         tests.append({"test": name, "verdict": result, "notes": test_notes,
                       "cells": {role: vars(cell) for role, cell in cells.items()}})
         prefix = f"{name}: " if len(names) > 1 else ""
         notes += [prefix + note for note in test_notes]
-    final = overall([test["verdict"] for test in tests])
+    deciding = [test["verdict"] for test in tests if test["verdict"] != NO_FAILURES]
+    final = overall(deciding)
+    if not deciding:
+        notes.append("no revision failed; raise COUNT or try LOAD=1 or STALL=1")
     title = f"Flake triage: {target} vs {base_name} {base[:10]}"
     report = markdown(title, revisions, tests, notes)
     (run_dir / "report.md").write_text(report, encoding="utf-8")
@@ -559,7 +615,8 @@ def triage(args) -> int:
     print("\n" + report, flush=True)
     say(f"verdict: {final}")
     say(f"report: {run_dir}")
-    incomplete = any(rev.state in ("error", "invalid") for rev in revisions.values())
+    compared = revisions["pr"] if revisions["merged"].state == "conflict" else revisions["merged"]
+    incomplete = any(rev.state in ("error", "invalid") for rev in (revisions["main"], compared))
     return 1 if incomplete else 0
 
 
