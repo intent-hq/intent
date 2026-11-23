@@ -419,8 +419,8 @@ def daemon_id(rig_dir: Path) -> str | None:
     try:
         with sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5) as conn:
             row = conn.execute("SELECT value FROM settings WHERE key = ?", (DAEMON_ID_KEY,)).fetchone()
-    except sqlite3.Error:
-        return None
+    except sqlite3.Error as error:
+        raise RigError(f"cannot read the rig backend id from {db} ({error})") from None
     return json.loads(row[0]) if row else None
 
 
@@ -670,12 +670,11 @@ def copy_profiles(host: Rpc, rig: Rpc, wanted: str) -> list[dict]:
     return copied
 
 
-def copy_entries(host: Rpc, rig: Rpc, wanted: str, overrides: dict) -> list[dict]:
+def copy_entries(host: Rpc, rig: Rpc, wanted: str, overrides: dict, on_copied) -> None:
     entries = host.call("cloudMachines.list").get("providers", [])
     picked = select(entries, wanted, "cloud entry")
     accounts = [f"cloudMachines.{e['id']}.apiKey" for e in picked]
     secrets = read_secrets(host_secrets_path(), accounts)
-    copied = []
     for entry in picked:
         key = secrets[f"cloudMachines.{entry['id']}.apiKey"]
         if not key:
@@ -684,9 +683,8 @@ def copy_entries(host: Rpc, rig: Rpc, wanted: str, overrides: dict) -> list[dict
         made = rig.call("cloudMachines.configure", params, timeout=180)["provider"]
         OUT.say(f"cloud entry {entry['name']} ({entry['id']}) -> rig {made['id']} "
                 f"[{made['state']}, {made.get('template')}, size {made.get('size')}]")
-        copied.append({"hostId": entry["id"], "rigId": made["id"], "provider": entry["provider"],
-                       "name": entry["name"], "settings": entry.get(entry["provider"]) or {}})
-    return copied
+        on_copied({"hostId": entry["id"], "rigId": made["id"], "provider": entry["provider"],
+                   "name": entry["name"], "settings": entry.get(entry["provider"]) or {}})
 
 
 # ------------------------------------------------------------------------ up
@@ -744,7 +742,12 @@ def cmd_up(args: argparse.Namespace) -> int:
                      "idlePauseMinutes": int(args.idle_pause) if args.idle_pause else None}
         state["profiles"] = copy_profiles(host, rpc, args.profiles)
         save_state(state)
-        state["entries"] = copy_entries(host, rpc, args.cloud, overrides)
+
+        def record(entry: dict) -> None:
+            state["entries"].append(entry)
+            save_state(state)
+
+        copy_entries(host, rpc, args.cloud, overrides, record)
         state["ready"] = True
         save_state(state)
         OUT.say(f"ready: intentd {state['version']} in {rig_dir} (state {STATE.relative_to(REPO)})")
@@ -802,7 +805,7 @@ def cmd_up(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------- down
 
 
-def provider_items(provider: str, key: str, settings: dict, backend: str) -> list[dict]:
+def http_get(provider: str):
     def get(url: str, headers: dict) -> dict | list:
         request = urllib.request.Request(url, headers={**headers, "Accept": "application/json"})
         try:
@@ -813,6 +816,12 @@ def provider_items(provider: str, key: str, settings: dict, backend: str) -> lis
         except urllib.error.URLError as error:
             raise RigError(f"{provider} list failed: {error.reason}") from None
 
+    return get
+
+
+def provider_items(provider: str, key: str, settings: dict, backend: str, get=None) -> list[dict]:
+    """Every listed sandbox (service, volume, instance), following each page."""
+    get = get or http_get(provider)
     bearer = {"Authorization": f"Bearer {key}"}
     if provider == "e2b":
         query = urllib.parse.urlencode({"metadata": f"intentBackendId={backend}", "state": "running,paused", "limit": 100})
@@ -820,12 +829,29 @@ def provider_items(provider: str, key: str, settings: dict, backend: str) -> lis
     if provider == "vercel":
         query = urllib.parse.urlencode({"project": settings.get("projectId", ""), "teamId": settings.get("teamId", ""),
                                         "tags": f"intentBackendId:{backend}", "limit": 100})
-        return get(f"{API['vercel']}/v2/sandboxes?{query}", bearer).get("sandboxes", [])
+        items, cursor = [], None
+        for _ in range(100):
+            page = get(f"{API['vercel']}/v2/sandboxes?{query}" + (f"&cursor={urllib.parse.quote(cursor)}" if cursor else ""), bearer)
+            items += page.get("sandboxes", [])
+            cursor = (page.get("pagination") or {}).get("next")
+            if not cursor:
+                return items
+        raise RigError("vercel list did not end after 100 pages")
     if provider == "northflank":
         project = urllib.parse.quote(settings.get("projectId", ""))
         items = []
         for kind in ("services", "volumes"):
-            items += get(f"{API['northflank']}/projects/{project}/{kind}?per_page=100", bearer).get("data", {}).get(kind, [])
+            cursor = None
+            for _ in range(100):
+                url = f"{API['northflank']}/projects/{project}/{kind}?per_page=100"
+                page = get(url + (f"&cursor={urllib.parse.quote(cursor)}" if cursor else ""), bearer)
+                items += (page.get("data") or {}).get(kind, [])
+                paging = page.get("pagination") or {}
+                cursor = paging.get("cursor") if paging.get("hasNextPage") else None
+                if not cursor:
+                    break
+            else:
+                raise RigError(f"northflank {kind} list did not end after 100 pages")
         return items
     if provider == "agent37":
         return get(f"{API['agent37']}/instances", bearer).get("data", [])
@@ -872,8 +898,9 @@ def cmd_down(args: argparse.Namespace) -> int:
     report: list[tuple[str, bool, str]] = []
     temp = None
     removal_ok = True
-    if state.get("entries"):
-        if not rpc.accepts() and rig_dir.exists() and os.access(intentd, os.X_OK):
+    entries = list(state.get("entries", []))
+    if (rig_dir / "data" / "intentd.db").exists():
+        if not rpc.accepts() and os.access(intentd, os.X_OK):
             OUT.say("the rig daemon is not running; starting it to remove its cloud entries")
             temp = start_daemon(intentd, env, rig_dir, state.get("orchestrator", False))
             state["daemonPid"] = temp.pid
@@ -882,22 +909,37 @@ def cmd_down(args: argparse.Namespace) -> int:
             wait_ready(rpc, temp, args.ready_timeout)
             listed = rpc.call("cloudMachines.list")
             machines = [m.get("cloud", {}).get("sandboxId") for m in listed.get("machines", [])]
+            # An entry the daemon saved before the state recorded it (an
+            # interrupted copy) is removed and checked too.
+            known = {e["rigId"] for e in entries}
+            unrecorded = [p for p in listed.get("providers", []) if p["id"] not in known]
+            if unrecorded:
+                hosts = Rpc(host_socket(), timeout=60).call("cloudMachines.list").get("providers", [])
+                for extra in unrecorded:
+                    source = next((h for h in hosts if h["name"] == extra["name"] and h["provider"] == extra["provider"]), None)
+                    if source is None:
+                        raise RigError(f"rig entry {extra['id']} has no host entry named {extra['name']!r} to check it with")
+                    entries.append({"hostId": source["id"], "rigId": extra["id"], "provider": extra["provider"],
+                                    "name": extra["name"], "settings": source.get(source["provider"]) or {}})
+                state["entries"] = entries
+                save_state(state)
             unconfirmed = []
-            for entry in state["entries"]:
+            for entry in entries:
                 done = rpc.call("cloudMachines.remove", {"cloudMachineId": entry["rigId"], "stopAgents": True}, timeout=240)
                 unconfirmed += done.get("unconfirmedStops", [])
             report.append(("cloud entries removed with stopAgents", True,
-                           f"{len(state['entries'])} entries, {len(machines)} live machines, unconfirmed stops {unconfirmed or 'none'}"))
+                           f"{len(entries)} entries, {len(machines)} live machines, unconfirmed stops {unconfirmed or 'none'}"))
         except RigError as error:
             removal_ok = False
             report.append(("cloud entries removed with stopAgents", False, str(error)))
-    backend = daemon_id(rig_dir) or state.get("backendId")
-    if backend:
-        state["backendId"] = backend
-        save_state(state)
     sandboxes_ok = True
+    backend = state.get("backendId")
     try:
-        found = wait_no_sandboxes(state.get("entries", []), backend, args.sandbox_timeout)
+        backend = daemon_id(rig_dir) or backend
+        if backend:
+            state["backendId"] = backend
+            save_state(state)
+        found = wait_no_sandboxes(entries, backend, args.sandbox_timeout)
         left = {k: v for k, v in found.items() if v}
         sandboxes_ok = not left
         detail = ", ".join(f"{k}: {len(v)}" for k, v in found.items()) or "no cloud entries"
@@ -923,14 +965,15 @@ def cmd_down(args: argparse.Namespace) -> int:
     daemon_gone = stop_daemon(intentd, env, state.get("daemonPid"))
     relay_gone = stop_group((state.get("relay") or {}).get("pid"))
     supervisor_note = "gone" if not alive(supervisor) else "parked (stop its service)" if parked else "ALIVE"
-    report.append(("rig processes stopped", daemon_gone and relay_gone and parked,
+    processes_ok = daemon_gone and relay_gone and parked
+    report.append(("rig processes stopped", processes_ok,
                    f"intentd {'gone' if daemon_gone else 'ALIVE'}, relay {'gone' if relay_gone else 'ALIVE'}, "
                    f"supervisor {supervisor_note}"))
 
-    keep = not (sandboxes_ok and removal_ok) and not args.force
+    keep = not (sandboxes_ok and removal_ok and processes_ok) and not args.force
     if keep:
         report.append(("rig folder deleted", False,
-                       f"kept {rig_dir}: sandboxes may remain; rerun make live-rig-down, or FORCE=1 to delete anyway"))
+                       f"kept {rig_dir}: sandboxes or processes may remain; rerun make live-rig-down, or FORCE=1 to delete anyway"))
     else:
         shutil.rmtree(rig_dir, ignore_errors=True)
         report.append(("rig folder deleted (copied secrets included)", not rig_dir.exists(), str(rig_dir)))
@@ -986,7 +1029,10 @@ def cmd_status(_args: argparse.Namespace) -> int:
             ]
         except RigError as error:
             view["machinesError"] = str(error)
-    view["backendId"] = daemon_id(Path(state["rigDir"])) or state.get("backendId")
+    try:
+        view["backendId"] = daemon_id(Path(state["rigDir"])) or state.get("backendId")
+    except RigError as error:
+        view["backendIdError"] = str(error)
     view["env"] = {"INTENTD_DATA_DIR": str(Path(state["rigDir"]) / "data"), "intentd": state["intentdBin"]}
     print(OUT.scrub(json.dumps(view, indent=2)))
     return 0

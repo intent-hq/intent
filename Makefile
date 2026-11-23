@@ -1421,10 +1421,10 @@ live-rig: ensure-intentd-submodule ## Throwaway intentd for live cloud/relay che
 		$(call LIVE_RIG_FLAG,RELAY_HOST,relay-host) $(call LIVE_RIG_FLAG,RELAY_PORT,relay-port) \
 		$(call LIVE_RIG_FLAG,RELAY_MAP_PORT,relay-map-port) $(call LIVE_RIG_FLAG,DERPER_BIN,derper-bin) \
 		$(call LIVE_RIG_FLAG,RIG_ROOT,rig-root) $(call LIVE_RIG_FLAG,READY_TIMEOUT,ready-timeout) \
-		$(if $(filter 1,$(ORCHESTRATOR)),--orchestrator)
+		$(if $(filter 1,$(call SANDBOX_SHOT_ARG,ORCHESTRATOR)),--orchestrator)
 
 live-rig-down: ## Remove the live rig: stop its agents, prove 0 sandboxes, delete copied secrets, check host config (FORCE=1)
-	@$(LIVE_RIG) down $(if $(filter 1,$(FORCE)),--force) $(call LIVE_RIG_FLAG,SANDBOX_TIMEOUT,sandbox-timeout) \
+	@$(LIVE_RIG) down $(if $(filter 1,$(call SANDBOX_SHOT_ARG,FORCE)),--force) $(call LIVE_RIG_FLAG,SANDBOX_TIMEOUT,sandbox-timeout) \
 		$(call LIVE_RIG_FLAG,READY_TIMEOUT,ready-timeout)
 
 live-rig-status: ## Show the live rig's state, machines and backend id as JSON

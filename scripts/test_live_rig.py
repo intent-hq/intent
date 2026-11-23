@@ -236,6 +236,88 @@ class LeftoverTests(unittest.TestCase):
             MODULE.leftovers("mars", [], "b1")
 
 
+class PagingTests(unittest.TestCase):
+    def test_northflank_follows_every_page_of_services_and_volumes(self):
+        pages = {
+            "services": [
+                {"data": {"services": [{"id": "s1"}]}, "pagination": {"hasNextPage": True, "cursor": "c2"}},
+                {"data": {"services": [{"id": "s2"}]}, "pagination": {"hasNextPage": False}},
+            ],
+            "volumes": [{"data": {"volumes": [{"id": "v1"}]}, "pagination": {"hasNextPage": False}}],
+        }
+        seen = []
+
+        def get(url, headers):
+            seen.append(url)
+            kind = "services" if "/services" in url else "volumes"
+            return pages[kind].pop(0)
+
+        items = MODULE.provider_items("northflank", SECRET, {"projectId": "p"}, "b1", get=get)
+        self.assertEqual([i["id"] for i in items], ["s1", "s2", "v1"])
+        self.assertIn("cursor=c2", seen[1])
+        self.assertTrue(all(SECRET not in url for url in seen))
+
+    def test_vercel_follows_its_next_cursor(self):
+        pages = [
+            {"sandboxes": [{"name": "a"}], "pagination": {"next": "n2"}},
+            {"sandboxes": [{"name": "b"}], "pagination": {"next": None}},
+        ]
+        seen = []
+
+        def get(url, headers):
+            seen.append(url)
+            return pages.pop(0)
+
+        items = MODULE.provider_items("vercel", SECRET, {"projectId": "p", "teamId": "t"}, "b1", get=get)
+        self.assertEqual([i["name"] for i in items], ["a", "b"])
+        self.assertIn("cursor=n2", seen[1])
+
+
+class CopyTests(unittest.TestCase):
+    def test_each_copied_entry_is_recorded_before_the_next_one(self):
+        class Host:
+            def call(self, method, params=None, timeout=None):
+                return {"providers": [
+                    {"id": "e2b", "provider": "e2b", "name": "One", "size": "2x4"},
+                    {"id": "e2b-2", "provider": "e2b", "name": "Two", "size": "2x4"},
+                ]}
+
+        class Rig:
+            calls = 0
+
+            def call(self, method, params=None, timeout=None):
+                Rig.calls += 1
+                if Rig.calls == 2:
+                    raise MODULE.RigError("configure failed")
+                return {"provider": {"id": "e2b", "state": "ready", "size": "2x4"}}
+
+        recorded = []
+        with tempfile.TemporaryDirectory() as root:
+            secrets = Path(root) / "secrets.json"
+            secrets.write_text(json.dumps({"cloudMachines.e2b.apiKey": SECRET, "cloudMachines.e2b-2.apiKey": SECRET + "2"}))
+            os.environ["HOST_INTENTD_SECRETS_FILE"] = str(secrets)
+            try:
+                with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(MODULE.RigError):
+                    MODULE.copy_entries(Host(), Rig(), "One,Two", {}, recorded.append)
+            finally:
+                del os.environ["HOST_INTENTD_SECRETS_FILE"]
+        self.assertEqual([r["hostId"] for r in recorded], ["e2b"])
+
+
+class DaemonIdTests(unittest.TestCase):
+    def test_an_unreadable_database_fails_closed(self):
+        with tempfile.TemporaryDirectory() as root:
+            data = Path(root) / "data"
+            data.mkdir()
+            (data / "intentd.db").write_bytes(b"not a database at all" * 100)
+            with self.assertRaises(MODULE.RigError):
+                MODULE.daemon_id(Path(root))
+
+    def test_no_database_means_no_backend_id(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.assertIsNone(MODULE.daemon_id(Path(root)))
+
+
 class RedactTests(unittest.TestCase):
     def test_say_scrubs_registered_secrets(self):
         redactor = MODULE.Redactor()
