@@ -1568,6 +1568,17 @@ the method and event catalogs and the surface counts are unchanged, and no
 `AgentLite` or `Workspace` field is added. The public protocol version is
 unchanged.
 
+**Cloud machine disk setting — `cloudMachines.list` `diskSettings` (additive).**
+`cloudMachines.list` gains the optional member `diskSettings`, only with
+`cloudMachineProviders: 1`: for each kind whose entries take `diskGiB`
+(`northflank`, `agent37`), a `CloudDiskSetting` with `minGiB`, `maxGiB`,
+`defaultGiB` and, for Agent37, `sizeMaxGiB` by instance type and size
+([disk setting](./methods/nodes.md#disk-setting)). The `diskGiB` rules of
+`configure` do not change. Clients that do not read it show no disk setting,
+as before. No method or event is added or renamed, so the method and event
+catalogs and the surface counts are unchanged, and no `AgentLite` or
+`Workspace` field is added. The public protocol version is unchanged.
+
 **Secrets for remote agents — nodeProtocol 14 (additive result fields and error code; no method-catalog change, so no version bump).**
 A remote top-level agent can now request and use secrets
 ([§5.56 remote agents](./methods/secrets.md#remote-agents)). Its
