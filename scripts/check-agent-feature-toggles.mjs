@@ -14,7 +14,9 @@
 //     literal there fails closed. The `agentFeatures.*` entries of
 //     `KNOWN_PATHS` (settings_registry.rs, every TOML-backed key) must be the
 //     same set, so a toggle registered through a helper this scan cannot see
-//     fails closed too.
+//     fails closed too. A `KNOWN_PATHS` entry may name a top-level
+//     `const X: &str = "...";` (in the same file, or by its `crate::` path);
+//     it is read as that literal, and one it cannot resolve fails closed.
 //   - cloudlands-fe: `FEATURE_PATHS` (read by the settings form) and the
 //     `path:` entries of `FEATURES` (read by the harness features modal) in
 //     agent-feature-definitions.ts; the two must agree.
@@ -149,14 +151,71 @@ export function parseDefinitionPaths(source, file = DEFINITIONS_FILE) {
   return registered;
 }
 
-/** The `agentFeatures.*` entries of `KNOWN_PATHS`, or throws naming what changed. */
-export function parseKnownPaths(source, file = REGISTRY_FILE) {
+/** Reads a file relative to a crate's `src/` directory, or returns null when it does not exist. */
+export function crateFileReader(srcDir) {
+  return (rel) => {
+    const full = path.join(srcDir, rel);
+    return fs.existsSync(full) ? fs.readFileSync(full, 'utf8') : null;
+  };
+}
+
+// One KNOWN_PATHS entry: a string literal, or a const by bare name or `crate::` path.
+const KNOWN_ENTRY_RE = /\s*(?:"([^"\\]*)"|((?:crate(?:::[a-z_][a-z0-9_]*)+::)?[A-Z][A-Z0-9_]*))\s*(?:,|$)/y;
+
+/** The literal a top-level `const NAME: &str = "...";` in `text` holds; throws the reason otherwise. */
+function constValue(text, name, where) {
+  const decl = new RegExp(`^(?:pub(?:\\([^)\\n]*\\))? )?const ${name}\\b`, 'gm');
+  const code = stripComments(text, 'rust');
+  const decls = [...code.matchAll(decl)];
+  if (!decls.length) throw new Error(`no top-level \`const ${name}: &str = "...";\` in ${where}`);
+  if (decls.length > 1) throw new Error(`${decls.length} top-level \`const ${name}\` declarations in ${where}`);
+  const value = code.slice(decls[0].index + decls[0][0].length).match(/^: &(?:'static )?str =\s*"([^"\\]*)";/);
+  if (!value) throw new Error(`\`const ${name}\` in ${where} is not a plain \`&str\` string literal`);
+  return value[1];
+}
+
+/**
+ * The `agentFeatures.*` entries of `KNOWN_PATHS`, or throws naming what
+ * changed. A const entry resolves through `readCrateFile(rel)`, which returns
+ * the text of a file under the crate's `src/` (e.g. `sentry_ops.rs`) or null.
+ */
+export function parseKnownPaths(source, file = REGISTRY_FILE, readCrateFile = () => null) {
   const text = stripComments(source, 'rust');
   const list = text.match(/^pub\(crate\) const KNOWN_PATHS: &\[&str\] = &\[([\s\S]*?)^\];$/m);
   if (!list) throw new Error(`${file}: \`pub(crate) const KNOWN_PATHS: &[&str] = &[...];\` not found; update ${CHECK}`);
-  const leftover = list[1].replace(/"[^"\\]*"/g, '').replace(/[\s,]/g, '');
-  if (leftover) throw new Error(`${file}: KNOWN_PATHS holds something other than string literals (${leftover.slice(0, 60)}); update ${CHECK}`);
-  return [...list[1].matchAll(/"([^"\\]*)"/g)].map((m) => m[1]).filter((p) => p.startsWith(PREFIX));
+  const body = list[1];
+  const paths = [];
+  KNOWN_ENTRY_RE.lastIndex = 0;
+  while (KNOWN_ENTRY_RE.lastIndex < body.length && /\S/.test(body.slice(KNOWN_ENTRY_RE.lastIndex))) {
+    const at = KNOWN_ENTRY_RE.lastIndex;
+    const m = KNOWN_ENTRY_RE.exec(body);
+    if (!m) {
+      const leftover = body.slice(at).trim();
+      throw new Error(`${file}: KNOWN_PATHS holds something other than string literals or constant paths (${leftover.slice(0, 60)}); update ${CHECK}`);
+    }
+    if (m[1] !== undefined) {
+      paths.push(m[1]);
+      continue;
+    }
+    const ref = m[2];
+    const modules = ref.split('::');
+    const name = modules.pop();
+    try {
+      if (!modules.length) {
+        paths.push(constValue(source, name, file));
+        continue;
+      }
+      const base = modules.slice(1).join('/');
+      const candidates = [`${base}.rs`, `${base}/mod.rs`];
+      const rel = candidates.find((c) => readCrateFile(c) !== null);
+      const dir = path.dirname(file);
+      if (!rel) throw new Error(`neither ${candidates.map((c) => path.join(dir, c)).join(' nor ')} exists`);
+      paths.push(constValue(readCrateFile(rel), name, path.join(dir, rel)));
+    } catch (error) {
+      throw new Error(`${file}: KNOWN_PATHS entry ${ref} cannot be resolved: ${error.message}; name a top-level \`const ${name}: &str = "...";\` by its crate:: path or use a string literal, or update ${CHECK}`);
+    }
+  }
+  return paths.filter((p) => p.startsWith(PREFIX));
 }
 
 /** The single-quoted string literals of a source span; anything else left over fails closed. */
@@ -314,7 +373,7 @@ export function run(root, { intentdDir = INTENTD_DIR, feDir = FE_DIR, docsFile =
   }
   const files = { definitions: path.join(intentdDir, DEFINITIONS_FILE), registry: path.join(intentdDir, REGISTRY_FILE), fe: path.join(feDir, FE_FILE), docs: docsFile };
   const daemon = parseDefinitionPaths(read(intentdDir, DEFINITIONS_FILE), files.definitions);
-  const known = parseKnownPaths(read(intentdDir, REGISTRY_FILE), files.registry);
+  const known = parseKnownPaths(read(intentdDir, REGISTRY_FILE), files.registry, crateFileReader(path.resolve(root, intentdDir, path.dirname(REGISTRY_FILE))));
   const { featurePaths, featureEntries } = parseFePaths(read(feDir, FE_FILE), files.fe);
   const docs = parseDocsPaths(read('.', docsFile), files.docs);
   // A local intentd branch newer than the pin may need an exemption that

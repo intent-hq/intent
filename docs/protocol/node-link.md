@@ -2040,6 +2040,16 @@ there, so they need a new version. A daemon that implements it offers
 `{ min: 7, max: 19 }` on both sides. A machine on a lower link cannot be a
 home (`machine-update-required`).
 
+**nodeProtocol 20** is protocol 19 plus the exit reason of a script or
+terminal: optional `exitReason` on `scriptExited` and `ptyExited`
+(`"memoryLimit"` when the machine's workload memory limit killed a process of
+the run and the run did not succeed, intent-hq/intent#9809). Both bodies are
+closed, so an older peer would reject the member: a machine sends it only on
+a link that negotiated 20 and drops it otherwise. The backend shows it as the
+run's `exitReason` (script runtime and `lastRun`, `terminal:exit`,
+`host:exec:exit` of a home exec). A daemon that implements it offers
+`{ min: 7, max: 20 }` on both sides.
+
 ### Frames
 
 Each WebSocket binary message on `/node/link` is one JSON frame of at most
@@ -2051,7 +2061,7 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `welcome` | machine → backend | control | `protocol` (the chosen version), `nodeId`, `runningAgents: AgentId[]` (this binding only), `capabilities: MachineCapabilities`, `hosts: string[]`, `tcAddress?` |
 | `heartbeat` / `heartbeatReply` | both | control | `nonce` |
 | `capabilities` | backend → machine | control | Empty: ask for a fresh [report](#capabilities-report) |
-| `capabilitiesReply` | machine → backend | control | `capabilities: MachineCapabilities`; also sent unsolicited when the machine's [enabled providers](#capabilities-report) change |
+| `capabilitiesReply` | machine → backend | control | `capabilities: MachineCapabilities`; also sent unsolicited when the machine's [enabled providers](#capabilities-report) or its [running-agent count](#capabilities-report) change |
 | `launch` | backend → machine | control | See [launch](#launch-and-agent-lifecycle) |
 | `prompt` | backend → machine | control | `agentId`, `turnId`, `prompt` (ACP content blocks) |
 | `cancel` | backend → machine | control | `agentId`: cancel the running turn |
@@ -2067,7 +2077,7 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `scriptStop` | backend → machine | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId` |
 | `scriptStarted` | machine → backend | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId`, `pid` |
 | `scriptOutput` | machine → backend | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId`, `seq`, `data` |
-| `scriptExited` | machine → backend | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId`, `exitCode?`, `error?` |
+| `scriptExited` | machine → backend | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId`, `exitCode?`, `error?`; `exitReason?` protocol 20 or later |
 | `setupOutput` | machine → backend | script | Protocol 10 or later: `agentId`, `seq`, `data`; see [setup output](#setup-status-and-output) |
 | `skills` | backend → machine | control | Protocol 12 or later: `queryId` (UUID); see [skills on the machine](#skills-on-the-machine-nodeprotocol-12) |
 | `skillsReply` | machine → backend | control | Protocol 12 or later: `queryId`, `skills: MachineSkill[]` |
@@ -4195,7 +4205,7 @@ interface PtyResizeFrame { type: "ptyResize"; terminalId: string; cols: number; 
 interface PtyKillFrame   { type: "ptyKill";   terminalId: string }                 // control lane
 interface PtyAckFrame    { type: "ptyAck";    terminalId: string; seq: number }    // control lane, backend → machine
 interface PtyOutputFrame { type: "ptyOutput"; terminalId: string; seq: number; data: string; stream?: "stdout" | "stderr" } // script lane; base64
-interface PtyExitedFrame { type: "ptyExited"; terminalId: string; exitCode?: number; error?: string } // script lane
+interface PtyExitedFrame { type: "ptyExited"; terminalId: string; exitCode?: number; error?: string; exitReason?: "memoryLimit" } // script lane; exitReason protocol 20
 ```
 
 1. **One process per terminal.** `ptyOpen` starts the user's shell (or
@@ -4509,6 +4519,7 @@ interface ScriptExitedFrame  {
   type: "scriptExited"; agentId: string; scriptId: string; spawnId: string;
   exitCode?: number;                       // absent only together with error
   error?: string;                          // "<code>: <detail>"
+  exitReason?: "memoryLimit";              // protocol 20 or later
 }
 ```
 
@@ -4720,6 +4731,11 @@ interface MachineCapabilities {
     chargedMemoryBytes: number;  // aggregate memory charged to running agents
     memoryBudgetBytes?: number;  // effective agents.memoryBudgetMb in bytes; absent when unlimited
   };
+  resources?: {                  // the whole host, not only agents; absent from older machines
+    cpuPercent?: number;         // integer 0-100: CPU use across all cores, smoothed over the last few seconds; absent until a second sample
+    memoryUsedBytes: number;     // physical memory in use
+    memoryTotalBytes: number;    // physical memory installed
+  };
   providers: {
     id: string;
     visible: boolean;
@@ -4771,6 +4787,26 @@ interface MachineCapabilities {
   nodeProtocol version. An older machine does not push; the backend picks the
   change up at its next refresh (a report older than 1 hour is refreshed before
   placement).
+- **Load pushed on change.** The machine checks `capacity.runningAgents` and
+  samples `resources` every 2 seconds while any backend link is live. When the
+  count differs from the one it last reported (an agent of any backend, or a
+  local one, started or stopped), it sends an unsolicited `capabilitiesReply`
+  on every live backend link. A burst of starts and stops therefore costs at
+  most one push per 2 seconds, and every backend sees the machine-wide count
+  within about 2 seconds. A change of `resources` alone pushes only when
+  `cpuPercent` or the memory in use (as a percentage of the total) moved by 5
+  points or more from the last report, and at most once every 10 seconds. The
+  `welcome` of a new bind carries the current count, so a change while no link
+  is live is not pushed later. Like the provider push, this adds no frame type
+  and no nodeProtocol version; an older machine does not push, and the backend
+  keeps the count from its last requested report.
+- **Resources.** `resources` describes the whole host (every process, not only
+  agents), so a backend can tell a busy machine from an idle one. CPU is
+  sampled across all cores and smoothed over the last few seconds; the first
+  report after a start or an idle gap may omit `cpuPercent`. A machine that
+  sends `resources` also pushes its load on change, so a backend treats its
+  `capacity.runningAgents` as live. It is optional and additive (no nodeProtocol version): an
+  older machine omits it, and clients show nothing for it.
 - **Models** come from the machine's own `models.list`; `cli-missing` and
   `prerequisite-missing` are its existing `warningKind` values.
 - **Sign-in (default account only).** Each provider has a cheap sign-in probe

@@ -101,8 +101,8 @@ fix_path() {
     check-transfer-methods) echo "cloudlands-fe src/features/backend/main/transfer-connections.ts TRANSFER_METHODS (route the bulk method) or intentd crates/intent-transport/src/catalog.rs PAYLOAD_CLASSES (cap the read and classify it bounded); see docs/protocol/methods/files-terminal-browser.md Bounded object reads" ;;
     check-transfer-selection-contract) echo "docs/protocol/fixtures/transfer-selection/ (shape, coverage and provenance; no compilation)" ;;
     check-backend-keychain-contract) echo "docs/protocol/fixtures/backend-keychain/v1/ + adopted component mirrors/locks (see docs/protocol/backend-keychain.md)" ;;
-    check-app-ui-targets) echo "intentd app-ui-targets.json + cloudlands-fe app-ui-targets.ts (supported routes and aliases)" ;;
-    check-app-guide-sources) echo "intentd assistant-app-guide.md Sources comments (cite files present at the pinned components; drop guide text for code that never landed)" ;;
+    check-app-ui-targets) echo "intentd app-ui-targets.json + cloudlands-fe app-ui-targets.ts (supported routes and aliases; a new catalog row lands in intentd first and only warns until the cloudlands-fe registry adds it)" ;;
+    check-app-guide-sources) echo "intentd assistant-app-guide.md: Sources comments (cite files present at the pinned components; drop guide text for code that never landed) and no exact app versions (describe current behavior)" ;;
     check-agent-worker-contract) echo "docs/protocol/methods/agent-workers.md + fixtures/agent-workers/v1/ + scripts/agent-worker-contract*.mjs (synthetic only)" ;;
     check-note-truncated-read-contract) echo "docs/protocol/fixtures/notes/truncated-read.json + methods/notes-tasks.md" ;;
     check-browser-routing-contract) echo "docs/protocol/fixtures/browser-routing/routing.json + methods/files-terminal-browser.md REV-2 (intentd copy: crates/intent-transport/tests/fixtures/browser-routing.json, via scripts/browser-routing-contract.mjs)" ;;

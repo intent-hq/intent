@@ -88,6 +88,8 @@ override export CARGO_TARGET_DIR := $(PARALLEL_TARGET_BASE)/parallel-t$(PARALLEL
 override export CARGO_BUILD_BUILD_DIR := $(or $(PARALLEL_BUILD_BASE),$(PARALLEL_TARGET_BASE))/parallel-t$(PARALLEL_THREADS)
 unexport PARALLEL
 endif
+# An overridden FE_DIR may hold spaces for the FE recipes only; SUBMODULES is a
+# make word list, so the submodule targets need the default path.
 FE_DIR = packages/cloudlands-fe
 IOS_DIR = packages/ios
 
@@ -95,7 +97,7 @@ IOS_DIR = packages/ios
 # frontend tree. pnpm writes the lockfile it installed from to
 # node_modules/.pnpm/lock.yaml, so the tree is stale when that copy is missing
 # or no longer byte-identical to pnpm-lock.yaml. Use as `$(FE_DEPS_FRESH) || (...)`.
-FE_DEPS_FRESH = [ -f $(FE_DIR)/node_modules/.pnpm/lock.yaml ] && cmp -s $(FE_DIR)/pnpm-lock.yaml $(FE_DIR)/node_modules/.pnpm/lock.yaml
+FE_DEPS_FRESH = [ -f "$(FE_DIR)/node_modules/.pnpm/lock.yaml" ] && cmp -s "$(FE_DIR)/pnpm-lock.yaml" "$(FE_DIR)/node_modules/.pnpm/lock.yaml"
 FE_DEPS_INSTALL_MSG = installing/refreshing FE deps (lockfile changed or node_modules missing)
 
 # cargo install may place subcommands outside PATH when cargo itself comes from
@@ -520,11 +522,12 @@ FE_BUILD_HEAP_MB ?= 16384
 .PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	ensure-fe-toolchain fe-verify-changed \
 	update \
-	build build-intentd build-sidecar gate test test-intentd test-scripts test-scripts-changed mine-ws-usage test-changed test-select test-stress list-tests coverage-changed coverage-e2e coverage-all \
+	build build-intentd build-sidecar gate test test-intentd test-scripts test-scripts-changed mine-ws-usage test-changed test-select test-stress flake-triage list-tests coverage-changed coverage-e2e coverage-all \
 	fmt clippy shear check-windows check-macos lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell lint-workflows bash3 check clean clean-dev \
 	sweep sweep-all sweep-gates seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
 	sandbox-status sandbox-stop sandbox-shot sandbox-seed \
+	live-rig live-rig-down live-rig-status live-rig-call live-rig-relay live-rig-smoke \
 	run-fe-local uds-to-unauthed-wss-bridge dev-web-live dev dev-prod \
 	ios-open ios-info ios-build-ios ios-build-visionos ios-test dist-mac
 
@@ -901,7 +904,7 @@ gate: check | check-callback-fixture check-transfer-fixture ## Run all local Rus
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures, HERMETIC=1 hides provider CLIs like CI)
 
 test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
-	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_gate_storage scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_nextest_stress scripts.test_host_load scripts.test_watch_capacity scripts.test_intentd_tree_preflight scripts.test_sandbox_shot_target
+	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_gate_storage scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_flake_triage scripts.test_nextest_stress scripts.test_host_load scripts.test_watch_capacity scripts.test_intentd_tree_preflight scripts.test_sandbox_shot_target scripts.test_live_rig
 
 # DRY_RUN must never start real work: run every target whose help or recipe
 # mentions DRY_RUN, plus every coverage-*, with DRY_RUN=1 and stub cargo/rustup,
@@ -1011,10 +1014,13 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 # Nothing masks the exit status:
 # pnpm passes the script's code through to make ("Error 2" = empty change set). FE_VERIFY_BASE escapes
 # apostrophes for the single-quoted hand-off; scripts/fe-verify-changed.test.sh
-# pins the mapping.
+# pins the mapping. The frontend finds the shared transfer-selection fixtures at
+# ../../../docs, which only resolves inside packages/, so a FE_DIR worktree
+# elsewhere gets this checkout's copy unless the caller already set one.
 FE_VERIFY_BASE = $(subst ','\'',$(BASE))
+fe-verify-changed: export TRANSFER_SELECTION_FIXTURE_ROOT ?= $(CURDIR)/docs/protocol/fixtures/transfer-selection
 fe-verify-changed: ensure-fe-submodule ensure-fe-toolchain ## Run only the frontend checks and unit tests the cloudlands-fe branch changed (BASE=<fe ref>, DRY_RUN=1 lists the selected tests, RESUME=1 resumes after a failed run, NO_FAIL_FAST=1 runs every check past a failure, SKIP_CT_FULL=1 defers the full component suite)
-	@$(FE_DEPS_FRESH) || (echo "[fe-verify-changed] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@$(FE_DEPS_FRESH) || (echo "[fe-verify-changed] $(FE_DEPS_INSTALL_MSG)" && cd "$(FE_DIR)" && corepack pnpm install --frozen-lockfile)
 	@set --; \
 	if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ]; then set -- "$$@" --resolved-plan; fi; \
 	if [ -n "$(RESUME)" ] && [ "$(RESUME)" != 0 ]; then set -- "$$@" --resume; fi; \
@@ -1139,6 +1145,25 @@ test-stress: ensure-intentd-submodule | check-transfer-fixture ## Repeat the Rus
 	@$(RUST_TEST_RUNNER) --label test-stress --filterset '$(TEST_SELECT_E)'$(TEST_SELECT_FEATURES) \
 		--stress-count '$(COUNT)' --load '$(strip $(LOAD))'$(if $(strip $(LOAD_CPUS)), --load-cpus '$(strip $(LOAD_CPUS))')$(if $(strip $(LOAD_CORES)), --load-cores '$(strip $(LOAD_CORES))') \
 		--stall '$(strip $(STALL))'$(if $(strip $(STALL_MS)), --stall-ms '$(strip $(STALL_MS))')$(if $(strip $(STALL_EVERY_MS)), --stall-every-ms '$(strip $(STALL_EVERY_MS))')
+
+# Whose fault is a merge-queue ejection? Runs make test-stress on main (BASE,
+# default a fresh origin/main), main merged with the intentd PR, and the PR
+# alone, each in its own worktree, and prints a table with a verdict per test:
+# "fails on main", "caused by this PR" or "inconclusive"
+# (`make flake-triage RUN=<merge_group run URL> COUNT=200 LOAD=1`). RUN reads
+# the failing tests and the PR from the run with gh; otherwise pass E and PR
+# (or BRANCH). The stress knobs pass on to test-stress. E, PR, BRANCH, RUN,
+# BASE and the knobs count only from the make command line. See the header of
+# scripts/flake_triage.py.
+FLAKE_TRIAGE_ARGS = COUNT LOAD LOAD_CPUS LOAD_CORES STALL STALL_MS STALL_EVERY_MS HERMETIC TEST_THREADS BUILD_JOBS
+CLI_VALUE = $(if $(filter command line,$(origin $(1))),$(subst ','\'',$(value $(1))))
+unexport PR BRANCH RUN
+flake-triage: ensure-intentd-submodule ## Stress E='<filterset>' (or the failing tests of RUN=<merge_group run URL>) on main, main + PR=<n> (or BRANCH=<ref>) and the PR alone, then print whether it fails on main or is caused by the PR (BASE, COUNT, LOAD, STALL, FEATURES as for test-stress)
+	@python3 scripts/flake_triage.py --repo-root '$(subst ','\'',$(CURDIR))' \
+		--intentd-dir '$(subst ','\'',$(INTENTD_DIR))' --cache-dir '$(subst ','\'',$(GATE_CACHE_DIR))' \
+		--filterset '$(call CLI_VALUE,E)' --pr '$(call CLI_VALUE,PR)' --branch '$(call CLI_VALUE,BRANCH)' \
+		--run '$(call CLI_VALUE,RUN)' --base '$(call CLI_VALUE,BASE)'$(foreach v,$(FLAKE_TRIAGE_ARGS),$(if $(filter command line,$(origin $(v))), --stress-arg '$(v)=$(subst ','\'',$(strip $($(v))))')) \
+		$(if $(TEST_SELECT_FEATURES_LIST),--stress-arg 'FEATURES=$(subst ','\'',$(TEST_SELECT_FEATURES_LIST))')
 
 # Local equivalent of intentd's pull_request `coverage-changed` CI job: the
 # same changed-tests.sh selection as test-changed, run under the cargo-llvm-cov
@@ -1328,7 +1353,7 @@ run-intentd: ## DEPRECATED alias for release-daemon
 	@$(MAKE) release-daemon
 
 dev-ui: ensure-fe-submodule ensure-fe-toolchain ## Run the fast browser-only frontend UI preview
-	@$(FE_DEPS_FRESH) || (echo "[dev-ui] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@$(FE_DEPS_FRESH) || (echo "[dev-ui] $(FE_DEPS_INSTALL_MSG)" && cd "$(FE_DIR)" && corepack pnpm install --frozen-lockfile)
 	@script=$$(node -e 'const scripts = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).scripts || {}; if (scripts["dev:ui"]) process.stdout.write("dev:ui"); else if (scripts["dev:web"]) process.stdout.write("dev:web"); else process.exit(1)' "$(FE_DIR)/package.json") || { \
 		echo "[dev-ui] ERROR: frontend package.json defines neither dev:ui nor dev:web"; \
 		exit 1; \
@@ -1338,23 +1363,23 @@ dev-ui: ensure-fe-submodule ensure-fe-toolchain ## Run the fast browser-only fro
 	else \
 		echo "[dev-ui] dev:ui is unavailable on this frontend pin; falling back to browser-only dev:web"; \
 	fi; \
-	cd $(FE_DIR) && DEV_PORT="$(DEV_PORT)" corepack pnpm run "$$script"
+	cd "$(FE_DIR)" && DEV_PORT="$(DEV_PORT)" corepack pnpm run "$$script"
 
 dev-sandbox-ui: ensure-fe-submodule ensure-fe-toolchain ## UI preview sandbox on this worktree's derived DEV_PORT
-	@$(FE_DEPS_FRESH) || (echo "[dev-sandbox-ui] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@$(FE_DEPS_FRESH) || (echo "[dev-sandbox-ui] $(FE_DEPS_INSTALL_MSG)" && cd "$(FE_DIR)" && corepack pnpm install --frozen-lockfile)
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
 		DEV_PORT_ORIGIN="$(origin DEV_PORT)" DEV_TCP_PORT_ORIGIN="$(origin DEV_TCP_PORT)" \
 		FE_DIR="$(CURDIR)/$(FE_DIR)" exec scripts/dev-sandbox.sh ui
 
 dev-sandbox-app: ensure-fe-submodule ensure-fe-toolchain ## Web renderer sandbox connected to the installed intentd
-	@$(FE_DEPS_FRESH) || (echo "[dev-sandbox-app] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@$(FE_DEPS_FRESH) || (echo "[dev-sandbox-app] $(FE_DEPS_INSTALL_MSG)" && cd "$(FE_DIR)" && corepack pnpm install --frozen-lockfile)
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
 		DEV_PORT_ORIGIN="$(origin DEV_PORT)" DEV_TCP_PORT_ORIGIN="$(origin DEV_TCP_PORT)" \
 		SANDBOX_WARM_TIMEOUT="$(SANDBOX_WARM_TIMEOUT)" \
 		FE_DIR="$(CURDIR)/$(FE_DIR)" exec scripts/dev-sandbox.sh app
 
 dev-sandbox-stack: ensure-intentd-submodule ensure-fe-submodule ensure-fe-toolchain ## Dev-profile intentd + renderer (INTENTD_PROFILE=release, INTENTD_BIN=/path, MOCK_AGENT=1)
-	@$(FE_DEPS_FRESH) || (echo "[dev-sandbox-stack] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@$(FE_DEPS_FRESH) || (echo "[dev-sandbox-stack] $(FE_DEPS_INSTALL_MSG)" && cd "$(FE_DIR)" && corepack pnpm install --frozen-lockfile)
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" DEV_DATA_DIR="$(DEV_DATA_DIR)" \
 		DEV_PORT_ORIGIN="$(origin DEV_PORT)" DEV_TCP_PORT_ORIGIN="$(origin DEV_TCP_PORT)" \
 		SANDBOX_TCP="$(SANDBOX_TCP)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
@@ -1378,12 +1403,46 @@ SANDBOX_SHOT_ARG = $(if $(filter command line,$(origin $(1))),$($(1)))
 
 sandbox-shot: ensure-fe-submodule ensure-fe-toolchain ## PNG of a named preview (PREVIEW=<id> STATE=<state>, optional THEME, WIDTH, OUT)
 	@[ -n "$(call SANDBOX_SHOT_ARG,PREVIEW)" ] && [ -n "$(call SANDBOX_SHOT_ARG,STATE)" ] || { echo "[sandbox-shot] usage: make sandbox-shot PREVIEW=<id> STATE=<state> [THEME=system|light|dark] [WIDTH=<px>] [OUT=<png>]" >&2; exit 2; }
-	@$(FE_DEPS_FRESH) || (echo "[sandbox-shot] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@$(FE_DEPS_FRESH) || (echo "[sandbox-shot] $(FE_DEPS_INSTALL_MSG)" && cd "$(FE_DIR)" && corepack pnpm install --frozen-lockfile)
 	@echo "[sandbox-shot] output paths are relative to $(FE_DIR)" >&2
-	@cd $(FE_DIR) && corepack pnpm --silent sandbox:shot "$(call SANDBOX_SHOT_ARG,PREVIEW)" --state "$(call SANDBOX_SHOT_ARG,STATE)" \
+	@cd "$(FE_DIR)" && corepack pnpm --silent sandbox:shot "$(call SANDBOX_SHOT_ARG,PREVIEW)" --state "$(call SANDBOX_SHOT_ARG,STATE)" \
 		$(if $(call SANDBOX_SHOT_ARG,THEME),--theme "$(call SANDBOX_SHOT_ARG,THEME)") \
 		$(if $(call SANDBOX_SHOT_ARG,WIDTH),--width "$(call SANDBOX_SHOT_ARG,WIDTH)") \
 		$(if $(call SANDBOX_SHOT_ARG,OUT),--out "$(call SANDBOX_SHOT_ARG,OUT)")
+
+# Live cloud and relay checks: a throwaway intentd with copied host credentials.
+# Only command-line values count (LIVE_RIG_FLAG), so a stray PROFILE or CLOUD
+# in the caller's shell never changes the rig. Self-test: scripts/test_live_rig.py.
+LIVE_RIG_FLAG = $(if $(filter command line,$(origin $(1))),--$(2) '$(subst ','\'',$($(1)))')
+LIVE_RIG = python3 -B scripts/live_rig.py
+
+live-rig: ensure-intentd-submodule ## Throwaway intentd for live cloud/relay checks; run as a service (CLOUD=, PROFILES=, RELAY=fake|derper, INTENTD_BIN=)
+	@$(LIVE_RIG) up $(call LIVE_RIG_FLAG,INTENTD_BIN,intentd-bin) $(call LIVE_RIG_FLAG,RIG_INTENTD_DIR,intentd-dir) \
+		$(call LIVE_RIG_FLAG,INTENTD_PROFILE,build-profile) $(call LIVE_RIG_FLAG,BUILD_JOBS,build-jobs) \
+		$(call LIVE_RIG_FLAG,TAILCAT_BIN,tailcat-bin) $(call LIVE_RIG_FLAG,PROFILES,profiles) $(call LIVE_RIG_FLAG,CLOUD,cloud) \
+		$(call LIVE_RIG_FLAG,SIZE,size) $(call LIVE_RIG_FLAG,IDLE_PAUSE,idle-pause) $(call LIVE_RIG_FLAG,RELAY,relay) \
+		$(call LIVE_RIG_FLAG,RELAY_HOST,relay-host) $(call LIVE_RIG_FLAG,RELAY_PORT,relay-port) \
+		$(call LIVE_RIG_FLAG,RELAY_MAP_PORT,relay-map-port) $(call LIVE_RIG_FLAG,DERPER_BIN,derper-bin) \
+		$(call LIVE_RIG_FLAG,RIG_ROOT,rig-root) $(call LIVE_RIG_FLAG,READY_TIMEOUT,ready-timeout) \
+		$(if $(filter 1,$(call SANDBOX_SHOT_ARG,ORCHESTRATOR)),--orchestrator)
+
+live-rig-down: ## Remove the live rig: stop its agents, prove 0 sandboxes, delete copied secrets, check host config (FORCE=1)
+	@$(LIVE_RIG) down $(if $(filter 1,$(call SANDBOX_SHOT_ARG,FORCE)),--force) $(call LIVE_RIG_FLAG,SANDBOX_TIMEOUT,sandbox-timeout) \
+		$(call LIVE_RIG_FLAG,READY_TIMEOUT,ready-timeout)
+
+live-rig-status: ## Show the live rig's state, machines and backend id as JSON
+	@$(LIVE_RIG) status
+
+live-rig-call: ## One JSON-RPC call to the live rig daemon (METHOD=<method> PARAMS='<json>')
+	@[ -n "$(call SANDBOX_SHOT_ARG,METHOD)" ] || { echo "[live-rig] usage: make live-rig-call METHOD=<method> [PARAMS='<json>']" >&2; exit 2; }
+	@$(LIVE_RIG) call '$(METHOD)' $(if $(call SANDBOX_SHOT_ARG,PARAMS),'$(subst ','\'',$(PARAMS))')
+
+live-rig-relay: ## Take the live rig's relay node down or bring it back (ACTION=down|up)
+	@$(LIVE_RIG) relay '$(call SANDBOX_SHOT_ARG,ACTION)'
+
+live-rig-smoke: ## One cloud agent on the live rig, one turn, timings as evidence (CLOUD_ENTRY=, PROFILE=)
+	@$(LIVE_RIG) smoke $(call LIVE_RIG_FLAG,CLOUD_ENTRY,cloud-entry) $(call LIVE_RIG_FLAG,PROFILE,profile) \
+		$(call LIVE_RIG_FLAG,SMOKE_TIMEOUT,timeout)
 
 dev-fe: ensure-fe-submodule ## Run the FE dev stack against dev-daemon's UDS socket (two-terminal pair)
 	# Two-terminal counterpart of `make dev-daemon`: launches only the FE dev
@@ -1418,8 +1477,8 @@ dev-fe: ensure-fe-submodule ## Run the FE dev stack against dev-daemon's UDS soc
 # `make help`): FE_DEPS_FRESH install guard + `pnpm run dev`, inheriting the
 # caller's INTENTD_SOCKET and resolving DEV_PORT only when the launcher runs.
 fe-launch: ensure-fe-submodule
-	@$(FE_DEPS_FRESH) || (echo "[fe-launch] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && pnpm install)
-	cd $(FE_DIR) && DEV_PORT="$(DEV_PORT)" pnpm run dev
+	@$(FE_DEPS_FRESH) || (echo "[fe-launch] $(FE_DEPS_INSTALL_MSG)" && cd "$(FE_DIR)" && pnpm install)
+	cd "$(FE_DIR)" && DEV_PORT="$(DEV_PORT)" pnpm run dev
 
 run-fe-local: ensure-fe-submodule ## Run the FE against the locally INSTALLED intentd's UDS socket
 	# Like `dev-fe`, but points the FE at the installed Intent daemon's default
@@ -1440,7 +1499,7 @@ run-fe-local: ensure-fe-submodule ## Run the FE against the locally INSTALLED in
 	# (intentd-spawn-policy.ts) — so only the daemon connection changes; the
 	# dev FE keeps its own DEV_PORT-namespaced userData dir.
 	# Long-running; does not exit until you stop it (Ctrl-C).
-	@$(FE_DEPS_FRESH) || (echo "[run-fe-local] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && pnpm install)
+	@$(FE_DEPS_FRESH) || (echo "[run-fe-local] $(FE_DEPS_INSTALL_MSG)" && cd "$(FE_DIR)" && pnpm install)
 	@sock="$$INTENTD_SOCKET"; \
 	is_windows=0; \
 	case "$$(uname -s)" in \
@@ -1454,7 +1513,7 @@ run-fe-local: ensure-fe-submodule ## Run the FE against the locally INSTALLED in
 			Linux) sock="$${XDG_DATA_HOME:-$$HOME/.local/share}/intentd/intentd.sock" ;; \
 			MINGW*|MSYS*|CYGWIN*) sock="$$APPDATA/intentd/data/intentd.sock" ;; \
 			*) echo "[run-fe-local] ERROR: unsupported platform $$(uname -s) — no known installed-daemon socket path."; \
-			   echo "[run-fe-local] Point the FE at a reachable daemon instead, e.g.: cd $(FE_DIR) && INTENTD_WS_URL=ws://host:5181/ws pnpm run dev"; \
+			   echo "[run-fe-local] Point the FE at a reachable daemon instead, e.g.: cd '$(FE_DIR)' && INTENTD_WS_URL=ws://host:5181/ws pnpm run dev"; \
 			   exit 1 ;; \
 		esac; \
 	fi; \
@@ -1463,7 +1522,7 @@ run-fe-local: ensure-fe-submodule ## Run the FE against the locally INSTALLED in
 		exit 1; \
 	fi; \
 	echo "[run-fe-local] INTENTD_SOCKET=$$sock"; \
-	cd $(FE_DIR) && DEV_PORT="$(DEV_PORT)" INTENTD_SOCKET="$$sock" pnpm run dev
+	cd "$(FE_DIR)" && DEV_PORT="$(DEV_PORT)" INTENTD_SOCKET="$$sock" pnpm run dev
 
 uds-to-unauthed-wss-bridge: ## Expose the installed intentd's UDS as an UNAUTHENTICATED plain ws:// endpoint on 127.0.0.1:$(BRIDGE_PORT)
 	# Runs scripts/uds-ws-bridge.mjs (zero-dependency, Node >= 20): each WS
@@ -1566,11 +1625,11 @@ build-sidecar: ensure-intentd-submodule ensure-fe-submodule ## Build intentd rel
 	# staging helper (or a future copy-sidecar dep) expects an installed tree —
 	# and so `dist-mac` (which depends on this target) does not install after
 	# the sidecar step.
-	@$(FE_DEPS_FRESH) || (echo "[build-sidecar] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && pnpm install)
+	@$(FE_DEPS_FRESH) || (echo "[build-sidecar] $(FE_DEPS_INSTALL_MSG)" && cd "$(FE_DIR)" && pnpm install)
 	@echo "[build-sidecar] Building intentd release binary..."
 	cd $(INTENTD_DIR) && bash "$(CURDIR)/scripts/with-sccache.sh" cargo build --release --workspace
 	@echo "[build-sidecar] Staging sidecar binary for FE packaging..."
-	cd $(FE_DIR) && node scripts/copy-sidecar.cjs
+	cd "$(FE_DIR)" && node scripts/copy-sidecar.cjs
 
 dist-mac: update ## Pull/rebase monorepo+submodules, then package Intent.app into $(FE_DIR)/dist-electron
 	# End-to-end macOS packaging. Always starts with `update` (pull --rebase
@@ -1600,7 +1659,7 @@ dist-mac: update ## Pull/rebase monorepo+submodules, then package Intent.app int
 	fi
 	@$(MAKE) build-sidecar
 	@echo "[dist-mac] Packaging Intent.app (electron-builder --mac, Node heap $(FE_BUILD_HEAP_MB)MB)..."
-	cd $(FE_DIR) && NODE_OPTIONS="--max-old-space-size=$(FE_BUILD_HEAP_MB) $$NODE_OPTIONS" CSC_IDENTITY_AUTO_DISCOVERY=false pnpm run dist:mac
+	cd "$(FE_DIR)" && NODE_OPTIONS="--max-old-space-size=$(FE_BUILD_HEAP_MB) $$NODE_OPTIONS" CSC_IDENTITY_AUTO_DISCOVERY=false pnpm run dist:mac
 	@echo "[dist-mac] Done. Artifacts in $(FE_DIR)/dist-electron"
 
 dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the FE with intentd as a sidecar (INTENTD_SIDECAR=1)
@@ -1623,7 +1682,7 @@ dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the
 	#   INTENTD_LEGACY_IMPORT_ROOTS="" — disables the legacy import hook: the dev
 	#     seat starts with a fresh $(DEV_DATA_DIR) DB, so the sidecar's first boot
 	#     would otherwise scan the shared ~/intent/workspaces root.
-	@$(FE_DEPS_FRESH) || (echo "[dev] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && pnpm install)
+	@$(FE_DEPS_FRESH) || (echo "[dev] $(FE_DEPS_INSTALL_MSG)" && cd "$(FE_DIR)" && pnpm install)
 	@echo "[dev] Building intentd release binary (no-op if already fresh)..."
 	cd $(INTENTD_DIR) && bash "$(CURDIR)/scripts/with-sccache.sh" cargo build --release --workspace
 	@mkdir -p "$(DEV_DATA_DIR)"
@@ -1631,7 +1690,7 @@ dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the
 	@echo "[dev]   INTENTD_BIN=$(CURDIR)/$(INTENTD_DIR)/target/release/intentd"
 	@echo "[dev]   INTENTD_DATA_DIR=$(DEV_DATA_DIR) (UDS: $(DEV_DATA_DIR)/intentd.sock)"
 	@echo "[dev]   INTENTD_LEGACY_IMPORT_ROOTS=\"\" (legacy import disabled for the dev seat)"
-	cd $(FE_DIR) && DEV_PORT="$(DEV_PORT)" INTENTD_SIDECAR=1 \
+	cd "$(FE_DIR)" && DEV_PORT="$(DEV_PORT)" INTENTD_SIDECAR=1 \
 		INTENTD_BIN="$(CURDIR)/$(INTENTD_DIR)/target/release/intentd" \
 		INTENTD_DATA_DIR="$(DEV_DATA_DIR)" \
 		INTENTD_LEGACY_IMPORT_ROOTS="" \

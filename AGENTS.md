@@ -3,18 +3,18 @@
 Instructions for AI agents working in this monorepo.
 
 **Assistant app guide:** When adding, changing, moving, renaming, or removing a
-user-facing feature, update the affected section of
+user-facing feature, or changing its readiness, update the affected section of
 [`packages/intentd/crates/intent-services/resources/assistant-app-guide.md`](packages/intentd/crates/intent-services/resources/assistant-app-guide.md)
-in the same change (coordinate the companion intentd change for frontend work).
-Keep this single bundled guide concise; replace obsolete paths, labels, and prerequisites.
-Keep the guide and user-facing help focused on features ready for users. Do not promote
-unfinished, experimental, Labs-only, internal, or unreleased features as normal options;
-code or tool availability is not proof of readiness. When explicitly asked about such
-a feature, or assigned to develop or test it, discuss it honestly and label its status.
-Update the guide and its source pointers when readiness or UI behavior changes.
-Before opening a PR, record the affected guide section (and companion intentd PR
-for frontend changes), or explain why the change has no user-help impact. Coordinate
-companion releases; this checkpoint does not require simultaneous cross-repo merges.
+in the same change; for frontend work, the intentd guide PR merges after the frontend PR.
+Keep it concise. Describe how the app behaves now, with no app version numbers
+(`check-app-guide-sources` rejects them): each desktop release bundles the guide it pins,
+and merged behavior described this way is not unreleased. A remote daemon can be newer
+than the desktop, so write "older versions may differ" where behavior changed recently.
+Do not promote unfinished, experimental, Labs-only, or internal features as normal
+options; code availability is not proof of readiness. When asked about such a feature,
+or assigned to develop or test it, discuss it honestly and label its status. Before
+opening a PR, record the affected guide section (and companion intentd PR), or explain
+why the change has no user-help impact.
 
 ## Repository Structure
 
@@ -71,6 +71,9 @@ Start the smallest long-running target as a workspace service:
   `INTENTD_SOCKET`.
 - `make dev-sandbox-stack` — isolated intentd plus renderer (`INTENTD_PROFILE=release`,
   `INTENTD_BIN=/path`); `MOCK_AGENT=1` swaps in a scripted agent, no provider sign-in.
+- `make live-rig` — throwaway intentd for live cloud or relay checks, with host profiles
+  and cloud entries copied unprinted (`CLOUD=`, `PROFILES=`, `RELAY=fake|derper`);
+  `make live-rig-down` deletes it and proves 0 sandboxes and an unchanged host config.
 
 Each ready sandbox records `.dev/sandbox/<mode>.json`. Use `make sandbox-stop` only for
 an unmanaged or orphaned sandbox;
@@ -267,7 +270,8 @@ with no rollback.
     `ws.pr.snapshot(N).requirements.threads.unresolved` is 0 before enqueueing.
   - A `merge_group` failure ejects the PR without landing it (`mergeQueueEjection` in
     `ws.pr.snapshot` / `ws.pr.monitor`; a check that times out counts as failed). It is
-    not re-queued on its own: fix the cause and re-enqueue.
+    not re-queued on its own: fix the cause (for an intentd test, `make flake-triage RUN=<run URL>`
+    says if it fails on main) and re-enqueue.
   - The squash title is the commit headline on a single-commit PR and the PR title on a
     multi-commit PR, and the body includes every branch commit message. Make that title
     a valid conventional commit (amend auto-commits like "Coordinator" before pushing;

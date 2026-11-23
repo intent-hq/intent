@@ -2,8 +2,8 @@
 
 ### 5.54 Provider profiles *(prepared)*
 
-This is a **prepared contract** for named configurations of an installed Codex or
-Claude Code CLI. It is not implemented by the current pins. Each profile has a
+This is a **prepared contract** for named configurations of an installed provider
+CLI (Codex, Claude Code, and the other [profile-capable bases](#profile-capable-bases)). It is not implemented by the current pins. Each profile has a
 stable identity, a display name, a base provider and environment overrides. A
 profile shares its base provider's installation, executable path and enablement.
 Each profile has its own Fast mode preference (see
@@ -30,13 +30,39 @@ A **provider reference** names the configuration that runs a selection:
 
 | Reference | Meaning |
 | --- | --- |
-| `codex`, `claude-code` (bare, canonical id) | Default configuration. This is the legacy form and remains valid everywhere. |
+| A bare canonical id such as `codex` or `claude-code` | Default configuration. This is the legacy form and remains valid everywhere. |
 | `<baseProviderId>@<profileId>`, for example `codex@p3k9x2m4q7t1a` | That named profile |
 
 The qualified form is valid only with a canonical base id that advertises
-`supportsProfiles: true` (`codex` or `claude-code`). Legacy aliases, other
-providers, case variants, whitespace and extra `@` characters are invalid. Clients
-read the reference from `ProviderProfile.providerRef` and never compose it from a name.
+`supportsProfiles: true` (see [Profile-capable bases](#profile-capable-bases)). Legacy
+aliases, other providers, case variants, whitespace and extra `@` characters are invalid.
+
+<a id="profile-capable-bases"></a>**Profile-capable bases.** *(Additive.)* One
+per-provider table in the daemon decides which bases accept profiles, which
+variables are credentials and account folders, and which launch-only steps apply.
+Clients read `supportsProfiles` per catalog row and never hard-code the list.
+
+| Base | Credentials (auto-mark) | Account folder | Launch-only step for a key profile |
+| --- | --- | --- | --- |
+| `claude-code` | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` | `CLAUDE_CONFIG_DIR` | none |
+| `codex` | `CODEX_ACCESS_TOKEN`, `CODEX_API_KEY`, `OPENAI_API_KEY` | `CODEX_HOME` | [Codex API key](#codex-api-key) |
+| `grok` | `XAI_API_KEY` | `GROK_HOME` | [Grok API key](#grok-api-key) |
+| `droid` | `FACTORY_API_KEY` | none | none (the key beats a stored login) |
+| `auggie` | `AUGMENT_SESSION_AUTH` | none | none (the session JSON beats a stored login) |
+| `cursor` | `CURSOR_API_KEY`, `CURSOR_AUTH_TOKEN` | none | [Cursor API key](#cursor-api-key) |
+
+`droid` keeps its existing gate: its catalog row reports `supportsProfiles: true` (a
+capability, like the rest of the row) but stays `visible: false`, so clients offer no
+Droid profiles, unless the daemon enables Factory Droid.
+
+The credential list of each row is also what a single-credential profile unsets so
+that a value inherited from the daemon or the login shell cannot override it. The
+launch-only steps apply to named profiles only (`<base>@<id>`); a Default
+configuration's overrides run as saved. "Does not set `X`" below means the profile has
+no `set` or `unset` entry for `X` (compared ignoring ASCII case).
+
+Clients read the reference from `ProviderProfile.providerRef` and never compose it from
+a name.
 
 The reference travels in the **existing provider fields**. No parallel
 `profileId` field exists:
@@ -163,6 +189,12 @@ redaction applies. Deleting the file removes every profile.
   leaves the file untouched. `providers.profiles.*` then return `-32603` with
   `data.code: "provider-profiles-unreadable"`, and qualified references fail with
   `provider-profile-replacement-required` (`reason: "profile-missing"`).
+- **Unknown bases.** A profile whose `baseProvider` the daemon does not know (one a
+  newer daemon saved) does not make the file unreadable. The daemon does not load it:
+  it is absent from every read, and its qualified reference fails like a deleted
+  profile's. Each write keeps the entry unchanged, and the daemon never reuses its id,
+  so the profile returns after an upgrade. Its `id` must still be valid and unique, or
+  the file is malformed.
 
 Environment values never enter `config.toml`, the profile file, the ordinary
 `providers.*` map, the settings database, `settings.list`, `settings:changed`,
@@ -241,7 +273,7 @@ guests receive `-32003`. Each is daemon-global, with no `workspaceId` required.
 interface ProviderProfile {
   id: string;                 // opaque, immutable
   providerRef: string;        // "<baseProviderId>@<id>" — the value for every provider field
-  baseProviderId: "codex" | "claude-code";
+  baseProviderId: string;     // a canonical id with supportsProfiles: true
   name: string;               // trimmed display name
   backup: boolean;            // quota failover may switch to this profile
   env: EnvEntryRead[];        // masked except folder paths; in stored order
@@ -257,7 +289,7 @@ interface RemoteIncompatibility {
   keys: string[];  // account-folder: the variable names, as saved; not-marked: []; never values
 }
 type EnvEntryRead =
-  | { key: string; kind: "set"; value: string } // "********" (masked) or "" (saved empty string); CLAUDE_CONFIG_DIR / CODEX_HOME: the stored value
+  | { key: string; kind: "set"; value: string } // "********" (masked) or "" (saved empty string); account folders: the stored value
   | { key: string; kind: "unset" };
 type EnvEntryWrite =
   | { key: string; kind: "set"; value: string }  // literal, including ""
@@ -274,8 +306,8 @@ interface ProfileActivation {
   login shell. A key that is absent inherits normally. Values are never shell-expanded
   or executed, with the one exception below. Profile entries override inherited
   values for the same key.
-- **Home expansion.** For `CLAUDE_CONFIG_DIR` and `CODEX_HOME` only (compared
-  ignoring ASCII case), a `set` value that is exactly `~` or starts with `~/` is
+- **Home expansion.** For the account folders only (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`
+  and `GROK_HOME`, compared ignoring ASCII case), a `set` value that is exactly `~` or starts with `~/` is
   expanded to the daemon user's home directory when the profile environment is
   resolved. `~/.claude-work` becomes `<home>/.claude-work`. Expansion happens
   before account-home lookup, isolation and fingerprinting, so auth checks, model
@@ -310,8 +342,8 @@ interface ProfileActivation {
 - `list` returns masked values, except the folder paths below. No method returns any
   other saved value.
 - <a id="folder-paths-on-reads"></a>**Folder paths on reads.** A `set` entry whose key is
-  `CLAUDE_CONFIG_DIR` or `CODEX_HOME` (compared ignoring ASCII case, as for home
-  expansion, under either base provider) reads back with `value` exactly as stored:
+  an account folder (`CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `GROK_HOME`, compared
+  ignoring ASCII case, as for home expansion, under any base provider) reads back with `value` exactly as stored:
   not masked and not home-expanded, so `~/.claude-work` reads as `~/.claude-work`.
   This applies to every `EnvEntryRead`: `providers.profiles.list` (profiles and
   `defaults`), the `profile` in `create` and `update` results, and the
@@ -341,7 +373,7 @@ interface ProfileActivation {
   the `profiles` in `reorder` results, and the `defaultConfig` in `updateDefault`
   results. `create`, `update` and `updateDefault` write it.
   - **Can't be marked.** A configuration that **sets** an account folder
-    (`CLAUDE_CONFIG_DIR` or `CODEX_HOME`, compared ignoring ASCII case, under either
+    (`CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `GROK_HOME`, compared ignoring ASCII case, under any
     base provider) is never remote-compatible. The folder is signed in on this
     backend; another machine may lack it or hold a different account under the same
     path. A write that sends `remoteCompatible: true` for a configuration whose
@@ -412,7 +444,7 @@ interface ProfileActivation {
 | `env[i].value` | `env-value-invalid` | No NUL characters, and at most 32 KiB of UTF-8. |
 | `env[i].value` | `env-value-placeholder` | A `set` value of `********` is rejected. Use `kind: "keep"`. |
 | `env[i].kind` | `env-keep-missing` | `keep` names a key with no saved entry, or appears on create. |
-| `remoteCompatible` | `remote-account-folder` | `remoteCompatible: true` is sent while the saved `env` would set `CLAUDE_CONFIG_DIR` or `CODEX_HOME` (see [Remote compatibility](#remote-compatibility)). The message names the variables and says to turn off "Use on remote machines" or remove the folder. |
+| `remoteCompatible` | `remote-account-folder` | `remoteCompatible: true` is sent while the saved `env` would set an account folder (see [Remote compatibility](#remote-compatibility)). The message names the variables and says to turn off "Use on remote machines" or remove the folder. |
 | `profileIds[i]` | `profile-order-duplicate` | Reorder only. The id appears more than once. |
 | `profileIds[i]` | `profile-order-unknown` | Reorder only. The id is not a saved profile of `baseProviderId`. |
 | `profileIds` | `profile-order-incomplete` | Reorder only. A saved profile of `baseProviderId` is missing from the list. |
@@ -426,8 +458,8 @@ An unknown `profileId` returns `-32602` with `data.code: "not-found"`.
 replaces the value, or the daemon reads it to locate the shared installation before
 any profile environment applies. A saved override would therefore be ignored or would
 break the shared installation. The `env-key-reserved` message names the reason. For
-`HOME` and `USERPROFILE` it also points to `CODEX_HOME` (Codex) or `CLAUDE_CONFIG_DIR`
-(Claude Code), which select an account.
+`HOME` and `USERPROFILE` it also points to the base's account folder, when it has one
+(`CODEX_HOME`, `CLAUDE_CONFIG_DIR` or `GROK_HOME`), which selects an account.
 
 | Key or pattern | Why |
 | --- | --- |
@@ -435,11 +467,12 @@ break the shared installation. The `env-key-reserved` message names the reason. 
 | `CODEX_PATH`, `CLAUDE_CODE_EXECUTABLE` | Installed executable selection (`InstalledContext`) |
 | `CODEX_CONFIG` | Enforced Codex policy, set after every env merge |
 | `NODE_OPTIONS` | Daemon-managed adapter memory cap composition |
-| `HOME`, `USERPROFILE` | Read for executable discovery and as the source home for account isolation; not replaced at launch. Use `CODEX_HOME` or `CLAUDE_CONFIG_DIR` to select an account. |
+| `HOME`, `USERPROFILE` | Read for executable discovery and as the source home for account isolation; not replaced at launch. Use the base's account folder to select an account. |
 | `npm_config_workspace*`, `npm_workspace*`, `npm_config_include_workspace_root` | Removed from adapter bootstrap launches |
 | `INTENT_*`, `INTENTD_*` | Intent session and bootstrap wiring |
-| `GIT_CONFIG_PARAMETERS`, `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` | Intent sets this at launch (session wiring and commit identity). Reserved for Codex and Claude Code. |
+| `GIT_CONFIG_PARAMETERS`, `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` | Intent sets this at launch (session wiring and commit identity). Reserved for every base. |
 | `INITIAL_AGENT_MODE` | Intent sets this at launch (session wiring and commit identity). Reserved for Codex only; Claude Code profiles may set it. |
+| `AGENT_CLI_CREDENTIAL_STORE` | Cursor only: Intent sets it for a [Cursor API key](#cursor-api-key) profile. |
 
 Reservation applies to both `set` and `unset`. A profile therefore cannot override or
 remove Intent's git commit identity or its credential-helper configuration.
@@ -465,6 +498,40 @@ replaced. A local `host.providerAuthStatus` probe reports such a profile
 `CODEX_API_KEY` set and `CODEX_ACCESS_TOKEN` and `OPENAI_API_KEY` unset.
 `OPENAI_API_KEY` alone keeps today's behaviour.
 
+<a id="grok-api-key"></a>**Grok API key.** *(Additive.)* Grok uses `XAI_API_KEY` only
+when no Grok login is saved, and its `GROK_CONFIG` overlay cannot change that order. A
+Grok profile that sets a non-empty `XAI_API_KEY` and does not set `GROK_HOME` therefore
+runs with `GROK_HOME=~/.intent/grok-api-key/<profileId>-<key digest>` on the host that
+runs the provider, with the digest rule above. Like the Codex home it is launch-only,
+never saved, not an account folder, kept across launches, and new for a new key; unlike
+Codex there is no `DEFAULT_AUTH_REQUEST`, because Grok reads the key itself. The user's
+own `~/.grok` (login, config, skills) is not used by that profile. Clients save this kind
+with `XAI_API_KEY` set and nothing unset.
+
+<a id="cursor-api-key"></a>**Cursor API key.** *(Additive.)* Cursor uses
+`CURSOR_API_KEY` only when no Cursor login is stored, and the login is not kept in
+`CURSOR_CONFIG_DIR` (it is in a file under `$XDG_CONFIG_HOME/cursor` on Linux and in the
+Keychain on macOS). So:
+
+- A Cursor profile that sets a non-empty `CURSOR_API_KEY` or `CURSOR_AUTH_TOKEN` runs with
+  `AGENT_CLI_CREDENTIAL_STORE=memory`, whatever else it sets: the CLI reads no stored
+  login.
+- One that sets a non-empty `CURSOR_API_KEY` and does not set `CURSOR_CONFIG_DIR` also
+  runs with `CURSOR_CONFIG_DIR=~/.intent/cursor-api-key/<profileId>-<key digest>`, so a
+  model choice is not saved as the user's own Cursor default. This folder follows the
+  Grok home rules.
+
+Both are launch-only and never saved. The key is never passed on the command line.
+Clients save this kind with `CURSOR_API_KEY` set and `CURSOR_AUTH_TOKEN` unset.
+
+<a id="key-profile-auth-status"></a>**Auth status of the new bases' profiles.**
+`host.providerAuthStatus` probes a profile with the overlay its launches use (launch-only
+steps included), on the base's own probe: `grok models` (a Grok key profile reports
+`authenticated: true` once the key is present: Grok does not check it there),
+`cursor-agent models` (Cursor checks the key), the Droid ACP probe, and `auggie token
+print` (true once the session JSON is present). Only a test prompt proves that a key
+works; clients run one after saving where the base supports it (`supportsTestPrompt`).
+
 **Delete blocking.** `delete` refuses while a saved setting explicitly selects the
 profile. It returns `-32602` with `data.code: "provider-profile-in-use"` and
 `data.inUse: InUseReason[]`. Nothing is deleted.
@@ -484,8 +551,8 @@ never removes external account directories.
 #### Catalog, models and status
 
 - `providers.catalog` (§5.38) rows gain an additive boolean `supportsProfiles`.
-  Implementing daemons emit `true` for `codex` and `claude-code` and `false` for
-  other rows. Absence means unsupported, including on older daemons. Clients offer
+  Implementing daemons emit `true` for the [profile-capable bases](#profile-capable-bases)
+  and `false` for other rows. Absence means unsupported, including on older daemons. Clients offer
   **Add profile** only when it is `true`.
 - `providers.catalog` gains an additive top-level `profiles: ProviderProfileSummary[]`
   (`{ id, providerRef, baseProviderId, name, backup }`), in saved order. It has no env and no counts, and
@@ -802,7 +869,14 @@ are tracked separately, never per model.
 ##### Quick actions
 
 `agent.completeOnce` ([§5.32](agent-aux.md)) fails over on its ACP route on the same
-terms as a turn. The auggie route has no profiles and does not fail over.
+terms as a turn. The auggie route (`auggie --print`) does not fail over; an `auggie@…`
+reference runs it with that profile's `AUGMENT_SESSION_AUTH`, locally and on a machine.
+`agent.enhancePrompt` runs when the effective default provider is `auggie` or an
+`auggie@…` profile. It uses that configuration's environment: locally, and on an
+orchestrator by sending it as the `oneShot` profile environment, which the machine
+applies (see [node link](../node-link.md)). The machine's own Auggie sign-in applies
+only when no environment is sent: a bare `auggie` without saved overrides, or a
+Default that is not marked for remote machines.
 
 - **Candidates.** The reference the call resolves to (its *configured* reference)
   plays the part of home. The rotation, choice and limits are those of
@@ -826,7 +900,7 @@ terms as a turn. The auggie route has no profiles and does not fail over.
 
 #### Default configuration overrides
 
-The Default configuration of `codex` and `claude-code` can carry its own display
+The Default configuration of every profile-capable base can carry its own display
 name and environment overrides. These use the same rules as a profile's, without
 `backup` or a position in the order. Default stays the bare reference: its
 `providerRef` is the base provider id. No saved selection, specialist, conversation
@@ -835,7 +909,7 @@ edited, and it is still never a backup.
 
 ```ts
 interface DefaultConfig {
-  baseProviderId: "codex" | "claude-code";
+  baseProviderId: string;      // a canonical id with supportsProfiles: true
   providerRef: string;         // the bare base provider id
   name: string;                // "Default" unless renamed
   env: EnvEntryRead[];         // masked except folder paths; in stored order; [] when none saved
@@ -881,9 +955,9 @@ type DefaultRemoteLaunch =
 - <a id="default-credential-auto-mark"></a>**Credential auto-mark.** An
   `updateDefault` that **adds a credential** marks the Default in the same commit,
   so the credential is used on remote machines without a second step. A
-  credential is a `kind: "set"` entry for one of `ANTHROPIC_API_KEY`,
-  `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CODEX_ACCESS_TOKEN`,
-  `CODEX_API_KEY` or `OPENAI_API_KEY` (compared ignoring ASCII case). It is added
+  credential is a `kind: "set"` entry for any credential listed in
+  [Profile-capable bases](#profile-capable-bases), whatever its row (compared ignoring
+  ASCII case). It is added
   when the saved environment did not already set that key; changing the value of a
   key that is already set, or `keep`, adds nothing.
   - An explicit `remoteCompatible` in the same write wins.
@@ -1009,7 +1083,7 @@ runs a provider CLI, so it never checks one:
 - **Remote compatibility is implied.** Every profile, and every Default with
   overrides, counts as remote-compatible without the mark; reason
   `not-marked` never fires. A configuration that sets an account folder
-  (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`) stays refused with reason
+  (`CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `GROK_HOME`) stays refused with reason
   `account-folder`. `ProviderProfile` and `DefaultConfig` reads keep the stored
   `remoteCompatible` (so switching back to `regular` restores it); the catalog's
   `profiles[].remoteCompatible` and `defaultRemoteLaunch` report the effective
@@ -1105,6 +1179,21 @@ on write.
 A daemon that advertises `supportsProfiles` but predates per-profile Fast mode
 rejects a qualified `providers.fastMode` key with `-32602`; the whole update fails and
 the stored map is unchanged, so clients surface the error rather than retrying.
+
+Clients detect the [profile-capable bases](#profile-capable-bases) by `supportsProfiles`
+per row, so an older daemon (Codex and Claude Code only) never gets a Grok, Droid, Auggie
+or Cursor profile: its catalog reports `false` for them and it rejects such a write with
+`base-provider-unsupported`. An older client shows the new bases' profiles as rows with
+the raw editor only. A machine that predates the Grok and Cursor launch-only steps runs
+those profiles' environment as sent, so a login saved on that machine can win over the
+key until the machine is updated; Droid and Auggie profiles need no step. Downgrading the
+daemon past this change while a Grok, Droid, Auggie or Cursor profile is saved makes the
+older daemon read the whole profile file as malformed (it accepts only the bases it
+knows): every `providers.profiles.*` call returns `provider-profiles-unreadable` and
+qualified references need a replacement, as described under **Reads**, until the daemon
+is upgraded again. The file is left untouched, so nothing is lost. A daemon that keeps
+profiles of [unknown bases](#storage) instead loads the others and skips only those, so
+a later added base no longer makes the file unreadable after a downgrade.
 
 Clients detect Default configuration overrides by the presence of `defaults` on the
 `providers.profiles.list` result. When it is absent, a client may still offer the

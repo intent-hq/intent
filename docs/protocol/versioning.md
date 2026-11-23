@@ -8,8 +8,47 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `18.0` — guided Antigravity setup retirement, on top of 17.0's CoW isolation setting retirement, 16.0's per-agent CoW sandbox retirement and 15.5's Agent Plugins, 15.4's bounded object reads, 15.3's plain-folder workspaces, 15.2's retired workspaces and 15.1's discussions, guest roles, scoped repository pages and GitLab child Git policy (intentd advertises all four at protocol 15.2); 15.4 is not a shipped-version claim.
+**Documented version:** `18.1` — composer autocomplete, on top of 18.0's guided Antigravity setup retirement, 17.0's CoW isolation setting retirement, 16.0's per-agent CoW sandbox retirement and 15.5's Agent Plugins, 15.4's bounded object reads, 15.3's plain-folder workspaces, 15.2's retired workspaces and 15.1's discussions, guest roles, scoped repository pages and GitLab child Git policy (intentd advertises all four at protocol 15.2); 15.4 is not a shipped-version claim.
 Every extension retains its independent support gate.
+
+**Version 18.1 — composer autocomplete (additive).**
+Adds the router method `input.autocomplete` ([§5.59](./methods/input.md)): given the
+composer draft `text` (1–2,000 chars) and recent conversation `context` (0–4,000
+chars), the daemon asks Kilo Gateway or OpenRouter for a short continuation and
+answers `{ completion }`. Every configuration or upstream failure (off, OpenRouter
+without a key, 404, 429, 4 s timeout, network or parse error) answers
+`{ completion: "" }`; only malformed params are `-32602`. Daemon-global, owner and host
+members only. Adds the settings-catalog entries `autocomplete.enabled` (default
+`false`), `autocomplete.service` (`kilo` | `openrouter`), `autocomplete.model`
+(`nvidia/nemotron-3.5-lightning` | `particle-ai/particle-1`), TOML-backed under
+`[autocomplete]`, plus the sensitive `autocomplete.kilo.apiKey` and
+`autocomplete.openrouter.apiKey` ([§5.12](./methods/settings.md)). Clients detect
+support by `autocomplete.enabled` in `settings.list`; older daemons return `-32601`
+for the method. No store migration; the router surface gains one method.
+
+Also within 18.1 (additive method, send param, row field and capability;
+capability-gated, so no version bump): **conversation goal**
+([§5.5](./methods/agents.md#conversation-goal), [intent-hq/intent#9646](https://github.com/intent-hq/intent/issues/9646)).
+`server.capabilities.conversationGoal: 1` gates it. Adds the router method
+`agent.setGoal { agentId, workspaceId?, goal: string | null }` →
+`{ action, goal, noticeMessageId? }` (user callers only; refused through `ws.rpc`),
+the top-level `interpretCommands?: boolean` param on `agent.sendMessage` and
+`agent.queueMessage` (a `/goal` command then answers
+`{ success: true, queued: false, command }` with no user row, queue entry or turn),
+the presence-detected `goal` field on `AgentLite` and `agent.getSession` (omitted
+when unset), `agent:updated { agentId, goal }` (`null` = removed), and transcript-only
+`role: "system"` rows with `metadata.type: "goal_command"`. Store migration adds
+`agent_session.goal`. Older daemons omit the capability, ignore
+`interpretCommands`, deliver `/goal …` as text, and answer `agent.setGoal` with
+`-32601`.
+
+Also within 18.1 (additive row field, no capability change): **conversation goal
+attribution** ([§5.5](./methods/agents.md#conversation-goal-attribution)). The
+presence-detected `goalSetBy: { principalId, displayName, login }` rides `AgentLite`,
+`agent.getSession`, the `/goal` command result, the `agent.setGoal` result and
+`agent:updated` (`null` when removed or unattributed). Clients show it only when
+`Workspace.memberCount > 1`. Store migration adds `agent_session.goal_set_by`. Daemons
+without it omit the field, and clients show no attribution.
 
 **Version 18.0 — guided Antigravity setup retirement (breaking).**
 Antigravity now runs the user's `agy` CLI as `agy acp` (agy 1.5.0 or later;
@@ -24,6 +63,37 @@ and `supportsTestPrompt: true`. Clients gated the setup surface on the capabilit
 apps hide it against an 18.0 daemon. No store migration. The documented surface is
 **497 / 443 / 54** (dispatchable / router / fast path), four fast-path methods fewer, and
 the reverse-RPC list drops to five names.
+
+Also within 18.0 (behavior only, no wire change): **idle Unsloth servers stop**. A server the
+daemon started stops after about 15 minutes with no live agents on its model and leaves `servers`
+([§5.37](./methods/system-observability.md)). The next spawn for the model starts it again.
+
+Also within 18.0 (additive stop param and status field, no version bump): **stop one Unsloth
+model**. `unsloth.stop` takes an optional `repoId` that stops only that model's server, and
+`unsloth.status` reports `stopByModel: true` ([§5.37](./methods/system-observability.md)). Older
+daemons ignore `repoId` and stop every server, so clients send it only when `stopByModel` is
+`true`.
+
+Also within 18.0 (additive status field and refusal field, no version bump):
+**one managed Unsloth server per model**. The daemon runs one Unsloth server per model while a
+memory budget allows, stopping idle servers first when it does not. `unsloth.status` adds
+`servers` (every running server; the top-level fields describe the most recently used one),
+`unsloth.stop` stops every server, and the switch refusal adds `unloadedModels`
+([§5.37](./methods/system-observability.md), [§5.5](./methods/agents.md)). Older daemons omit
+both fields; clients treat a missing `servers` as the single top-level server.
+
+Also within 18.0 (additive refusal and reserved metadata key, no version bump):
+**Unsloth model switch confirmation**. A user-origin `agent.sendMessage` that would make
+the managed Unsloth server unload the model other local agents run on is refused with `-32602`
+`unsloth-model-switch-confirmation-required`, naming those agents; a resend with
+`messageMetadata.confirmUnslothModelSwitch: true` proceeds
+([§5.5](./methods/agents.md)). Older daemons never refuse, so clients need no gate.
+
+Also within 18.0 (additive event value, no version bump): **initial agent create step**.
+A `workspace.create` with a `progressId` whose initial agent is placed on a machine emits a
+`git:clone:progress` frame with the new phase `agent` at 97 ("Starting agent on <machine
+name>...") between `finalizing` and `complete` ([§6.5](./06-events.md)). Older clients show
+their generic label for an unknown phase; older daemons never send it.
 
 Also within 18.0 (additive event field, no version bump): **clone download counters**.
 `git:clone:progress` `receiving` frames carry an optional `transfer { receivedObjects,
@@ -125,7 +195,22 @@ The call that dialed fails with the new `-32602`
 `data.code: "machine-orchestrator"`. An older
 backend sees the unknown close code as a route failure and keeps retrying, as
 before. An older orchestrator still binds; its report lists no providers.
-The surface counts are unchanged.
+The surface counts are unchanged. Additively, that removal event carries
+`reason: "orchestrator"`, and the machine's workspace homes are detached at
+once so they can be moved; an older client ignores the field.
+
+Also within 18.0 (additive response, event and setting fields; no method-catalog
+change): **workload memory containment** (intent-hq/intent#9809). On Linux,
+workloads run in a memory-limited cgroup; `system.status.workloadContainment`
+reports the mode, `agents.workloadMemoryMaxMb` sets the ceiling, and a script
+run, `host.exec` or terminal killed by the limit carries
+`exitReason: "memoryLimit"` (script runtime and `lastRun`, `host.exec`,
+`host:exec:exit`, `terminal:exit`). Script runs also carry `startedBy`.
+**nodeProtocol 20** carries that reason for runs on a remote machine
+(`exitReason` on `scriptExited` / `ptyExited`, sent only on a link that
+negotiated 20; [link contract](./node-link.md#version-range)); daemons offer
+`{ min: 7, max: 20 }`. Clients detect every field by presence. The surface
+counts are unchanged.
 
 Also within 18.0 (additive methods and setting; prepared, off by default, so no
 version bump): **push relay linking**. The router methods `push.createLink`,
@@ -576,6 +661,15 @@ emit it on every `settings.list` / `settings.get` definition, `true` or `false`,
 whether an Assistant chat settings-change card may change the setting. Older daemons omit
 it. Clients then refuse card changes to daemon settings outside their own schema and keep
 their previous behavior for settings they map.
+
+**Prepared native-preview extension (additive; no new methods).**
+`client.hello` can advertise `capabilities.browserNavigation: true` separately from
+`browserExec`. Eligible navigation batches can fall back to the native iOS browser
+when desktop is unavailable; automation still requires `browserExec`. The optional,
+durable `BrowserTab.navigationOnly` marker prevents native tabs from being re-homed
+or treated as automation targets after reconnects, pin changes, or daemon restarts.
+See [§5.9 and §5.45](./methods/files-terminal-browser.md) for routing and ownership.
+Companion daemon and iOS support is required; this is not a shipped-release claim.
 
 **Version 15.1 — workspace discussions (additive).**
 [Workspace discussions](./methods/multiplayer.md#555-workspace-discussions) add
@@ -2518,6 +2612,18 @@ A note with many screenshots can therefore no longer push a turn past the provid
 every send while it is in context. Agents that relied on seeing note images automatically must now open
 them on demand. The `noteIds` param shape is unchanged.
 
+Also within 13.0 (behavior only, no method-catalog or wire-shape change, so no version
+bump — [intent-hq/intentd#3657](https://github.com/intent-hq/intentd/pull/3657)): **persisted
+delete grace deadlines in orchestrator mode** (§5.1 / §5.5). The v6.7 rule that pending
+deletions are never persisted now holds on desktop (SQLite) daemons only: a restart there
+still drops them and the workspace or agent survives. In orchestrator mode (Postgres) the
+`deleteAt` deadline is stored with the pending deletion, so it survives a daemon restart or a
+takeover of the tenant by another process; the process that serves the tenant next re-arms it
+(without a second `*:delete-scheduled` event) and the delete commits at most once at its
+deadline (a crash in the instant between claiming the deadline and starting the delete drops it).
+`*.cancelDelete` removes the stored deadline. Payloads, events and `pendingDeleteAt` are
+unchanged.
+
 ### Compatibility Policy
 
 - **Additive changes** (new methods, new optional fields, new event types) bump the **minor** version (e.g., 2.0 → 2.1).
@@ -2564,3 +2670,5 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 | `AgentLite` | `cloudStart` | [Placement on E2B](./methods/nodes.md#placement-on-e2b) | Pending cloudlands-fe E2B cloud machines PR (Start On, machine badges) |
 | `Workspace` | `home` | [Workspace homes](./methods/nodes.md#workspace-homes) | Pending cloudlands-fe homes PR (home on the workspace card and the detached banner); emitted only on an orchestrator serving homes |
 | `AgentLite` | `nodeName` | [Placed agent projection](./methods/nodes.md#placement-and-creation) | Pending: the complete node contract that advertises `agentNodes`; agents placed on [remote machines](./methods/nodes.md#placement-subset) carry it on detail reads, but the app does not read it yet |
+| `AgentLite` | `goal` | [Conversation goal](./methods/agents.md#conversation-goal) | [cloudlands-fe#4947](https://github.com/intent-hq/cloudlands-fe/pull/4947) |
+| `AgentLite` | `goalSetBy` | [Conversation goal attribution](./methods/agents.md#conversation-goal-attribution) | Pending cloudlands-fe goal attribution PR ([intent-hq/intent#9646](https://github.com/intent-hq/intent/issues/9646)) |

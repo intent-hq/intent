@@ -433,9 +433,22 @@ machine row with its last report, and the token in its secret store under
 row stays until removed.
 
 `remoteMachine:changed` carries `{ machine: RemoteMachine }`, or
-`{ machineId, removed: true }` after removal. It is delivered to owner
+`{ machineId, removed: true }` after removal. A removal the backend made on
+its own because the machine is now an orchestrator adds
+`reason: "orchestrator"` ([leaving its backends](#an-orchestrator-leaves-its-backends));
+clients ignore a `reason` they do not know. It is delivered to owner
 connections only and emitted on add, remove, state changes and new capability
 reports.
+
+`capabilities.capacity.runningAgents` is the machine-wide load (its local
+agents and every backend's remote agents), while `runningAgents` counts only
+this backend's agents there. A machine whose report has `resources` pushes a
+new report when that count changes
+([load pushed on change](../node-link.md#capabilities-report)), so while it is
+connected the backend emits `remoteMachine:changed` within about 2 seconds of
+an agent starting or stopping on it. An older machine (no `resources`) does
+not push: clients should treat its `capacity` as possibly stale and show
+`runningAgents` instead.
 
 ##### Machine model lookup
 
@@ -461,10 +474,18 @@ arguments one to one onto the params:
 
 | Method | Params | Result |
 | --- | --- | --- |
-| remoteMachines.models | nodeId?, provider?, model? (each a non-empty string, exact match) | `{ machines: MachineModelsRow[] }` (only `MachineModels` without `machineOrder: 1`); reads the cached reports only (no connect, no refresh); an unknown `nodeId` fails `-32602` `machine-unknown` |
+| remoteMachines.models | nodeId?, provider?, model? (each a non-empty string, exact match) | `{ machines: MachineModelsRow[], local?: MachineLoad }` (only `MachineModels` without `machineOrder: 1`); reads the cached reports only (no connect, no refresh); an unknown `nodeId` fails `-32602` `machine-unknown` |
 
 ```ts
 type MachineModelsRow = MachineModels | CloudEntryModels;
+
+interface MachineLoad {
+  runningAgents: number;            // every agent counted against the cap: local agents and every backend's remote agents
+  agentCap: number;                 // the effective agents.maxConcurrent
+  cpuPercent?: number;              // whole host, 0-100, smoothed; absent when not reported
+  memoryUsedBytes?: number;         // whole host; with memoryTotalBytes, absent when not reported
+  memoryTotalBytes?: number;
+}
 
 interface CloudEntryModels {        // machineOrder: 1 only
   kind: "cloud";
@@ -485,7 +506,8 @@ interface MachineModels {
   state: "connected" | "disconnected" | "unreachable" | "revoked" | "update-required";
   lastConnectedAt?: string;
   observedAt?: string;              // when the report below was taken; absent before the first report
-  runningAgents: number;
+  runningAgents: number;            // this backend's live agents on the machine
+  load?: MachineLoad;               // machine-wide, from the report; only while connected
   providers: {
     id: string;
     status: "signed-in" | "signed-out" | "unknown" | "auth-failed" | "cli-missing" | "prerequisite-missing";
@@ -520,9 +542,30 @@ interface MachineModels {
    ([capabilities report](../node-link.md#capabilities-report)) without
    `visible`. Like that report, they list only providers enabled on the machine;
    `disabledProviders` names the others.
-4. **Never exposed:** routes (`hosts`, `port`, `tcAddress`), fingerprints,
-   credentials, `nodeProtocol`, `capacity` and other backends.
-5. **Staleness.** A report can be up to 1 hour old before placement refreshes it.
+4. **Load.** `load` is the machine-wide count from the report's `capacity`
+   (`runningAgents`, `agentCap`; never its memory budget figures), plus the
+   host's `cpuPercent`, `memoryUsedBytes` and `memoryTotalBytes` from the
+   report's `resources`: every agent counted against the machine's cap, its
+   own local agents and other backends' included, while the row's
+   `runningAgents` counts only this backend's agents there. A machine that
+   sends `resources` also pushes its report when the count changes
+   ([load pushed on change](../node-link.md#capabilities-report)), so it is
+   current within about 2 seconds while the machine is connected. `load` is
+   therefore present only while the machine is connected **and** its report
+   has `resources`: it is absent while the machine is not connected (the last
+   count says nothing about now), before its first report, and for an older
+   machine, which never pushes and whose count can be up to an hour old.
+   Cloud rows have no `load`: each agent there gets a new sandbox. The
+   top-level `local` is this backend's host in the same shape: its process
+   registry (every agent it runs, including any it runs for other backends)
+   and its own host sample. It is absent in
+   [orchestrator mode](#orchestrator-mode). Agents use these to pick the
+   least-loaded machine; placement itself still applies only the
+   [capacity check](../node-link.md#capabilities-report) at launch.
+5. **Never exposed:** routes (`hosts`, `port`, `tcAddress`), fingerprints,
+   credentials, `nodeProtocol`, the memory budget figures of `capacity` and other
+   backends' identities.
+6. **Staleness.** A report can be up to 1 hour old before placement refreshes it.
    Callers that need the live state call `remoteMachines.refresh` first; admission
    rechecks everything at launch whatever this method returned.
 
@@ -532,7 +575,11 @@ interface MachineModels {
    frontend offers **Make available to <current backend>** with the warning
    that remote agents run code as the machine owner's OS user. It never offers
    it for guest sessions, or when `principal.me` on that connection is not the
-   owner.
+   owner. It never offers it for a machine that runs as an
+   [orchestrator](#orchestrator-mode) (its reported `daemonMode`): an
+   orchestrator refuses `executor.mint` with `-32003` `orchestrator-mode`, and
+   the frontend reports that refusal as "<machine> is an orchestrator", not as
+   a missing owner.
 2. The frontend main process relays, keeping the token out of the renderer and
    never persisting it: `remoteMachines.backendInfo` on the backend,
    `executor.mint` on the machine, then `remoteMachines.add` on the backend.
@@ -1577,6 +1624,7 @@ interface CloudMachineState {
   workspaceId: string;
   startedAt: string;
   runningSeconds: number;                  // seconds not paused since start, for cost estimates
+  relayUrl?: string;                       // the self-hosted relay map URL the sandbox's tunnel uses; absent: tailcat's default relay
 }
 ```
 
@@ -1750,6 +1798,17 @@ never falls back to another tag: a missing tag fails the start with
 `cloud-machine-unavailable` reason `template-missing`. A paused sandbox keeps the
 version it started with; it resumes and binds while the nodeProtocol ranges
 overlap.
+
+**Relay.** A sandbox's tunnel uses this backend's own
+[`server.tunnel.derpUrl`](./settings.md) (a self-hosted relay); empty uses
+tailcat's default relay, as before. The backend applies the setting at each
+sandbox start and resume, so a change reaches a running or paused sandbox at
+its next resume; the sandbox's `tcAddress` then changes. `cloud.relayUrl`
+reports the relay in use. When the setting is set, the sandbox never falls
+back to the default relay: if it cannot fetch the relay map or reach the
+relay, the start fails with `cloud-machine-unavailable` reason
+`relay-unreachable` and the sandbox is deleted, and a resume fails with the same
+reason and the sandbox stays paused.
 
 A sub-agent on the sandbox keeps it live like the agent it was started for. The sandbox is
 deleted when the agent it was started for (`cloud.agentId`) ends for good;
@@ -2412,12 +2471,25 @@ none):
    `machine-orchestrator: <name> is now an orchestrator and no longer runs agents for other backends`,
    and the call that dialed (`remoteMachines.refresh`, a placement, a prompt)
    fails with `-32602` and `data: { code: "machine-orchestrator" }`.
-2. Then, in the background, it deletes the machine row, its stored token
-   (`remoteMachines.<id>.token`), its leases and pending stop records, and its
-   [ordered list](#ordered-machine-list) entry.
-3. It sends `remoteMachine:changed { machineId, removed: true }`, then
-   `{ order }`. The `removed` event is the signal that the removal is done.
-   A removal that fails (a store error) runs again at the next dial.
+2. Then, in the background, it first [detaches](#detached-workspaces) each
+   [workspace home](#workspace-homes) on the machine, without the 60 s grace,
+   in one store write, and announces each with
+   `workspace:updated { changes: { home } }`. The same write makes a home
+   [moving](#moving-the-home) away from the machine return to detached if its
+   move fails. Only then does it delete the machine's stored token
+   (`remoteMachines.<id>.token`), its leases and pending stop records, then
+   the machine row and its [ordered list](#ordered-machine-list) entry; the
+   row's deletion detaches its homes again. A restart or a store error at any
+   step leaves no home attached to the removed machine. No checkout is
+   deleted: the orchestrator runs no [home final stop](../node-link.md#home-final-stop),
+   so the home checkout stays on its disk, and the workspace keeps its
+   backup refs. [Moving the home](#moving-the-home) restores the workspace on
+   another machine from its last backup.
+3. It sends `remoteMachine:changed { machineId, removed: true, reason: "orchestrator" }`,
+   then `{ order }`. The `removed` event is the signal that the removal is
+   done; `reason` tells the app to say why the runner left ("<name> is now an
+   orchestrator and was removed from your runners"). A removal that fails (a
+   store error) runs again at the next dial.
 
 `remoteMachines.add` of an orchestrator fails with the same error. A new
 machine is not saved; a machine already saved is removed as above.
@@ -3025,11 +3097,13 @@ interface CloudMachineUnavailableData {
   cloudMachineId?: string;           // the entry, when one was named or resolved
   reason: "not-configured" | "key-rejected" | "entry-required" | "api-error"
         | "template-missing" | "bootstrap-failed" | "sandbox-lost"
-        | "project-missing" | "permission-denied" | "no-capacity" | string; // open enum
+        | "project-missing" | "permission-denied" | "no-capacity"
+        | "relay-unreachable" | string;   // open enum
   retryable: boolean;
   status?: number;                   // the provider's HTTP status, when it answered
   entries?: { cloudMachineId: string; name: string; provider: CloudProviderKind }[]; // only with "entry-required"
   action?: string;                   // only with "permission-denied": the refused call, for example "create-service"
+  relayUrl?: string;                 // only with "relay-unreachable": the relay map URL the sandbox could not use
 }
 ```
 
@@ -3058,7 +3132,10 @@ provider removed a sandbox, or its Northflank volume, that had an agent) and
 `no-capacity` (Agent37 had no room for the entry's instance type and size in
 its region, at a start or a wake; retryable; the message names the type, size
 and region and says to try again later or pick another size or region; the
-backend never falls back to another region). The
+backend never falls back to another region) and `relay-unreachable`
+(`server.tunnel.derpUrl` is set and the sandbox could not fetch that relay map
+or reach its relay, at a start or a resume; retryable; `relayUrl` names it; the
+backend never falls back to the default relay, see [the relay](#sandbox-lifecycle)). The
 message says no sandbox was left behind, or that the agent's pushed work is
 kept.
 

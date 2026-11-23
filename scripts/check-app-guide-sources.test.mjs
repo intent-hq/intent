@@ -96,6 +96,43 @@ test('parseGuide reports guide-format problems', () => {
   assert.match(messages[5], /^6 .*not a normalized repository path/);
 });
 
+// intentd#3544 and #3564: version-gated wording drew review rounds and a
+// follow-up PR per release.
+test('parseGuide rejects exact app versions in prose only', () => {
+  const guide = [
+    'Desktop v2.334.5 and later show prompts.',
+    '<!-- Sources: packages/intentd/resources/specialists/{v3.8,v3.9}/; shipped in v2.1.0. -->',
+    '<!--',
+    'v9.9.9 in a multi-line comment',
+    '-->',
+    "It needs Google's `agy` CLI, version 1.5.0, and Node.js 22.22.2+; harness v3.15 is fine.",
+    'From app v2.359.0 it leaves; v2.338.0 to v2.358.x move it.',
+  ].join('\n');
+  const messages = parseGuide(guide).problems.map(p => `${p.line} ${p.message}`);
+  assert.deepEqual(messages.map(m => m.match(/^\d+ exact app version '([^']+)'/)?.[0]), [
+    "1 exact app version 'v2.334.5'",
+    "7 exact app version 'v2.359.0'",
+    "7 exact app version 'v2.338.0'",
+    "7 exact app version 'v2.358.x'",
+  ]);
+});
+
+test('parseGuide catches app versions without a lowercase v prefix', () => {
+  const guide = [
+    'Desktop 2.359.0 and later; app version 2.360.1; Intent builds 2.361.0.',
+    'V2.362.0, v2.363.X and v2.364.* also count.',
+    'Node.js 22.22.2+, `agy` 1.5.0, harness v3.15 and release-plz 0.3.1 do not.',
+  ].join('\n');
+  assert.deepEqual(parseGuide(guide).problems.map(p => `${p.line} ${p.message.match(/'([^']+)'/)[1]}`), [
+    '1 Desktop 2.359.0',
+    '1 app version 2.360.1',
+    '1 builds 2.361.0',
+    '2 V2.362.0',
+    '2 v2.363.X',
+    '2 v2.364.*',
+  ]);
+});
+
 // A monorepo with two component repos recorded as gitlinks, the way the
 // docs-check job and the upstream consumer job see them.
 function fixture(t, { guide, intentdFiles = [], feFiles = [] }) {
@@ -164,6 +201,19 @@ test('upstream mode warns for a missing frontend path and fails for a missing in
   const failed = checkAt(intentdMiss.root, '--upstream');
   assert.equal(failed.status, 1, failed.stdout + failed.stderr);
   assert.match(failed.stderr, /:3: error: packages\/intentd\/crates\/x\/gone\.rs is missing at intentd/);
+});
+
+// An intentd PR branched before the guide dropped its versions must not fail
+// the consumer job: pr-static gates guide edits, and the pin stays strict.
+test('an app version warns in upstream mode and fails at the pins', t => {
+  const fx = fixture(t, { guide: `${GOOD}Desktop v2.334.5 and later show prompts.\n`, ...GOOD_FILES });
+  const warned = checkAt(fx.root, '--upstream');
+  assert.equal(warned.status, 0, warned.stdout + warned.stderr);
+  assert.match(warned.stdout, /::warning::app-guide-sources: .*assistant-app-guide\.md:3: exact app version 'v2\.334\.5'/);
+  const failed = checkAt(fx.root);
+  assert.equal(failed.status, 1, failed.stdout + failed.stderr);
+  assert.match(failed.stderr, /assistant-app-guide\.md:3: error: exact app version 'v2\.334\.5'/);
+  assert.doesNotMatch(failed.stderr, /point the comment at the file/);
 });
 
 test('reads the pinned commit, not the working tree or a newer checkout HEAD', t => {
@@ -262,6 +312,13 @@ test('--format-only parses one file without git or pins', t => {
   const missing = spawnSync(process.execPath, [script, '--format-only', path.join(dir, 'absent.md')], { encoding: 'utf8' });
   assert.equal(missing.status, 2, missing.stdout + missing.stderr);
   assert.match(missing.stderr, /cannot read .*absent\.md/);
+
+  writeFileSync(file, `${GOOD}**Set aside** is available in alpha builds starting with v2.262.0.\n`);
+  const versioned = spawnSync(process.execPath, [script, '--format-only', file], { encoding: 'utf8' });
+  assert.equal(versioned.status, 1, versioned.stdout + versioned.stderr);
+  assert.match(versioned.stderr, /guide\.md:3: error: exact app version 'v2\.262\.0'/);
+  assert.match(versioned.stderr, /hint: describe how the app behaves now/);
+  assert.doesNotMatch(versioned.stderr, FORMAT_HINT);
 
   const both = spawnSync(process.execPath, [script, '--format-only', file, '--upstream'], { encoding: 'utf8' });
   assert.equal(both.status, 2, both.stdout + both.stderr);

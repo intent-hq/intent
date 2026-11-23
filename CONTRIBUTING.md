@@ -162,6 +162,32 @@ pause). It never writes resume records, so `RESUME`, `GATE_FORCE` and
 commands (and a failed summary line repeats it), because timeouts then may come
 from another workspace; the same check is `python3 scripts/host_load.py`.
 
+`make flake-triage RUN=<merge_group run URL> COUNT=200 LOAD=1` answers whose
+fault a merge-queue ejection is in one step. It reads the run's failed logs
+with `gh`, takes the tests whose final status failed (a test that passed on
+retry did not eject the PR) and the PR from the queue branch name, then runs
+`make test-stress` on three intentd revisions, each in its own worktree: main,
+main merged with the PR, and the PR alone. With `RUN` it replays the queue
+entry itself: main is the commit the entry was built on (named in the
+`gh-readonly-queue/main/pr-<N>-<sha>` branch) and merged is the commit the run
+tested, so later pushes and PRs queued ahead do not change the comparison.
+Setting `BASE`, or passing `E='<nextest filterset>'` and `PR=<n>` (or
+`BRANCH=<ref>`) instead of `RUN`, merges the PR head onto `BASE` (default a
+fresh `origin/main`). It prints a Markdown table of failures per revision and
+test, and one verdict: `fails on main`, `caused by this PR` or `inconclusive`.
+"Caused by this PR" needs the merged tree to fail significantly more often
+than main (one-sided Fisher exact test, p < 0.05), so 1/200 against 0/200
+stays inconclusive. Tests that never failed anywhere take no part. intentd#3560
+was ejected by a script-list race that failed 28/100 on its queue base and
+30/100 merged (fixed in intentd#3565): `fails on main`. The stress knobs (`COUNT`, `LOAD`,
+`STALL`, `FEATURES`, ...) apply to all three runs. A revision with the same tree
+as one already stressed is not run again. The worktrees stay under
+`$(GATE_CACHE_DIR)/flake-triage/worktrees/` so a repeat run builds
+incrementally; delete that directory and run `git -C packages/intentd worktree
+prune` to reclaim the space. The report (`report.md`, `report.json`) and each
+run's output are kept under `$(GATE_CACHE_DIR)/flake-triage/runs/` for seven
+days.
+
 These four (and `make test-intentd`, which `make test` runs, and the test
 phase of `make gate`) default `INTENTD_TEST_TIMEOUT_MULTIPLIER` to `3`, the
 value coverage CI and `make coverage-changed` already use, so tests'

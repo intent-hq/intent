@@ -60,9 +60,9 @@ the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestr
 **`workspace.delete` details.**
 
 - waits for incremental database cleanup and the final workspace-row/tombstone commit, then emits `workspace:deleted` and returns while filesystem cleanup runs in a background task (see “Incremental deletion” below for partial-progress and retry semantics) — only the git-metadata phase (worktree-registration prune + rename of the checkout to a trash path + guarded branch delete; a CoW or `direct` checkout — a standalone clone with no registration in the source repo and a branch living only inside the clone — gets just the rename, no prune and no source-repo branch delete, and **only when it sits in the daemon-owned `<root>/<workspaceId>/<repo-slug>` layout**: a standalone checkout outside that layout — the `isNewRepo` direct shape, where the checkout IS the user's chosen repository folder (§5.1) — is left untouched, deletion removes only the workspace row) holds the per-repository lock; the recursive `remove_dir_all` of the renamed trash directory runs afterwards outside the lock.
-- **Delete grace window (v6.7, [intent-hq/intentd#1096](https://github.com/intent-hq/intentd/pull/1096)):** `undoDelayMs > 0` (non-negative integer; a non-integer value is `-32602`; values above the 60 000 ms cap are silently clamped, never rejected — `deleteAt` reflects the clamped value) schedules an **in-memory** pending deletion instead of committing — returns `{ success: true, scheduled: true, deleteAt }` (ISO commit deadline), emits `workspace:delete-scheduled { workspaceId, deleteAt }` (§6.5), and serves `pendingDeleteAt` on the row until the deadline commits the real delete (which then runs the full teardown above) or `workspace.cancelDelete` cancels it.
+- **Delete grace window (v6.7, [intent-hq/intentd#1096](https://github.com/intent-hq/intentd/pull/1096)):** `undoDelayMs > 0` (non-negative integer; a non-integer value is `-32602`; values above the 60 000 ms cap are silently clamped, never rejected — `deleteAt` reflects the clamped value) schedules a pending deletion instead of committing — returns `{ success: true, scheduled: true, deleteAt }` (ISO commit deadline), emits `workspace:delete-scheduled { workspaceId, deleteAt }` (§6.5), and serves `pendingDeleteAt` on the row until the deadline commits the real delete (which then runs the full teardown above) or `workspace.cancelDelete` cancels it.
   Absent, `null`, or `0` keeps the immediate-delete behavior byte-identical.
-  Pending deletions are never persisted (a daemon restart drops them; the workspace survives); re-scheduling is idempotent under the registry lock (returns the existing deadline, no second timer); a committed workspace delete supersedes pending agent deletes inside the workspace
+  On a desktop (SQLite) daemon pending deletions are never persisted (a daemon restart drops them; the workspace survives); in orchestrator mode (Postgres) the deadline is persisted, so a pending deletion survives a restart or a takeover by another process and commits at most once at its deadline (a crash in the instant between claiming the deadline and starting the delete drops it, and the entity survives) (`workspace.cancelDelete` removes it); re-scheduling is idempotent under the registry lock (returns the existing deadline, no second timer); a committed workspace delete supersedes pending agent deletes inside the workspace
 
 **`workspace.transfer.plan` details.**
 
@@ -704,6 +704,12 @@ armed:
   a network clone the monotonic clamp lifts a later milestone into the 85+ tail
   automatically); an `isNewRepo` `direct` create emits `checkout` (branch checkout) at a
   nominal 50; every mode ends with `finalizing 95` before the row insert.
+- **Placed initial agent.** When the create's initial agent is placed on a machine (every
+  initial agent on an orchestrator, or an explicit remote placement), the daemon emits
+  `agent` ("Starting agent on <machine name>...") at a nominal 97 after the row insert,
+  before it pins the agent's start commit and starts it on its machine, so a slow start
+  is not shown as "Finalizing workspace...". Creates without a placed initial agent never
+  emit it.
 - **Exactly one terminal done.** The create wrapper owns the terminal frame: exactly one
   `git:clone:done` per create — `{ ok: true }` after the final `complete 100` on any
   successful create, `{ ok: false, error, errorCode? }` on any failure (sanitized detail,
@@ -1587,6 +1593,13 @@ daemon (the `client` table never transfers), so an imported workspace starts unp
 Reading the pin **together with** the live resolution is `workspace.getBrowserClient`; the
 candidates a picker offers are `client.list` (§5.17). The virtual Chief workspace cannot be
 pinned (-32602) and never carries the field.
+
+**Prepared native-preview exception (§5.9).** The pin remains binding for new
+navigation requests, but addressing an existing native iOS tab always uses its physical
+host. Native claimed tabs are excluded from desktop driving-client inference and from
+pin-triggered re-homing. Setting a pin to a navigation-only native client does not move
+desktop tabs there. `workspace.getBrowserClient` describes the automation route; it does
+not by itself establish native navigation availability or page-control support.
 
 **Routed client (`target`) — additive, presence-detected.** `workspace.getBrowserClient` /
 `workspace.setBrowserClient` add `browserClient.target: { clientId, via }` when an **unpinned**
