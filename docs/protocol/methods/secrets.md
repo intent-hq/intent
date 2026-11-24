@@ -42,7 +42,8 @@ can still dismiss or forget; they never create a request.
 Secret values live **only in intentd process memory**. They are never written
 to SQLite, the secret store file, settings, logs, tracing, Sentry, events, the
 transcript, or any agent-facing result. Values are wiped from memory when
-dropped.
+dropped. Only each answer's outcome (`secretRequestResolutions`, see
+[Agent notices](#agent-notices)) is persisted, never a value.
 
 A secret is owned by the **agent that requested it**, keyed by
 `(workspaceId, agentId, name)`. No other agent can use, list or forget it,
@@ -294,14 +295,14 @@ the notice is still queued behind a busy turn. Clients derive a card's state in
 this order:
 
 1. the card's `requestId` is in `secretRequestResolutions`, a user row is tagged
-   with it (including a `mergedMessageMetadata` contribution an older daemon
+   with it (including any `mergedMessageMetadata` contribution an older daemon
    merged into a queued message), or a matching `answeredRequests` entry:
-   provided or declined;
+   answered, and the client removes the card;
 2. the `requestId` is in `pendingRequests`: pending;
 3. otherwise: expired, and the card tells the user to ask the agent again.
 
 The client that answered uses its own `secret.provide` / `secret.dismiss` result
-immediately.
+immediately, so its card also leaves at once.
 
 ### Verification requirements
 
