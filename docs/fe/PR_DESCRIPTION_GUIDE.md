@@ -6,6 +6,7 @@ those two facts. Do not write it.
 
 The cloudlands-fe
 [`pr-description` skill](../../packages/cloudlands-fe/.agents/skills/pr-description/SKILL.md)
+([on GitHub](https://github.com/intent-hq/cloudlands-fe/blob/main/.agents/skills/pr-description/SKILL.md))
 gives agents the same rules. Change the two files together.
 
 ## Title

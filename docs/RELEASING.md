@@ -574,13 +574,15 @@ twice.
 The sitter (`crates/intentd-sitter`, installed as `intentd`) is `dist = false`: the
 daemon's cargo-dist pipeline (`release.yml`) never builds it and release-plz never tags
 it. It ships through its own hand-written pipeline,
-[`release-sitter.yml`](../packages/intentd/.github/workflows/release-sitter.yml),
+[`release-sitter.yml`](../packages/intentd/.github/workflows/release-sitter.yml)
+([on GitHub](https://github.com/intent-hq/intentd/blob/main/.github/workflows/release-sitter.yml)),
 triggered by pushing a `sitter-vX.Y.Z` tag.
 
 - **Versioning** — the sitter keeps an independent `0.1.x` line. release-plz advances
   `crates/intentd-sitter/Cargo.toml` in the ordinary intentd Release PR whenever files
   under `crates/intentd-sitter` changed since the last daemon tag (see the
-  `intentd-sitter` entry in [`release-plz.toml`](../packages/intentd/release-plz.toml)),
+  `intentd-sitter` entry in [`release-plz.toml`](../packages/intentd/release-plz.toml)
+  ([on GitHub](https://github.com/intent-hq/intentd/blob/main/release-plz.toml))),
   so no manual bump is needed for crate changes. The repo-root `scripts/install.sh` /
   `scripts/install.ps1` (republished on `sitter-latest`) are outside the crate and NOT
   detected: an installer-script-only change needs a manual

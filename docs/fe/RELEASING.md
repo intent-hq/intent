@@ -413,4 +413,4 @@ For the full release history and changelogs, see:
 
 - [cloudlands-releases repository](https://github.com/intent-hq/cloudlands-releases/releases)
 - the `release-manifest.json` asset on each versioned release (records the fe tag/SHA and the pinned `intentdVersion`)
-- [CHANGELOG.md](../../packages/cloudlands-fe/CHANGELOG.md) (points to GitHub Releases for 2.x)
+- [CHANGELOG.md](../../packages/cloudlands-fe/CHANGELOG.md) ([on GitHub](https://github.com/intent-hq/cloudlands-fe/blob/main/CHANGELOG.md)) (points to GitHub Releases for 2.x)
