@@ -61,6 +61,15 @@ presence-detected `goalSetBy: { principalId, displayName, login }` rides `AgentL
 `Workspace.memberCount > 1`. Store migration adds `agent_session.goal_set_by`. Daemons
 without it omit the field, and clients show no attribution.
 
+Also within 18.1 (additive row field and event field, no capability change):
+**persisted secret-request resolutions** ([§5.56](./methods/secrets.md#agent-notices)).
+Answering a secret card persists `requestId -> "provided" | "declined"` in session
+metadata (capped at 100, oldest evicted), served as `AgentLite`
+`metadata.secretRequestResolutions?` on `agent.get` only and pushed as
+`agent:updated { agentId, secretRequestResolutions }`. Secret notices are no longer
+merged with the same user's queued messages. No store migration. Daemons without it
+omit the field, and clients fall back to the transcript notice.
+
 **Version 18.0 — guided Antigravity setup retirement (breaking).**
 Antigravity now runs the user's `agy` CLI as `agy acp` (agy 1.5.0 or later;
 [intent-hq/intentd#3267](https://github.com/intent-hq/intentd/pull/3267)). The fast-path

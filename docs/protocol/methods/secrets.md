@@ -275,13 +275,28 @@ agent starts a turn; a busy agent queues it like a question answer):
 | Provided | The user provided secret OPENROUTER_API_KEY. Use it with ws.host.exec and secretEnv: ["OPENROUTER_API_KEY"]. | `{ type: "secret_provided", source: "system", requestId, name }` |
 | Declined | The user declined to provide secret OPENROUTER_API_KEY. | `{ type: "secret_declined", source: "system", requestId, name }` |
 
-The daemon remembers each answered request's outcome in memory
+A notice is never merged with another queued message, even one the same user
+sent: each stays its own row, so neither row's metadata hides the other's.
+
+**Persisted resolutions.** Answering a request also persists its outcome (never
+the value) in the agent's session metadata as `secretRequestResolutions`:
+`requestId -> "provided" | "declined"`, capped at 100 entries with the oldest
+evicted. The daemon writes it before it delivers the notice, then emits
+`agent:updated` with `{ agentId, secretRequestResolutions }` (the whole map). It
+is served on `AgentLite` `metadata.secretRequestResolutions?` from `agent.get`
+only (detail-only, stripped from `agent.list` rows; omitted when empty), and
+the reader keeps only the two known outcomes. It survives restarts, so a client
+can settle a card even when the notice row is not in the loaded transcript.
+
+The daemon also remembers each answered request's outcome in memory
 (`answeredRequests`, until restart), so a client can show the right state while
 the notice is still queued behind a busy turn. Clients derive a card's state in
 this order:
 
-1. a user row tagged with the card's `requestId`, or a matching
-   `answeredRequests` entry: provided or declined;
+1. the card's `requestId` is in `secretRequestResolutions`, a user row is tagged
+   with it (including a `mergedMessageMetadata` contribution an older daemon
+   merged into a queued message), or a matching `answeredRequests` entry:
+   provided or declined;
 2. the `requestId` is in `pendingRequests`: pending;
 3. otherwise: expired, and the card tells the user to ask the agent again.
 
