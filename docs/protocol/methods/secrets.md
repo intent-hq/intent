@@ -42,7 +42,8 @@ can still dismiss or forget; they never create a request.
 Secret values live **only in intentd process memory**. They are never written
 to SQLite, the secret store file, settings, logs, tracing, Sentry, events, the
 transcript, or any agent-facing result. Values are wiped from memory when
-dropped.
+dropped. Only each answer's outcome (`secretRequestResolutions`, see
+[Agent notices](#agent-notices)) is persisted, never a value.
 
 A secret is owned by the **agent that requested it**, keyed by
 `(workspaceId, agentId, name)`. No other agent can use, list or forget it,
@@ -275,18 +276,41 @@ agent starts a turn; a busy agent queues it like a question answer):
 | Provided | The user provided secret OPENROUTER_API_KEY. Use it with ws.host.exec and secretEnv: ["OPENROUTER_API_KEY"]. | `{ type: "secret_provided", source: "system", requestId, name }` |
 | Declined | The user declined to provide secret OPENROUTER_API_KEY. | `{ type: "secret_declined", source: "system", requestId, name }` |
 
-The daemon remembers each answered request's outcome in memory
+A notice is never merged with another queued message, even one the same user
+sent: each stays its own row, so neither row's metadata hides the other's.
+
+**Persisted resolutions.** Answering a request also attempts to persist its
+outcome (never the value) in the agent's session metadata as
+`secretRequestResolutions`: `requestId -> "provided" | "declined"`, capped at 100
+entries with the oldest evicted. The daemon attempts the write before it delivers
+the notice and, only after a successful write, emits `agent:updated` with
+`{ agentId, secretRequestResolutions }` (the whole map). It is served on
+`AgentLite` `metadata.secretRequestResolutions?` from `agent.get` only
+(detail-only, stripped from `agent.list` rows; omitted when empty), and the
+reader keeps only the two known outcomes. A persisted entry survives restarts,
+so a client can settle a card even when the notice row is not in the loaded
+transcript.
+
+Persistence is fail-soft: if reading the session or writing the map fails, the
+daemon logs it, emits no map update, and still delivers the notice and returns
+`ok: true`. A successful `secret.provide` / `secret.dismiss` is therefore not a
+durable-write acknowledgment. In that case the card settles only from the notice
+row or the in-memory `answeredRequests`, with no restart guarantee.
+
+The daemon also remembers each answered request's outcome in memory
 (`answeredRequests`, until restart), so a client can show the right state while
 the notice is still queued behind a busy turn. Clients derive a card's state in
 this order:
 
-1. a user row tagged with the card's `requestId`, or a matching
-   `answeredRequests` entry: provided or declined;
+1. the card's `requestId` is in `secretRequestResolutions`, a user row is tagged
+   with it (including any `mergedMessageMetadata` contribution an older daemon
+   merged into a queued message), or a matching `answeredRequests` entry:
+   answered, and the client removes the card;
 2. the `requestId` is in `pendingRequests`: pending;
 3. otherwise: expired, and the card tells the user to ask the agent again.
 
 The client that answered uses its own `secret.provide` / `secret.dismiss` result
-immediately.
+immediately, so its card also leaves at once.
 
 ### Verification requirements
 
