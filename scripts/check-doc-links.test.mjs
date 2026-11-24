@@ -484,3 +484,110 @@ test('reports an encoded hash in a missing path as a missing path', async (t) =>
   assert.equal(failure.resolved, 'docs/notes#v2.md');
   assert.equal(failure.anchor, undefined);
 });
+
+// Incident: intent-hq/intent#10040 — monorepo links into packages/cloudlands-fe render
+// on GitHub as intent-hq/intent blobs and 404, so each needs a component GitHub link.
+const PRODUCT_MODULE = '[submodule "packages/product"]\n\tpath = packages/product\n\turl = https://github.com/acme/product.git\n';
+const PRODUCT_FILES = {
+  '.gitmodules': PRODUCT_MODULE,
+  'packages/product/.git': 'gitdir: elsewhere',
+  'packages/product/AGENTS.md': '# Setup\n',
+  'packages/product/docs/guide.md': '# Guide\n',
+};
+
+test('requires a GitHub link after a monorepo link into a submodule', async (t) => {
+  const root = await fixture(t, {
+    ...PRODUCT_FILES,
+    'AGENTS.md': 'See [setup](packages/product/AGENTS.md#setup) for detail.\n',
+    'docs/guide.md': 'Read [the guide](../packages/product/docs/guide.md).\n',
+  });
+  assert.deepEqual(await inspectRepository(root), {
+    failures: [
+      {
+        source: 'AGENTS.md',
+        line: 1,
+        target: 'packages/product/AGENTS.md#setup',
+        github: 'https://github.com/acme/product/blob/main/AGENTS.md#setup',
+      },
+      {
+        source: 'docs/guide.md',
+        line: 1,
+        target: '../packages/product/docs/guide.md',
+        github: 'https://github.com/acme/product/blob/main/docs/guide.md',
+      },
+    ],
+    skipped: 0,
+  });
+});
+
+test('accepts a matching GitHub link right after a submodule link', async (t) => {
+  const root = await fixture(t, {
+    ...PRODUCT_FILES,
+    'AGENTS.md': [
+      'See [setup](packages/product/AGENTS.md#setup)',
+      '([on GitHub](https://github.com/acme/product/blob/main/AGENTS.md#setup)) and',
+      '[docs](packages/product/docs) ([on GitHub](https://github.com/Acme/Product/tree/0123abc/docs/)).',
+    ].join('\n'),
+    'docs/fe/guide.md': '- [guide](../../packages/product/docs/guide.md) [on GitHub](<https://github.com/acme/product/blob/main/docs/guide.md>) (notes)\n',
+  });
+  assert.deepEqual(await inspectRepository(root), { failures: [], skipped: 0 });
+});
+
+test('rejects a GitHub link to another path, anchor or repository', async (t) => {
+  const root = await fixture(t, {
+    ...PRODUCT_FILES,
+    'docs/guide.md': [
+      '[a](../packages/product/AGENTS.md) ([on GitHub](https://github.com/acme/product/blob/main/README.md))',
+      '[b](../packages/product/AGENTS.md#setup) ([on GitHub](https://github.com/acme/product/blob/main/AGENTS.md#other))',
+      '[c](../packages/product/AGENTS.md) ([on GitHub](https://github.com/acme/intent/blob/main/packages/product/AGENTS.md))',
+      '[d](../packages/product/AGENTS.md) and later ([on GitHub](https://github.com/acme/product/blob/main/AGENTS.md))',
+    ].join('\n'),
+  });
+  const { failures } = await inspectRepository(root);
+  assert.deepEqual(
+    failures.map((failure) => `${failure.line}:${failure.github}`),
+    [
+      '1:https://github.com/acme/product/blob/main/AGENTS.md',
+      '2:https://github.com/acme/product/blob/main/AGENTS.md#setup',
+      '3:https://github.com/acme/product/blob/main/AGENTS.md',
+      '4:https://github.com/acme/product/blob/main/AGENTS.md',
+    ],
+  );
+});
+
+test('does not require GitHub links for example links or links inside a submodule', async (t) => {
+  const root = await fixture(t, {
+    ...PRODUCT_FILES,
+    'docs/guide.md': [
+      '```md',
+      '[fenced](../packages/product/AGENTS.md)',
+      '```',
+      '`[inline](../packages/product/AGENTS.md)`',
+      '<!-- [comment](../packages/product/AGENTS.md) -->',
+      '[same file](#guide) [monorepo](../AGENTS.md)',
+      '# Guide',
+    ].join('\n'),
+    'AGENTS.md': '',
+    'packages/product/AGENTS.md': '# Setup\n[own guide](docs/guide.md)\n',
+  });
+  assert.deepEqual(await inspectRepository(root), { failures: [], skipped: 0 });
+});
+
+test('requires GitHub links into a submodule that is absent from the checkout', async (t) => {
+  const root = await fixture(
+    t,
+    { '.gitmodules': PRODUCT_MODULE, 'docs/guide.md': '[source](../packages/product/src/main.js)' },
+    ['packages/product'],
+  );
+  assert.deepEqual(await inspectRepository(root), {
+    failures: [
+      {
+        source: 'docs/guide.md',
+        line: 1,
+        target: '../packages/product/src/main.js',
+        github: 'https://github.com/acme/product/blob/main/src/main.js',
+      },
+    ],
+    skipped: 1,
+  });
+});

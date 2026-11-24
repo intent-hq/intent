@@ -24,6 +24,12 @@
 // count. Example links inside code or HTML comments, anchors GitHub generates at runtime
 // (comment and review anchors, `L12` line anchors), and anchors on other file types are
 // not checked.
+//
+// GitHub renders a monorepo link into a submodule as a parent-repository blob, which
+// 404s (intent-hq/intent#10040). So a Markdown link in a monorepo-owned file whose
+// target is inside a submodule with a GitHub `url` must be followed directly (only
+// whitespace and an optional `(` between) by a link to the same path and anchor in the
+// component repository: `[x](packages/c/a.md#s) ([on GitHub](https://github.com/o/c/blob/main/a.md#s))`.
 
 import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
@@ -33,6 +39,9 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 const MARKDOWN_LINK = /\[[^\]]*\]\(\s*(<?[^\s)>]+>?)/g;
+const LINK_END = /^(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/;
+const GITHUB_REMOTE = /^(?:https:\/\/github\.com\/|git@github\.com:)([^/]+\/[^/]+?)(?:\.git)?\/?$/i;
+const GITHUB_URL = /^https:\/\/github\.com\/([^/]+\/[^/#?]+)(?:\/(?:blob|tree)\/[^/#?]+(\/[^#?]*)?)?\/?(?:\?[^#]*)?(?:#(.*))?$/i;
 const REPO_PATH = /`((docs|scripts|\.github|packages)\/[A-Za-z0-9._/-]+)`/g;
 const RUNTIME_ANCHOR = /^(?:issuecomment-|discussion_r|discussioncomment-|pullrequestreview-|L\d+(?:-L\d+)?$)/;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
@@ -122,6 +131,7 @@ async function submodules(root) {
       path: resolved,
       initialized: Boolean(await statOf(path.join(resolved, '.git'))),
       optIn: setting('update') === 'none',
+      github: setting('url')?.match(GITHUB_REMOTE)?.[1] ?? null,
     });
   }
   return modules;
@@ -274,6 +284,54 @@ function cleanTarget(raw) {
   }
 }
 
+function decoded(text) {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
+}
+
+// Whether `raw` (the link right after a submodule link) is the GitHub link for `expected`.
+function isGitHubPair(raw, expected) {
+  const match = unwrapTarget(raw).match(GITHUB_URL);
+  if (!match || match[1].toLowerCase() !== expected.repo.toLowerCase()) return false;
+  const linkedPath = decoded(match[2] ?? '').replace(/^\/+|\/+$/g, '');
+  const linkedAnchor = match[3] === undefined ? null : decoded(match[3]);
+  return linkedPath === expected.path && linkedAnchor === expected.anchor;
+}
+
+// Submodule links in a monorepo-owned file that lack a following component GitHub link.
+function missingGitHubPairs(content, source, modules, isExample) {
+  const links = [];
+  for (const match of content.matchAll(MARKDOWN_LINK)) {
+    const end = content.slice(match.index + match[0].length).match(LINK_END);
+    if (!end || isExample(match.index)) continue;
+    links.push({ raw: match[1], start: match.index, end: match.index + match[0].length + end[0].length });
+  }
+  const missing = [];
+  links.forEach((link, index) => {
+    if (!isLocalLink(link.raw)) return;
+    const target = cleanTarget(link.raw);
+    if (target === '') return;
+    const resolved = path.resolve(path.dirname(source), target);
+    const module = modules.find((entry) => entry.github && isWithin(resolved, entry.path));
+    if (!module) return;
+    const expected = {
+      repo: module.github,
+      path: path.relative(module.path, resolved).split(path.sep).join('/'),
+      anchor: anchorOf(link.raw),
+    };
+    const next = links[index + 1];
+    if (next && /^\s*\(?$/.test(content.slice(link.end, next.start)) && isGitHubPair(next.raw, expected)) return;
+    const suffix = expected.path ? `/blob/main/${expected.path}` : '';
+    const unwrapped = unwrapTarget(link.raw);
+    const anchor = expected.anchor === null ? '' : unwrapped.slice(unwrapped.indexOf('#'));
+    missing.push({ index: link.start, target: link.raw, github: `https://github.com/${expected.repo}${suffix}${anchor}` });
+  });
+  return missing;
+}
+
 function lineAt(content, index) {
   return content.slice(0, index).split('\n').length;
 }
@@ -388,6 +446,10 @@ export async function inspectRepository(root) {
       });
     }
 
+    const pairFailures = modules.some((module) => isWithin(source, module.path))
+      ? []
+      : missingGitHubPairs(content, source, modules, isExample);
+
     for (const reference of references) {
       const resolved = uniquePaths(reference.bases.map((base) => path.resolve(base, reference.target)));
       const insideRoot = resolved.filter((candidate) => isWithin(candidate, root));
@@ -425,6 +487,9 @@ export async function inspectRepository(root) {
         resolved: path.relative(root, insideRoot[0] ?? resolved[0]),
       });
     }
+    for (const missing of pairFailures) {
+      failures.push({ source: path.relative(root, source), line: lineAt(content, missing.index), target: missing.target, github: missing.github });
+    }
   }
   return { failures, skipped };
 }
@@ -441,9 +506,11 @@ async function main() {
     return;
   }
   for (const failure of failures) {
-    const detail = failure.anchor
-      ? `missing heading #${failure.anchor} in ${failure.resolved}`
-      : `missing ${failure.target} (${failure.resolved})`;
+    const detail = failure.github
+      ? `${failure.target} points into a submodule, which GitHub cannot render; follow it with ([on GitHub](${failure.github}))`
+      : failure.anchor
+        ? `missing heading #${failure.anchor} in ${failure.resolved}`
+        : `missing ${failure.target} (${failure.resolved})`;
     console.error(`${failure.source}:${failure.line}: ${detail}`);
   }
   if (skipped > 0) console.log(`Skipped ${skipped} unverifiable reference${skipped === 1 ? '' : 's'}.`);
