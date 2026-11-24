@@ -79,6 +79,7 @@ adapt Electron-shaped channels, but must not become alternate business workflows
 
 ## Companion docs
 
-Use [`src/store/renderer/docs/readme.md`](../../packages/cloudlands-fe/src/store/renderer/docs/readme.md) as the
+Use [`src/store/renderer/docs/readme.md`](../../packages/cloudlands-fe/src/store/renderer/docs/readme.md)
+([on GitHub](https://github.com/intent-hq/cloudlands-fe/blob/main/src/store/renderer/docs/readme.md)) as the
 index for retained app-specific Redux notes. Those docs are concise companions;
 use the skills above for current API and architecture rules.

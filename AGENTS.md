@@ -5,6 +5,7 @@ Instructions for AI agents working in this monorepo.
 **Assistant app guide:** When adding, changing, moving, renaming, or removing a
 user-facing feature, or changing its readiness, update the affected section of
 [`packages/intentd/crates/intent-services/resources/assistant-app-guide.md`](packages/intentd/crates/intent-services/resources/assistant-app-guide.md)
+([on GitHub](https://github.com/intent-hq/intentd/blob/main/crates/intent-services/resources/assistant-app-guide.md))
 in the same change; for frontend-only work, the intentd guide PR merges after the frontend PR; for a
 cross-component feature, put the guide text in the intentd PR and say what apps without the feature
 do (intentd#3683: apps without goal controls send `/goal` as text), or merge the guide PR after the
@@ -127,6 +128,7 @@ unauthenticated daemon API and is safe only through the client's authenticated t
 Remote browser sandboxes cannot exercise Electron main/preload, native dialogs, window
 management, or `workspace-file://` media; verify those in an Electron build. See the
 [frontend recipes](packages/cloudlands-fe/AGENTS.md#dogfooding-a-dev-fe-against-a-daemon)
+([on GitHub](https://github.com/intent-hq/cloudlands-fe/blob/main/AGENTS.md#dogfooding-a-dev-fe-against-a-daemon))
 and [sandbox internals](docs/fe/DEVELOPER_GUIDE.md#remote-sandbox-internals) for detail.
 
 ## Commit & PR Workflow
