@@ -279,15 +279,23 @@ agent starts a turn; a busy agent queues it like a question answer):
 A notice is never merged with another queued message, even one the same user
 sent: each stays its own row, so neither row's metadata hides the other's.
 
-**Persisted resolutions.** Answering a request also persists its outcome (never
-the value) in the agent's session metadata as `secretRequestResolutions`:
-`requestId -> "provided" | "declined"`, capped at 100 entries with the oldest
-evicted. The daemon writes it before it delivers the notice, then emits
-`agent:updated` with `{ agentId, secretRequestResolutions }` (the whole map). It
-is served on `AgentLite` `metadata.secretRequestResolutions?` from `agent.get`
-only (detail-only, stripped from `agent.list` rows; omitted when empty), and
-the reader keeps only the two known outcomes. It survives restarts, so a client
-can settle a card even when the notice row is not in the loaded transcript.
+**Persisted resolutions.** Answering a request also attempts to persist its
+outcome (never the value) in the agent's session metadata as
+`secretRequestResolutions`: `requestId -> "provided" | "declined"`, capped at 100
+entries with the oldest evicted. The daemon attempts the write before it delivers
+the notice and, only after a successful write, emits `agent:updated` with
+`{ agentId, secretRequestResolutions }` (the whole map). It is served on
+`AgentLite` `metadata.secretRequestResolutions?` from `agent.get` only
+(detail-only, stripped from `agent.list` rows; omitted when empty), and the
+reader keeps only the two known outcomes. A persisted entry survives restarts,
+so a client can settle a card even when the notice row is not in the loaded
+transcript.
+
+Persistence is fail-soft: if reading the session or writing the map fails, the
+daemon logs it, emits no map update, and still delivers the notice and returns
+`ok: true`. A successful `secret.provide` / `secret.dismiss` is therefore not a
+durable-write acknowledgment. In that case the card settles only from the notice
+row or the in-memory `answeredRequests`, with no restart guarantee.
 
 The daemon also remembers each answered request's outcome in memory
 (`answeredRequests`, until restart), so a client can show the right state while
