@@ -9,7 +9,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { checkRepository, findInputs, headingAnchors, headingSlug, inspectRepository } from './check-doc-links.mjs';
+import { checkRepository, findInputs, githubRepository, headingAnchors, headingSlug, inspectRepository } from './check-doc-links.mjs';
 
 async function fixture(t, files, directories = []) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'check-doc-links-'));
@@ -39,6 +39,7 @@ test('finds only the configured agent-facing Markdown inputs', async (t) => {
   assert.deepEqual(inputs, [
     'AGENTS.md',
     'CONTRIBUTING.md',
+    'README.md',
     'docs/guide.md',
     'docs/nested/detail.md',
     'packages/present/AGENTS.md',
@@ -590,4 +591,58 @@ test('requires GitHub links into a submodule that is absent from the checkout', 
     ],
     skipped: 1,
   });
+});
+
+test('resolves submodule links like the existence check and GitHub do', async (t) => {
+  const root = await fixture(t, {
+    ...PRODUCT_FILES,
+    'README.md': '[root](packages/product) [encoded](packages/product/notes%23v2.md)\n',
+    'docs/guide.md': '[root-relative](packages/product/AGENTS.md) [absolute](/packages/product/AGENTS.md)\n',
+    'packages/product/notes#v2.md': '',
+  });
+  const { failures } = await inspectRepository(root);
+  assert.deepEqual(
+    failures.filter((failure) => failure.github).map((failure) => `${failure.source}:${failure.github}`),
+    [
+      'README.md:https://github.com/acme/product',
+      'README.md:https://github.com/acme/product/blob/main/notes%23v2.md',
+      'docs/guide.md:https://github.com/acme/product/blob/main/AGENTS.md',
+      'docs/guide.md:https://github.com/acme/product/blob/main/AGENTS.md',
+    ],
+  );
+});
+
+test('requires GitHub links into update = none and ssh-url submodules', async (t) => {
+  const root = await fixture(
+    t,
+    {
+      '.gitmodules':
+        '[submodule "packages/private"]\n\tpath = packages/private\n\turl = git@github.com:acme/private.git\n\tupdate = none\n' +
+        '[submodule "packages/ssh"]\n\tpath = packages/ssh\n\turl = ssh://git@github.com/acme/ssh\n',
+      'docs/guide.md': [
+        '[private](../packages/private/AGENTS.md#setup) ([on GitHub](https://github.com/acme/private/blob/main/AGENTS.md#setup))',
+        '[ssh](../packages/ssh/src/a.rs?plain=1#L12) ([on GitHub](https://github.com/acme/ssh/blob/main/src/a.rs?plain=1#L12))',
+        '[unpaired](../packages/private/AGENTS.md)',
+      ].join('\n'),
+    },
+    ['packages/private', 'packages/ssh'],
+  );
+  assert.deepEqual(await inspectRepository(root), {
+    failures: [
+      {
+        source: 'docs/guide.md',
+        line: 3,
+        target: '../packages/private/AGENTS.md',
+        github: 'https://github.com/acme/private/blob/main/AGENTS.md',
+      },
+    ],
+    skipped: 3,
+  });
+});
+
+test('every repository submodule has a github.com url for the GitHub link rule', async () => {
+  const gitmodules = await fs.readFile(path.join(REPO, '.gitmodules'), 'utf8');
+  const urls = [...gitmodules.matchAll(/^\s*url\s*=\s*(.+?)\s*$/gm)].map((match) => match[1]);
+  assert.ok(urls.length > 0, '.gitmodules declares submodule urls');
+  for (const url of urls) assert.ok(githubRepository(url), `${url} is a github.com url`);
 });

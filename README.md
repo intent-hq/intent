@@ -174,6 +174,7 @@ llvm-tools-preview component; `make doctor` reports them as an `[optional]` row,
 Developing from a remote daemon host? Start with the one-screen
 [agent loop](AGENTS.md#developing-on-a-remote-host); use the
 [frontend recipes](packages/cloudlands-fe/AGENTS.md#dogfooding-a-dev-fe-against-a-daemon)
+([on GitHub](https://github.com/intent-hq/cloudlands-fe/blob/main/AGENTS.md#dogfooding-a-dev-fe-against-a-daemon))
 and [sandbox internals](docs/fe/DEVELOPER_GUIDE.md#remote-sandbox-internals) only when you
 need component or implementation detail.
 
