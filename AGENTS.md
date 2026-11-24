@@ -127,6 +127,7 @@ unauthenticated daemon API and is safe only through the client's authenticated t
 Remote browser sandboxes cannot exercise Electron main/preload, native dialogs, window
 management, or `workspace-file://` media; verify those in an Electron build. See the
 [frontend recipes](packages/cloudlands-fe/AGENTS.md#dogfooding-a-dev-fe-against-a-daemon)
+([on GitHub](https://github.com/intent-hq/cloudlands-fe/blob/main/AGENTS.md#dogfooding-a-dev-fe-against-a-daemon))
 and [sandbox internals](docs/fe/DEVELOPER_GUIDE.md#remote-sandbox-internals) for detail.
 
 ## Commit & PR Workflow
