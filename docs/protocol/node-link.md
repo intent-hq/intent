@@ -4986,8 +4986,8 @@ spawning. They never create workspace or agent rows in the machine's store.
   and either `runningAgents >= agentCap`, or `chargedMemoryBytes >=
   memoryBudgetBytes` while `runningAgents > 0` and `hostMemoryShort` is not
   `false` (the machine's budget denies only when its host is short and an
-  agent is running; an older machine omits both fields and is read as
-  before). A launch the limits deny at the machine anyway
+  agent is running; an older machine omits both fields, so nothing is
+  reclaimable and its budget is read as binding). A launch the limits deny at the machine anyway
   (capacity changed since the report, or nothing idle could be taken back) is
   refused at once, as below. Both fields are optional and additive (no
   nodeProtocol version).
