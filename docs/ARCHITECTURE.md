@@ -1373,7 +1373,8 @@ Limits:
 ### Event seq cursor
 
 1. `EventSeq = u64` is a durable event's per-tenant log position. It is never
-   0 and increases in commit order.
+   0. On Postgres it strictly increases in commit order; on SQLite see the
+   first limit.
 2. `Store::insert_event_seq` and `Store::insert_events_seq` return each event
    with its seq. `insert_event(s)` delegate to them with the old signatures.
 3. `Store::events_after(after, limit)` reads events with seq greater than
@@ -1384,9 +1385,12 @@ Limits:
 
 Limits:
 
-1. **SQLite seq is per-process only.** A `rowid` can be reused after the
-   newest event row is deleted, and a full `VACUUM` can renumber rows. Do not
-   keep a SQLite cursor across restarts.
+1. **A SQLite seq is not a safe cursor on its own.** SQLite reuses a deleted
+   maximum `rowid`, even within one process: retention deletes by timestamp
+   and can remove the newest row, and the next insert takes its seq again. A
+   consumer at that cursor then skips the new event. A SQLite cursor is safe
+   only while nothing deletes the newest row between reads; a full `VACUUM`
+   can also renumber rows. A durable cursor needs an `AUTOINCREMENT` seq.
 2. **Postgres seqs have gaps.** All tables of a tenant share `row_seq`. Treat a
    gap as normal. Do not detect loss by checking for seq + 1.
 3. The bus does not call `insert_events_seq` yet. No seq reaches the wire.
@@ -1435,7 +1439,9 @@ through owner-only handles.
 Limits:
 
 1. Only the token-usage scan uses work claims. The other 23 loops still need
-   the tenant lease.
+   the tenant lease. The scan's writes still go through `begin_write`, so
+   they still pass today's tenant-owner fence; a claim that is fenced on its
+   own belongs to the request write role (see the design below).
 2. A claim is void after a tenant epoch bump.
 3. An `Err` on renew keeps the claim and skips the tick. No test injects this
    error.
@@ -1630,7 +1636,7 @@ writer-lock value (`partial` or `no`; none is `covered`).
 | | `settings_secret_gates` | no | version CAS on the `TenantSecrets` row |
 | | `human_instruction_authority` | no | version CAS (admission records the authority version) |
 | | `identity_transition` | partial | row lock on the identity row, shared by invite minting |
-| | `group_persist_lane` | no | row lock on the `delegation_group` row, so writes apply in enqueue order across processes |
+| | `group_persist_lane` | no | stays owner-only until an ordered design lands: a row lock alone does not keep enqueue order (a delayed upsert can recreate a settled group). Target: a versioned upsert plus a terminal settled state that refuses later upserts |
 | Quota (count, then insert) | `pr_monitor_registration` | partial | row lock on a per-owner counter row |
 | | `invite_nonce_permits` | no | row lock on a per-tenant counter row |
 | Dedupe and idempotency | `dismissal_notices_sent` | no | unique key (`INSERT ... ON CONFLICT DO NOTHING`) |
