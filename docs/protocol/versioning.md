@@ -2661,6 +2661,16 @@ deadline (a crash in the instant between claiming the deadline and starting the 
 `*.cancelDelete` removes the stored deadline. Payloads, events and `pendingDeleteAt` are
 unchanged.
 
+Also within 13.0 (additive, no capability or nodeProtocol): **remote launches take back
+idle local agents** ([capacity and permission](./node-link.md#capacity-and-permission)).
+A machine at its process cap or memory budget now takes back its idle local agents'
+processes before it refuses a remote launch, as a local spawn already did. The
+[capabilities report](./node-link.md#capabilities-report)'s `capacity` gains optional
+`reclaimableAgents` and `hostMemoryShort`, and the backend no longer pre-refuses a machine
+that has idle local agents, or whose budget is over while its host still has headroom. The
+machine also pushes its report when that answer changes. Older machines omit both fields
+and are read as before. No frame, method, event or error code changes.
+
 ### Compatibility Policy
 
 - **Additive changes** (new methods, new optional fields, new event types) bump the **minor** version (e.g., 2.0 → 2.1).

@@ -813,5 +813,6 @@ them from the file.
 
 There is no remote-agent cap. Remote agents count against the machine's
 existing `agents.maxConcurrent` process cap and `agents.memoryBudgetMb`
-aggregate budget, shared with local agents; a launch those limits would deny is
-refused with `no-capacity`, never queued.
+aggregate budget, shared with local agents. A launch those limits would deny
+first takes back idle local agents' processes, as a local spawn does; one still
+denied is refused with `no-capacity`, never queued.

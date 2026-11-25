@@ -4862,6 +4862,8 @@ interface MachineCapabilities {
     agentCap: number;            // effective agents.maxConcurrent
     chargedMemoryBytes: number;  // aggregate memory charged to running agents
     memoryBudgetBytes?: number;  // effective agents.memoryBudgetMb in bytes; absent when unlimited
+    reclaimableAgents?: number;  // idle local agents the machine may take back before refusing; 0 while a local spawn is queued; absent = 0
+    hostMemoryShort?: boolean;   // host available memory below the machine's reserve; absent from older machines
   };
   resources?: {                  // the whole host, not only agents; absent from older machines
     cpuPercent?: number;         // integer 0-100: CPU use across all cores, smoothed over the last few seconds; absent until a second sample
@@ -4922,8 +4924,9 @@ interface MachineCapabilities {
 - **Load pushed on change.** The machine checks `capacity.runningAgents` and
   samples `resources` every 2 seconds while any backend link is live. When the
   count differs from the one it last reported (an agent of any backend, or a
-  local one, started or stopped), it sends an unsolicited `capabilitiesReply`
-  on every live backend link. A burst of starts and stops therefore costs at
+  local one, started or stopped), or when whether `capacity` would refuse a
+  launch (see [Capacity and permission](#capacity-and-permission)) changed, it
+  sends an unsolicited `capabilitiesReply` on every live backend link. A burst of starts and stops therefore costs at
   most one push per 2 seconds, and every backend sees the machine-wide count
   within about 2 seconds. A change of `resources` alone pushes only when
   `cpuPercent` or the memory in use (as a percentage of the total) moved by 5
@@ -4968,10 +4971,26 @@ spawning. They never create workspace or agent rows in the machine's store.
   machine's local agents: the process cap (`agents.maxConcurrent`) and the
   aggregate memory budget (`agents.memoryBudgetMb` with its host-reserve rule).
   There is no separate remote cap.
+- **Idle local agents make room.** When a launch passes every other check and
+  only a limit denies it, the machine takes back idle local agents' processes,
+  as a local spawn does: least recently used first for the process cap, largest
+  first for the memory budget, and agents with a running provider worker last.
+  For the budget it takes back nothing unless the idle agents together could
+  bring the charge under it. It never stops a busy agent or another backend's
+  agent, does not queue the launch, and takes back nothing while a local spawn
+  is already queued. A local agent taken back keeps its history and starts
+  again on its next message.
 - **Refused, never queued.** Backend admission checks the latest report first
   and returns `placement-unavailable` / `no-capacity` with the limit's fields
-  before creating the agent. A launch the limits deny at the machine anyway
-  (capacity changed since the report) is refused at once, as below.
+  before creating the agent. A report refuses when `reclaimableAgents` is 0
+  and either `runningAgents >= agentCap`, or `chargedMemoryBytes >=
+  memoryBudgetBytes` while `runningAgents > 0` and `hostMemoryShort` is not
+  `false` (the machine's budget denies only when its host is short and an
+  agent is running; an older machine omits both fields, so nothing is
+  reclaimable and its budget is read as binding). A launch the limits deny at the machine anyway
+  (capacity changed since the report, or nothing idle could be taken back) is
+  refused at once, as below. Both fields are optional and additive (no
+  nodeProtocol version).
 
 **Capacity refusal on the wire.** In protocol 6 the journal's `exited` body
 gains an optional structured failure next to the inherited `error` string:
