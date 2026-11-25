@@ -1469,7 +1469,11 @@ Limits:
 1. **A `settings.update` that loses the race returns `Conflict` until the
    follower poll (2 s) adopts the new revision.** There is no auto-retry.
 2. `ConfigWatcher` refuses a store-backed registry.
-3. `strip_legacy` and boot migrations do not run for store-backed registries.
+
+Boot migrations still run for a store-backed registry: `recover_tenant`
+(`intentd-orchestrator/src/serve.rs`) calls `run_boot_settings_migrations`,
+and `SettingsRegistry::strip_legacy` writes through the store backend
+(`write_document`).
 
 ### Agent queues from the store
 
