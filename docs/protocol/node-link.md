@@ -4873,6 +4873,7 @@ interface MachineCapabilities {
     visible: boolean;
     status: "signed-in" | "signed-out" | "unknown" | "auth-failed" | "cli-missing" | "prerequisite-missing";
     models: string[];
+    modelLabels?: Record<string, string>;  // display names by model id; absent from older machines and when no model has a distinct name
     modelsStale: boolean;
   }[];
   disabledProviders?: string[];  // provider ids switched off in the machine's own providers.enabled; absent from older machines
