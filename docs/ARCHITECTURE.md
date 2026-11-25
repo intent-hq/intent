@@ -1343,10 +1343,10 @@ Nothing here runs more than one process per tenant yet. The desktop daemon
 |---|---|---|
 | Event fabric | [intentd#3783](https://github.com/intent-hq/intentd/pull/3783) | `intent-services/src/events/bus/fabric.rs`, `events/bus.rs` |
 | Event seq cursor | [intentd#3778](https://github.com/intent-hq/intentd/pull/3778) | `intent-store/src/event_repo.rs`, `postgres/events.rs` |
-| State inventory and guard | [intentd#3781](https://github.com/intent-hq/intentd/pull/3781) | `intent-services/state-inventory.toml`, `tests/services_state_inventory_lint.rs` |
+| Process-local state snapshot | none (docs only) | [orchestrator-state-snapshot.md](./orchestrator-state-snapshot.md) |
 | Work claims | [intentd#3779](https://github.com/intent-hq/intentd/pull/3779) | `intent-store/src/work_claim_repo.rs`, `postgres/work_claims.rs`, `intent-services/src/work_claims.rs` |
 | Settings and GitLab pair in the store | [intentd#3780](https://github.com/intent-hq/intentd/pull/3780) | `intent-services/src/settings_registry.rs`, `settings_store_follower.rs`, `intent-store/src/postgres/tenant_config.rs` |
-| Agent queues from the store | [intentd#3782](https://github.com/intent-hq/intentd/pull/3782) (stacked on #3781) | `intent-store/src/agent_queue_merge.rs`, `agent_queue_repo.rs`, `intent-services/src/agent_ops.rs` |
+| Agent queues from the store | [intentd#3782](https://github.com/intent-hq/intentd/pull/3782) | `intent-store/src/agent_queue_merge.rs`, `agent_queue_repo.rs`, `intent-services/src/agent_ops.rs` |
 
 ### Event fabric
 
@@ -1391,36 +1391,28 @@ Limits:
    gap as normal. Do not detect loss by checking for seq + 1.
 3. The bus does not call `insert_events_seq` yet. No seq reaches the wire.
 
-### State inventory and CI guard
+### Process-local state snapshot
 
-1. `state-inventory.toml` has one row per `Services` field (231) and per
-   tenant restore, sweep or loop in `intent-app/src/tenant.rs` (25).
-2. Classes: `durable`, `cache`, `gate`, `volatile`, `owner`, `connection`,
-   `config`, `test`. A `gate` row names its invariant and says if the
-   Postgres tenant writer lock covers it (`covered`, `partial`, `no`).
-3. `services_state_inventory_lint.rs` fails when a field or loop is added,
-   removed or malformed. The message names the inventory file.
+[orchestrator-state-snapshot.md](./orchestrator-state-snapshot.md) classifies
+every `Services` field (231) and every tenant restore, sweep and loop in
+`intent-app/src/tenant.rs` (26), taken 2026-11-25. Classes: `owner`, `gate`,
+`volatile`, `cache`, `connection`, `config`, `test`, `durable`. A `gate` row
+names its invariant and says if the Postgres tenant writer lock covers it.
 
 | Class | Fields | Loops |
 |---|---|---|
-| cache | 25 | 1 |
-| gate | 34 (12 partial, 22 no) | 0 |
-| volatile | 47 | 0 |
-| owner | 32 | 24 |
-| connection / config / test | 8 / 36 / 49 | 0 |
+| owner | 31 | 25 |
+| gate | 35 (12 partial, 23 no) | 0 |
+| volatile | 45 | 0 |
+| cache | 26 | 1 |
+| connection / config / test | 8 / 36 / 50 | 0 |
 
-The queue branch moves `agent_queues` from `volatile` to `cache`.
-
-Limits:
-
-1. **The loop guard matches only name prefixes.** It finds calls in
-   `tenant.rs` that start with `spawn_`, `sweep_`, `rehydrate_`, `hydrate_`,
-   `heal_`, `resume_` or `refresh_`. A loop started through a helper with
-   another name is not seen.
-2. `volatile` is an eighth class for live state that is not a safe cache
-   (queues, failure streaks, device flows, upload sessions).
-3. `SqliteStore.work_claims` (from the work-claims branch) is process-local
-   and is not in the inventory.
+It is a dated snapshot, not maintained, and no CI check keeps it current: a
+guard test that failed on every new `Services` field was dropped as too
+costly (the struct changed in 29 commits over the 30 days before the
+snapshot). Re-check a row against the code before relying on it. Lasting
+protection belongs in types, for example process-local state reachable only
+through owner-only handles.
 
 ### Work claims
 
@@ -1526,17 +1518,16 @@ writes can come from any process.
 
 Inputs:
 
-1. The process-local state inventory,
-   `intent-services/state-inventory.toml` (one row per `Services` field and
-   per tenant loop; guard test `tests/services_state_inventory_lint.rs`). It
-   lists 34 `gate`, 32 `owner` and 47 `volatile` fields, and 24 `owner` loops.
+1. The [process-local state snapshot](./orchestrator-state-snapshot.md)
+   (one row per `Services` field and per tenant loop, taken 2026-11-25). It
+   lists 35 `gate`, 31 `owner` and 45 `volatile` fields, and 25 `owner` loops.
 2. Generic work claims: `Store::claim_work`, `renew_work_claim`,
    `release_work_claim` (`intent-store/src/work_claim_repo.rs`,
    `postgres/work_claims.rs`), first used by `spawn_token_usage_scan_loop`.
 3. Delivery claims: `claim_delivery` in `postgres/completion_watches.rs`
    (`ProcessToken` + tenant epoch).
 
-The inventory ([intentd#3781](https://github.com/intent-hq/intentd/pull/3781)) and work claims ([intentd#3779](https://github.com/intent-hq/intentd/pull/3779)) are in review, not on `main` yet.
+Work claims ([intentd#3779](https://github.com/intent-hq/intentd/pull/3779)) are in review, not on `main` yet.
 For all seams and their limits, see
 [Stateless orchestrator groundwork](#stateless-orchestrator-groundwork).
 
@@ -1624,8 +1615,8 @@ touches is converted, and the `volatile` state it reads is in the database.
 
 ### Gate conversion table
 
-Families group the 34 `gate` rows of the inventory. "Lock" is the inventory
-`writer_lock` value (`partial` or `no`; none is `covered`).
+Families group the 35 `gate` rows of the snapshot. "Lock" is the snapshot's
+writer-lock value (`partial` or `no`; none is `covered`).
 
 | Family | Gate | Lock | Target mechanism |
 |---|---|---|---|
@@ -1640,6 +1631,7 @@ Families group the 34 `gate` rows of the inventory. "Lock" is the inventory
 | | `settings_secret_gates` | no | version CAS on the `TenantSecrets` row |
 | | `human_instruction_authority` | no | version CAS (admission records the authority version) |
 | | `identity_transition` | partial | row lock on the identity row, shared by invite minting |
+| | `group_persist_lane` | no | row lock on the `delegation_group` row, so writes apply in enqueue order across processes |
 | Quota (count, then insert) | `pr_monitor_registration` | partial | row lock on a per-owner counter row |
 | | `invite_nonce_permits` | no | row lock on a per-tenant counter row |
 | Dedupe and idempotency | `dismissal_notices_sent` | no | unique key (`INSERT ... ON CONFLICT DO NOTHING`) |

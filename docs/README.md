@@ -8,6 +8,11 @@ Index of the `docs/` tree for the Intent monorepo.
 `intentd` Rust backend: system overview, crate layout and dependency rules,
 persistence, transports, and the ACP agent runtime.
 
+**[orchestrator-state-snapshot.md](./orchestrator-state-snapshot.md)** is a
+dated, unmaintained snapshot that classifies `intent_services::Services` state
+for running more than one orchestrator process per tenant. The design that uses
+it is in ARCHITECTURE.md, "Owner work vs request writes".
+
 ## Wire Contract — `protocol/`
 
 **[protocol/](./protocol/README.md)** is the **canonical, versioned wire contract**
