@@ -2649,6 +2649,14 @@ A note with many screenshots can therefore no longer push a turn past the provid
 every send while it is in context. Agents that relied on seeing note images automatically must now open
 them on demand. The `noteIds` param shape is unchanged.
 
+Also within 13.0 (additive response fields, presence-detected; no method-catalog change, so no
+version bump): **usage-stats activity counters** (§5.36). `stats.getUsage` gains `toolCalls`,
+`toolCallsFailed`, `totalRunMs`, `subAgentSessions`, `byDay` and `activityTrackedSince`. A daemon
+that records them always sends them; an older daemon omits them all, and clients treat that as
+unknown rather than zero. Recording starts at the upgraded daemon's first start (no backfill), and
+`activityTrackedSince` reports that local date so clients can mark earlier periods as partial.
+Existing fields and their values are unchanged.
+
 Also within 13.0 (behavior only, no method-catalog or wire-shape change, so no version
 bump — [intent-hq/intentd#3657](https://github.com/intent-hq/intentd/pull/3657)): **persisted
 delete grace deadlines in orchestrator mode** (§5.1 / §5.5). The v6.7 rule that pending
