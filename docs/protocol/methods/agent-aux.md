@@ -744,8 +744,10 @@ the current hour — unaffected by `tzOffsetMinutes` except that per-bucket hour
 rendered in local time.
 
 **UsageStats** — `{ totals: UsageTotals, runs, sessions, longestRunMs, linesAdded, linesDeleted,
-byModel: ByModelEntry[], byProvider: ByProviderEntry[], byHourOfDay: HourEntry[24],
-byMonth: MonthEntry[12], availablePeriods: { months: string[], years: string[] } }`, where
+toolCalls?, toolCallsFailed?, totalRunMs?, subAgentSessions?, byModel: ByModelEntry[],
+byProvider: ByProviderEntry[], byHourOfDay: HourEntry[24], byMonth: MonthEntry[12],
+byDay?: DayEntry[], activityTrackedSince?: string | null,
+availablePeriods: { months: string[], years: string[] } }`, where
 **UsageTotals** is the consumption counters `{ inputTokens, outputTokens, cacheReadTokens,
 cacheCreationTokens, thoughtTokens? }`:
 
@@ -777,6 +779,34 @@ cacheCreationTokens, thoughtTokens? }`:
 Empty periods return zeroed shapes — zero totals, empty `byModel` / `byProvider`, 24 zeroed
 hours, 12 zeroed months — never an error.
 
+**Activity counters** *(additive)* — four period rollups and two activity reads behind the Tool
+Calls, Agent Team and Activity Streak cards. Every daemon that knows them always sends them
+(zero when nothing was recorded); a client that receives none of them is talking to an older
+daemon and must treat them as unknown, not as zero.
+
+- **toolCalls / toolCallsFailed** — tool calls that reached a terminal status (`completed` or
+  `error`), and the subset that ended in `error`. A call counts **once**, at its first terminal
+  status: a repeated terminal update for the same tool-call id (a second `completed`, or `error`
+  then `completed`) never counts again. Calls in turns that later fail or are cancelled still
+  count; calls still open when the turn ends do not. The per-turn tally folds into the turn-end
+  bucket (one write per turn, not per call).
+- **totalRunMs** — the sum of completed prompt-turn wall-clock durations in milliseconds (the
+  additive counterpart of `longestRunMs`; same "completed turn" rule as `runs`). Parallel agents
+  add up, so this is agent time, not wall-clock time.
+- **subAgentSessions** — the subset of `sessions` created with a parent agent
+  (`parentAgentId` set at create time). Top-level agents created by another agent, and
+  background agents without a parent, count only toward `sessions`.
+- **byDay** — `{ date: "YYYY-MM-DD", runs } & UsageTotals` per local calendar day in the period,
+  sorted ascending, **only days with any recorded activity** (any counter non-zero). The local
+  date follows the same stamp / `tzOffsetMinutes` fallback rule as month grouping. Always `[]`
+  for `24h`.
+- **activityTrackedSince** — the local date (`"YYYY-MM-DD"`, under `tzOffsetMinutes`) on which
+  this daemon started recording the activity counters above, or `null` when it has not yet.
+  The daemon stores it once, as a UTC timestamp, at the first start of a daemon that records
+  them (no backfill: earlier periods read as zero). Clients use it to mark periods that began
+  before tracking as partial.
+
+
 **`thoughtTokens`** *(additive within v6.2, [intent-hq/intentd#1041](https://github.com/intent-hq/intentd/pull/1041))*
 is the cumulative reasoning ("thought") token count — the per-bucket counterpart of the
 `TokenUsageTotals.thoughtTokens` counter (§5.23) and the `RateSample.thoughtTokens` counter
@@ -801,6 +831,7 @@ may over-count reasoning slightly.
 { "jsonrpc":"2.0","id":94,"result":{
   "totals":{ "inputTokens":130,"outputTokens":45,"cacheReadTokens":0,"cacheCreationTokens":0,"thoughtTokens":25 },
   "runs":3,"sessions":1,"longestRunMs":9000,"linesAdded":10,"linesDeleted":3,
+  "toolCalls":42,"toolCallsFailed":3,"totalRunMs":21000,"subAgentSessions":0,
   "byModel":[
     { "model":"Opus 4.8","runs":2,"inputTokens":100,"outputTokens":40,"cacheReadTokens":0,"cacheCreationTokens":0,"thoughtTokens":25 },
     { "model":"Sonnet 5","runs":1,"inputTokens":30,"outputTokens":5,"cacheReadTokens":0,"cacheCreationTokens":0 } ],
@@ -809,5 +840,9 @@ may over-count reasoning slightly.
     { "provider":"unknown","runs":1,"inputTokens":30,"outputTokens":5,"cacheReadTokens":0,"cacheCreationTokens":0 } ],
   "byHourOfDay":[ { "hour":0,"inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0 }, /* … 24 entries … */ ],
   "byMonth":[ { "month":1,"inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0 }, /* … 12 entries … */ ],
+  "byDay":[
+    { "date":"2026-07-10","runs":1,"inputTokens":30,"outputTokens":5,"cacheReadTokens":0,"cacheCreationTokens":0 },
+    { "date":"2026-07-25","runs":2,"inputTokens":100,"outputTokens":40,"cacheReadTokens":0,"cacheCreationTokens":0,"thoughtTokens":25 } ],
+  "activityTrackedSince":"2026-07-01",
   "availablePeriods":{ "months":["2026-06","2026-07"],"years":["2026"] } } }
 ```
