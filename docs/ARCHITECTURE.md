@@ -1666,15 +1666,20 @@ Notes:
    `SettingsRegistry` does). The caller re-reads and retries, or reports the
    conflict.
 
-### Open questions
+### Decisions
 
-1. Work claims and delivery claims are void after a tenant epoch bump. Should
-   request replicas' claims survive an owner takeover?
-2. Moving events into the domain transaction changes the bus batching
-   writer (`intent-services/src/events/bus.rs`). Is that done per family or
-   once for all durable events?
-3. A request replica has no lease. What closes a tenant to request writes
-   (for example, retirement or a move to another shard)?
+1. **Claims survive an owner takeover.** Work claims and delivery claims
+   depend only on their own `claim_id`, `ProcessToken` and expiry (by the
+   database clock), not on the tenant epoch. A takeover does not void a
+   request process's claim.
+2. **One shared mechanism puts events in the domain transaction.** A
+   `WriteTx` method appends the event in the caller's transaction and hands
+   it to the bus after commit. Gate families adopt it one at a time; the bus
+   batching writer stays for events that have no domain row.
+3. **A tenant state on the lock row closes request writes.** `tenant_writer`
+   gets a state (`open`, `closing`, `closed`). Every writer reads it under
+   the lock it already takes and refuses when the tenant is not `open`. No
+   extra query.
 
 ## Dependency-direction rules
 
