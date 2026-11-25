@@ -47,7 +47,7 @@ agent (`userRules`, `workspaceRules`), the
 [remote agent settings](#remote-agent-settings)
 (`remoteAgents.permission`, `daemon.mode`), and opaque state
 (`quickActions.providerSettings`, `repos.known`, `workspace.changeHistory`,
-`workspaceInitializer.state`, `hardwareConsole.state`). Every other setting is `true`.
+`workspaceInitializer.state`, `hardwareConsole.state`, `providerSwitch.state`). Every other setting is `true`.
 
 - The Assistant's `ws.app.settings.propose` refuses a path unless `proposable` is `true`, and
   checks the value against the definition (type, `enumValues`, `min` / `max`; `null` only
@@ -122,7 +122,7 @@ entry) carries an additive `origin` field naming the layer the effective value c
 `"default"` (absent from the file), `"file"` (explicit in config.toml), or `"flag"` (pinned at
 boot by a startup flag / env var, e.g. `--insecure`, `INTENTD_TCP_PORT`). Secrets and the opaque
 machine-state blobs (`repos.known`, `workspace.changeHistory`, `workspaceInitializer.state`,
-`hardwareConsole.state`, `permissions.rules`, `userRules` / `workspaceRules`,
+`hardwareConsole.state`, `providerSwitch.state`, `permissions.rules`, `userRules` / `workspaceRules`,
 `endUserRules`, `voice.vocabulary`) have **no** `origin` — they never live in config.toml
 (secrets stay in `.secrets.json`, state blobs stay in SQLite).
 Successful update/reset results and `settings:changed` entries carry the post-commit
@@ -430,6 +430,7 @@ settings writes to emulate connection setup.
 - **Cross-workspace repos & history (new in intentd):** `repos.known` *(object)* — the daemon-owned known-repository list; `workspace.changeHistory` *(object)* — per-workspace diff-history bags. Both are non-sensitive; the daemon persists the JSON opaquely.
 - **Workspace initializer (new in intentd):** `workspaceInitializer.state` *(object, non-sensitive, default `{}`)* — persisted home-screen workspace-initializer form state, opaque bag owned by the FE.
 - **Hardware console (new in intentd):** `hardwareConsole.state` *(object, non-sensitive, default `{}`)* — persisted hardware-console device configuration (key assignments, action mappings, prompt-picker limit), opaque bag owned by the FE.
+- **Provider switch (new in intentd):** `providerSwitch.state` *(object, non-sensitive, default `{}`)* — the last provider and model chosen per failed (provider reference, model) pair in the bulk "Switch all…" failure dialog, opaque bag owned by the FE. It only prefills the dialog; the daemon never acts on it.
 - **Context engine (new in intentd):** `context.enabled`, `context.auggiePath`, `context.allowIndexing`.
 - **Storage / runtime (new in intentd):** `storage.dataDir`, `workspaces.root`, `logging.level`,`agents.maxConcurrent`,
   `agents.maxConcurrentAdapters` *(number, default `6`, min `1`, max `64`, TOML-backed under `[agents]` — the daemon-wide cap on concurrently live ephemeral ACP adapters: the one-shot `agent.completeOnce` completions (§5.32) and model probes (§5.30) that spawn a provider-CLI chain without holding an `agents.maxConcurrent` slot.
