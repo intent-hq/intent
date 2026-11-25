@@ -1466,8 +1466,9 @@ Limits:
 
 Limits:
 
-1. **A `settings.update` that loses the race returns `Conflict` until the
-   follower poll (2 s) adopts the new revision.** There is no auto-retry.
+1. **A `settings.update` that loses the race returns `Conflict`.** The
+   registry adopts the winning revision before it returns, so an immediate
+   retry lands. There is no automatic retry.
 2. `ConfigWatcher` refuses a store-backed registry.
 
 Boot migrations still run for a store-backed registry: `recover_tenant`
@@ -1486,7 +1487,8 @@ and `SettingsRegistry::strip_legacy` writes through the store backend
 3. `persist_queue_snapshot` syncs and adopts the merged result.
    `agent.getQueue` refreshes first.
 4. The single-entry drain and the flush drain use `claim_queue_pop` and drop
-   lost entries. Shutdown reconcile syncs.
+   lost entries. If the claim write fails, `claim_queue_pop` puts the
+   entries back and delivers nothing. Shutdown reconcile syncs.
 
 Open items:
 
@@ -1503,6 +1505,8 @@ Open items:
    version.
 6. `queue_submission_order` can overlap across processes. Order uses row
    position, so only metadata is affected.
+7. After a failed claim write, nothing reschedules that agent's drain. The
+   entry waits for the next drain trigger.
 
 ## Owner work vs request writes (orchestrator mode)
 
