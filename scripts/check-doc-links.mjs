@@ -28,8 +28,9 @@
 //
 // GitHub renders a monorepo link into a submodule as a parent-repository blob, which
 // 404s (intent-hq/intent#10040). So an inline Markdown link in a monorepo-owned file whose
-// target is inside a submodule must be followed directly (only whitespace and an
-// optional `(` between, blockquote markers on a new line included) by a link to the same path and anchor in the component repository:
+// target is inside a submodule must be followed directly (only whitespace, an optional
+// `(` and blockquote markers between) by a link to the same path and anchor in the
+// component repository:
 // `[x](packages/c/a.md#s) ([on GitHub](https://github.com/o/c/blob/main/a.md#s))`. The
 // owner and repository come from the submodule's github.com `url` in .gitmodules (the
 // tests require every submodule to have one); `blob/` or `tree/` with any single-segment
@@ -40,7 +41,8 @@
 // repository, so a relative link that resolves outside its submodule escapes that
 // repository's root. It must be followed the same way by the GitHub link for its target:
 // intent-hq/intent for a monorepo file, or the sibling component's repository for a file
-// inside another submodule.
+// inside another submodule. Markdown links in a component guide resolve only from its
+// own directory, as on GitHub, never from the monorepo root.
 
 import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
@@ -468,6 +470,7 @@ export async function inspectRepository(root) {
     const references = [];
     const literal = literalRanges(content);
     const isExample = (index) => literal.some(([start, end]) => index >= start && index < end);
+    const owner = modules.find((module) => isWithin(source, module.path));
     for (const match of content.matchAll(MARKDOWN_LINK)) {
       if (!isLocalLink(match[1])) continue;
       const target = cleanTarget(match[1]);
@@ -477,7 +480,7 @@ export async function inspectRepository(root) {
         target: target === '' ? source : target,
         anchor: anchor && !RUNTIME_ANCHOR.test(anchor) ? anchor : null,
         index: match.index,
-        bases: target === '' ? [path.dirname(source)] : uniquePaths([path.dirname(source), root]),
+        bases: target === '' || owner ? [path.dirname(source)] : uniquePaths([path.dirname(source), root]),
       });
     }
     for (const match of content.matchAll(REPO_PATH)) {
@@ -492,7 +495,6 @@ export async function inspectRepository(root) {
       });
     }
 
-    const owner = modules.find((module) => isWithin(source, module.path));
     const pairFailures = missingGitHubPairs(
       content,
       isExample,

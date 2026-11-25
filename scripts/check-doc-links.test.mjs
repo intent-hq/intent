@@ -747,3 +747,45 @@ test('does not require GitHub links for example escape links in a component file
   });
   assert.deepEqual(await inspectRepository(root), { failures: [], skipped: 0 });
 });
+
+test('resolves component links only from the component file, as GitHub does', async (t) => {
+  const root = await fixture(t, {
+    ...MONOREPO_FILES,
+    'docs/ARCHITECTURE.md': '# Architecture\n',
+    'packages/product/AGENTS.md': '[root only](docs/ARCHITECTURE.md) [escapes](../../../outside.md)\n',
+  });
+  assert.deepEqual(await inspectRepository(root), {
+    failures: [
+      { source: 'packages/product/AGENTS.md', line: 1, target: 'docs/ARCHITECTURE.md', resolved: 'packages/product/docs/ARCHITECTURE.md' },
+      { source: 'packages/product/AGENTS.md', line: 1, target: '../../../outside.md', resolved: '../outside.md' },
+    ],
+    skipped: 0,
+  });
+});
+
+test('component links into update = none or url-less siblings follow their .gitmodules entry', async (t) => {
+  const root = await fixture(
+    t,
+    {
+      ...MONOREPO_FILES,
+      '.gitmodules':
+        `${PRODUCT_MODULE}[submodule "packages/private"]\n\tpath = packages/private\n\turl = git@github.com:acme/private.git\n\tupdate = none\n` +
+        '[submodule "packages/local"]\n\tpath = packages/local\n',
+      'packages/local/.git': 'gitdir: elsewhere',
+      'packages/local/README.md': '',
+      'packages/product/AGENTS.md': '[private](../private/AGENTS.md) [local](../local/README.md)\n',
+    },
+    ['packages/private'],
+  );
+  assert.deepEqual(await inspectRepository(root), {
+    failures: [
+      {
+        source: 'packages/product/AGENTS.md',
+        line: 1,
+        target: '../private/AGENTS.md',
+        github: 'https://github.com/acme/private/blob/main/AGENTS.md',
+      },
+    ],
+    skipped: 1,
+  });
+});
