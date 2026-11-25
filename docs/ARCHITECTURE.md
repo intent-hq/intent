@@ -1332,21 +1332,21 @@ contract lives in the intentd repo's AGENTS.md.
 
 ## Stateless orchestrator groundwork
 
-**Status:** on local review branches, not on `main` yet. This section
-describes the seams that exist on those branches and their known limits. The
+**Status:** in review in intentd, not on `main` yet. This section
+describes the seams those PRs add and their known limits. The
 design that uses them is in
 [Owner work vs request writes](#owner-work-vs-request-writes-orchestrator-mode).
 Nothing here runs more than one process per tenant yet. The desktop daemon
 (SQLite) behaves as before.
 
-| Seam | intentd branch | Main files |
+| Seam | intentd PR | Main files |
 |---|---|---|
-| Event fabric | `refactor/event-fabric-seam` | `intent-services/src/events/bus/fabric.rs`, `events/bus.rs` |
-| Event seq cursor | `feat/store-event-seq` | `intent-store/src/event_repo.rs`, `postgres/events.rs` |
-| State inventory and guard | `chore/services-state-inventory` | `intent-services/state-inventory.toml`, `tests/services_state_inventory_lint.rs` |
-| Work claims | `feat/store-work-claims` | `intent-store/src/work_claim_repo.rs`, `postgres/work_claims.rs`, `intent-services/src/work_claims.rs` |
-| Settings and GitLab pair in the store | `feat/orchestrator-settings-in-store` | `intent-services/src/settings_registry.rs`, `settings_store_follower.rs`, `intent-store/src/postgres/tenant_config.rs` |
-| Agent queues from the store | `feat/db-authoritative-agent-queues` (on top of the inventory branch) | `intent-store/src/agent_queue_merge.rs`, `agent_queue_repo.rs`, `intent-services/src/agent_ops.rs` |
+| Event fabric | [intentd#3783](https://github.com/intent-hq/intentd/pull/3783) | `intent-services/src/events/bus/fabric.rs`, `events/bus.rs` |
+| Event seq cursor | [intentd#3778](https://github.com/intent-hq/intentd/pull/3778) | `intent-store/src/event_repo.rs`, `postgres/events.rs` |
+| State inventory and guard | [intentd#3781](https://github.com/intent-hq/intentd/pull/3781) | `intent-services/state-inventory.toml`, `tests/services_state_inventory_lint.rs` |
+| Work claims | [intentd#3779](https://github.com/intent-hq/intentd/pull/3779) | `intent-store/src/work_claim_repo.rs`, `postgres/work_claims.rs`, `intent-services/src/work_claims.rs` |
+| Settings and GitLab pair in the store | [intentd#3780](https://github.com/intent-hq/intentd/pull/3780) | `intent-services/src/settings_registry.rs`, `settings_store_follower.rs`, `intent-store/src/postgres/tenant_config.rs` |
+| Agent queues from the store | [intentd#3782](https://github.com/intent-hq/intentd/pull/3782) (stacked on #3781) | `intent-store/src/agent_queue_merge.rs`, `agent_queue_repo.rs`, `intent-services/src/agent_ops.rs` |
 
 ### Event fabric
 
@@ -1526,7 +1526,7 @@ Inputs:
 3. Delivery claims: `claim_delivery` in `postgres/completion_watches.rs`
    (`ProcessToken` + tenant epoch).
 
-The inventory and work claims are on review branches, not on `main` yet.
+The inventory ([intentd#3781](https://github.com/intent-hq/intentd/pull/3781)) and work claims ([intentd#3779](https://github.com/intent-hq/intentd/pull/3779)) are in review, not on `main` yet.
 For all seams and their limits, see
 [Stateless orchestrator groundwork](#stateless-orchestrator-groundwork).
 
@@ -1625,7 +1625,7 @@ Families group the 34 `gate` rows of the inventory. "Lock" is the inventory
 | | `attention_mutation_gates` | partial | row lock + event in same transaction |
 | | `discussion_control_gates` | partial | row lock + event in same transaction |
 | | `agent_queue_publish_gate` | no | version CAS (event carries queue version) |
-| Read-modify-write of one record | `agent_queue_persist_gate` | partial | version CAS (queue version + three-way merge, in progress) |
+| Read-modify-write of one record | `agent_queue_persist_gate` | partial | version CAS (queue version + three-way merge, [intentd#3782](https://github.com/intent-hq/intentd/pull/3782)) |
 | | `settings_revision_gate` | no | version CAS (`tenant_config` revision) |
 | | `settings_secret_gates` | no | version CAS on the `TenantSecrets` row |
 | | `human_instruction_authority` | no | version CAS (admission records the authority version) |
