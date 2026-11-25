@@ -1332,7 +1332,7 @@ contract lives in the intentd repo's AGENTS.md.
 
 ## Stateless orchestrator groundwork
 
-**Status:** in review in intentd, not on `main` yet. This section
+**Status:** on intentd `main` (merged 2026-11-25). This section
 describes the seams those PRs add and their known limits. The
 design that uses them is in
 [Owner work vs request writes](#owner-work-vs-request-writes-orchestrator-mode).
@@ -1527,7 +1527,6 @@ Inputs:
 3. Delivery claims: `claim_delivery` in `postgres/completion_watches.rs`
    (`ProcessToken` + tenant epoch).
 
-Work claims ([intentd#3779](https://github.com/intent-hq/intentd/pull/3779)) are in review, not on `main` yet.
 For all seams and their limits, see
 [Stateless orchestrator groundwork](#stateless-orchestrator-groundwork).
 
