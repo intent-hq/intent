@@ -1330,6 +1330,364 @@ New enrichment fields on hot read paths carry the burden of proof: they must
 name their rung on this ladder before they land. The companion agent-facing
 contract lives in the intentd repo's AGENTS.md.
 
+## Stateless orchestrator groundwork
+
+**Status:** on intentd `main` (merged 2026-11-25). This section
+describes the seams those PRs add and their known limits. The
+design that uses them is in
+[Owner work vs request writes](#owner-work-vs-request-writes-orchestrator-mode).
+Nothing here runs more than one process per tenant yet. The desktop daemon
+(SQLite) behaves as before.
+
+| Seam | intentd PR | Main files |
+|---|---|---|
+| Event fabric | [intentd#3783](https://github.com/intent-hq/intentd/pull/3783) | `intent-services/src/events/bus/fabric.rs`, `events/bus.rs` |
+| Event seq cursor | [intentd#3778](https://github.com/intent-hq/intentd/pull/3778) | `intent-store/src/event_repo.rs`, `postgres/events.rs` |
+| Process-local state snapshot | none (docs only) | [orchestrator-state-snapshot.md](./orchestrator-state-snapshot.md) |
+| Work claims | [intentd#3779](https://github.com/intent-hq/intentd/pull/3779) | `intent-store/src/work_claim_repo.rs`, `postgres/work_claims.rs`, `intent-services/src/work_claims.rs` |
+| Settings and GitLab pair in the store | [intentd#3780](https://github.com/intent-hq/intentd/pull/3780) | `intent-services/src/settings_registry.rs`, `settings_store_follower.rs`, `intent-store/src/postgres/tenant_config.rs` |
+| Agent queues from the store | [intentd#3782](https://github.com/intent-hq/intentd/pull/3782) | `intent-store/src/agent_queue_merge.rs`, `agent_queue_repo.rs`, `intent-services/src/agent_ops.rs` |
+
+### Event fabric
+
+1. `EventFabric` (`events/bus/fabric.rs`) is the transport under `EventBus`.
+   It has `publish(envelope)`, `receiver()` (raw stream, cursor,
+   `FenceHandle`, controls) and `receiver_count()`.
+2. `LocalFabric` is the only implementation. It is the former `RawBus`: one
+   `tokio::broadcast` ring and a raw cursor.
+3. `EventBus` holds `Arc<dyn EventFabric>`. `EventBus::new` builds a
+   `LocalFabric`; `EventBus::with_fabric` takes another one.
+4. `delivery_task`, filters, batching, fences and `Delivery::Lagged` do not
+   change.
+
+Limits:
+
+1. The `Monitor` and `HistoryChanged` lanes are local-only. A non-local
+   fabric must still deliver them in-process. The home tap stays off the
+   fabric.
+2. Fence receipts are an in-process barrier. A networked fabric needs its
+   own ordering contract for `events.lost` recovery.
+3. There is no networked fabric. An event published in one process reaches
+   only that process's subscribers.
+
+### Event seq cursor
+
+1. `EventSeq = u64` is a durable event's per-tenant log position. It is never
+   0. On Postgres it strictly increases in commit order; on SQLite see the
+   first limit.
+2. `Store::insert_event_seq` and `Store::insert_events_seq` return each event
+   with its seq. `insert_event(s)` delegate to them with the old signatures.
+3. `Store::events_after(after, limit)` reads events with seq greater than
+   `after`, in seq order. `Store::max_event_seq()` returns the highest seq, or
+   0. Neither filters by caller visibility.
+4. Postgres uses `row_seq` (`RETURNING row_seq`, set under the tenant writer
+   lock), with index `idx_event_row_seq`. SQLite uses `rowid`.
+
+Limits:
+
+1. **A SQLite seq is not a safe cursor on its own.** SQLite reuses a deleted
+   maximum `rowid`, even within one process: retention deletes by timestamp
+   and can remove the newest row, and the next insert takes its seq again. A
+   consumer at that cursor then skips the new event. A SQLite cursor is safe
+   only while nothing deletes the newest row between reads; a full `VACUUM`
+   can also renumber rows. A durable cursor needs an `AUTOINCREMENT` seq.
+2. **Postgres seqs have gaps.** All tables of a tenant share `row_seq`. Treat a
+   gap as normal. Do not detect loss by checking for seq + 1.
+3. The bus does not call `insert_events_seq` yet. No seq reaches the wire.
+
+### Process-local state snapshot
+
+[orchestrator-state-snapshot.md](./orchestrator-state-snapshot.md) classifies
+every `Services` field (231) and every tenant restore, sweep and loop in
+`intent-app/src/tenant.rs` (26), taken 2026-11-25. Classes: `owner`, `gate`,
+`volatile`, `cache`, `connection`, `config`, `test`, `durable`. A `gate` row
+names its invariant and says if the Postgres tenant writer lock covers it.
+
+| Class | Fields | Loops |
+|---|---|---|
+| owner | 31 | 25 |
+| gate | 35 (12 partial, 23 no) | 0 |
+| volatile | 45 | 0 |
+| cache | 26 | 1 |
+| connection / config / test | 8 / 36 / 50 | 0 |
+
+It is a dated snapshot, not maintained, and no CI check keeps it current: a
+guard test that failed on every new `Services` field was dropped as too
+costly (the struct changed in 29 commits over the 30 days before the
+snapshot). Re-check a row against the code before relying on it. Lasting
+protection belongs in types, for example process-local state reachable only
+through owner-only handles.
+
+### Work claims
+
+1. `Store::claim_work(kind, key, ttl)` returns `Some(WorkClaim)` when the row
+   is free, expired by the DB clock, or held at an older tenant epoch. Each
+   claim has its own `claim_id`, so a second claimer in the same process also
+   loses.
+2. `Store::renew_work_claim` returns `false` when the claim is lost.
+   `Store::release_work_claim` deletes the row only if it still names this
+   claim.
+3. Postgres: table `work_claim`, primary key `(tenant_id, kind, work_key)`.
+   All statements run under `begin_write` and use `clock_timestamp()` only.
+   SQLite: an in-process map with the same rules.
+4. `spawn_token_usage_scan_loop` is the first user (`TOKEN_USAGE_SCAN_WORK =
+   "token-usage-scan"`, TTL = 2 x interval). `hold_work_claim`,
+   `keep_work_claim` and `release_held_work_claim` are in
+   `intent-services/src/work_claims.rs`. A process without the claim skips
+   the tick.
+
+Limits:
+
+1. Only the token-usage scan uses work claims. The other 23 loops still need
+   the tenant lease. The scan's writes still go through `begin_write`, so
+   they still pass today's tenant-owner fence; a claim that is fenced on its
+   own belongs to the request write role (see the design below).
+2. A claim is void after a tenant epoch bump.
+3. An `Err` on renew keeps the claim and skips the tick. No test injects this
+   error.
+
+### Settings and the GitLab pair in the store
+
+1. `SettingsDocumentStore` is the persistence seam for `SettingsRegistry`.
+   `SettingsRegistry::load_from_store` builds a store-backed registry. The
+   file backend (desktop) does not change.
+2. Postgres table `tenant_config` holds the body and a revision.
+   `TenantConfigStore::compare_and_set(expected, body)` returns `Written(rev)`
+   or a conflict. A lost race is `Error::Conflict` (-32005).
+3. `settings_store_follower` polls every 2 s (`DEFAULT_POLL_INTERVAL`) and
+   applies newer revisions through `Services::apply_stored_settings_reload`.
+   This sends the same hooks and `settings:changed` as a file edit.
+4. `FileSecretStore::with_backend` puts the GitLab pair in `TenantSecrets`
+   rows, not in `secrets.json`.
+5. `serve_tenant` (`intentd-orchestrator/src/serve.rs`) uses `TenantSettings`
+   and `TenantSecrets`. The follower stops on fence.
+
+Limits:
+
+1. **A `settings.update` that loses the race returns `Conflict`.** The
+   registry tries to adopt the winning revision before it returns, so an
+   immediate retry usually lands. The catch-up is best effort: if its read
+   fails or another write lands, the follower poll (2 s) adopts the revision
+   instead. There is no automatic retry.
+2. `ConfigWatcher` refuses a store-backed registry.
+
+Boot migrations still run for a store-backed registry: `recover_tenant`
+(`intentd-orchestrator/src/serve.rs`) calls `run_boot_settings_migrations`,
+and `SettingsRegistry::strip_legacy` writes through the store backend
+(`write_document`).
+
+### Agent queues from the store
+
+1. `Store::sync_agent_queue(agent, rows, claims)` writes the queue. On
+   Postgres, if the stored version moved, it does a 3-way merge of this
+   process's change onto the stored rows under the tenant writer lock.
+   Claimed ids that another process removed first come back as `lost`.
+2. `Store::refresh_agent_queue(agent, local)` merges stored rows into memory
+   when the version moved. On SQLite both are a plain replace or a no-op.
+3. `persist_queue_snapshot` syncs and adopts the merged result.
+   `agent.getQueue` refreshes first.
+4. The single-entry drain and the flush drain use `claim_queue_pop` and drop
+   lost entries. If the claim write fails, `claim_queue_pop` puts the
+   entries back and delivers nothing. Shutdown reconcile syncs.
+
+Open items:
+
+1. `send_queued_message(s)_now`, the recovery redrive and the agent manager
+   pops in rehydrate do not claim yet. They can double-deliver across
+   processes.
+2. A crash between the drain and the user-row write loses the entry. A
+   kept claimed row needs a schema change.
+3. A cancel answers from memory. It can report success for an entry that
+   another process is already delivering.
+4. `has_ready_to_send`, diagnostics and event snapshots read memory. Nothing
+   starts a drain on one process when another process enqueues.
+5. `move_agent_queue` still uses compare-and-swap and fails on a stale
+   version.
+6. `queue_submission_order` can overlap across processes. Order uses row
+   position, so only metadata is affected.
+7. After a failed claim write, nothing reschedules that agent's drain. The
+   entry waits for the next drain trigger.
+
+## Owner work vs request writes (orchestrator mode)
+
+**Status:** design only. No code implements it yet. It applies only to the
+Postgres store (`intentd-orchestrator`). The desktop daemon (SQLite, one
+process per database) does not change.
+
+Today one process owns a tenant. It holds the tenant lease
+(`intent-store/src/postgres/lease.rs`: `Store::claim_tenant`,
+`LeaseHeartbeat`), and every write checks the owner fence
+(`PgStore::begin_write` → `begin_write_as(Fence::Check)` →
+`ClaimSlot::check` in `postgres/mod.rs` and `lease.rs`). This section
+describes how the fence narrows: owned work keeps the lease, and request
+writes can come from any process.
+
+Inputs:
+
+1. The [process-local state snapshot](./orchestrator-state-snapshot.md)
+   (one row per `Services` field and per tenant loop, taken 2026-11-25). It
+   lists 35 `gate`, 31 `owner` and 45 `volatile` fields, and 25 `owner` loops.
+2. Generic work claims: `Store::claim_work`, `renew_work_claim`,
+   `release_work_claim` (`intent-store/src/work_claim_repo.rs`,
+   `postgres/work_claims.rs`), first used by `spawn_token_usage_scan_loop`.
+3. Delivery claims: `claim_delivery` in `postgres/completion_watches.rs`
+   (`ProcessToken` + tenant epoch).
+
+For all seams and their limits, see
+[Stateless orchestrator groundwork](#stateless-orchestrator-groundwork).
+
+```mermaid
+flowchart LR
+  O[Owner process: holds lease] -->|owner role: fence check| W[(tenant_writer row lock)]
+  R[Request replica: no lease] -->|request role: no owner check| W
+  W --> G[Per-row guard: row lock, version CAS, claim, unique key]
+  G --> T[(Tenant rows + event row_seq)]
+  O --> L[Owned work: loops, machine links, receive hooks]
+```
+
+### What keeps the tenant lease
+
+The lease stays for work that assumes one runner per tenant. Each item
+moves off the lease only when it gets its own claim.
+
+| Owned work | Where | Why it needs one owner |
+|---|---|---|
+| Lease bookkeeping | `lease.rs`: `claim_lease`, `renew_lease`, `release_lease` (`Fence::Skip`) | It is how the fence changes. |
+| Tenant loops not on work claims (23 of 24) | `intent-app/src/tenant.rs`: `spawn_pr_refresh_loop`, `spawn_pr_monitor_loop`, `spawn_completion_delivery_loop`, `spawn_auto_commit_loop`, `spawn_push_publisher`, `spawn_auto_archive_loop`, `spawn_auto_retire_loop`, `spawn_tenant_retention_loop`, ... | Two runners double forge calls, wakes, commits and pushes. |
+| Startup rehydration | `rehydrate_hooks`, `rehydrate_pr_monitors`, `heal_event_subscriptions_on_startup` | They start timers and delivery tasks in this process. A second process would deliver again. |
+| Machine links | `resume_exposed_machines`; `LinkOwnership` (`intent-node-connections/src/ownership.rs`) | A machine accepts only the newest link generation. Only `LocalOwnership` (one fixed epoch) exists, so no per-machine claim is enforced yet. |
+| Git receive hooks | head's git hub, installed by `serve_tenant` (`intentd-orchestrator/src/serve.rs`; test `tests/node_git_hooks.rs`) | Hub repositories are on the owner's local disk. |
+| In-memory timers and runtimes (`owner` fields) | `hold_release_timers`, debouncers, `completion_delivery_retries`, `pending_workspace_deletes`, `pty`, `mcp_hub`, `event_bus` | State is only in this process memory. |
+
+Rules:
+
+1. An owned item leaves the lease only after it takes a per-item claim
+   (`claim_work(kind, key, ttl)`, `claim_delivery`, or a Postgres
+   `LinkOwnership`). The token-usage scan is the first item to do this.
+2. A request replica starts no owned work. It does not call
+   `start_background` and does not dial machines.
+
+### What a request write checks instead
+
+A request write is a write made while serving a client RPC. It does not use
+owner memory and does not need the lease.
+
+1. **The writer lock stays.** Every write still takes `lock_tenant_writer`.
+   The `row_seq` trigger refuses an insert unless `intent.writer_tenant` is
+   set under the lock, so the lock keeps commit order equal to seq order.
+   One tenant still has one writer at a time across all processes.
+2. **No owner check.** The request role ignores `owner_instance` and
+   `epoch` on the locked `WriterRow`. An owner takeover does not refuse
+   request writes.
+3. **A per-row guard.** Each write that today relies on an in-process gate
+   uses the target mechanism in the table below.
+4. **Claims name the claim, not the tenant.** A write for claimed work
+   checks its own `claim_id` + `ProcessToken`.
+5. **Events commit with the row.** A write whose event order matters
+   inserts its event in the same transaction (`insert_events_seq`). Today the
+   bus batching writer commits events in a separate transaction, so seq order
+   can differ from row order.
+6. **Owner-only tables refuse it.** Lease rows, link ownership rows and
+   receive-hook state accept only owner writes.
+
+### Write role per store handle
+
+The role is a property of one store handle. It is not shared tenant state,
+so one process can hold an owner handle for its loops and a request handle
+for its RPCs. The `ClaimSlot` stays shared in `tenant_registry::TenantState`.
+
+1. `pub enum WriteRole { Owner, Request, Unclaimed }`, held in a new
+   `PgStore.role` field (not in `TenantState`).
+2. Opens set it:
+   1. `Store::open_postgres_owned` / `try_open_postgres_owned` → `Owner`.
+   2. `Store::open_postgres` → `Unclaimed` (today's rule: writes only while
+      no process ever claimed the tenant; admin and repair tools keep it).
+   3. New `Store::open_postgres_request(pool, tenant, options, OrchestratorOnly)`
+      → `Request`.
+   4. New `Store::request_writer(&self) -> Store`: a clone with
+      `WriteRole::Request`, for an owner process's RPC path.
+3. `Fence` gains `Request`. `begin_write()` calls
+   `begin_write_as(self.role.fence())`: `Owner` and `Unclaimed` map to
+   `Fence::Check`, `Request` to `Fence::Request`.
+4. `Fence::Request` takes the lock and skips the owner comparison. A request
+   handle in a process that holds a claim still calls `refuse_if_fenced`,
+   because that process's in-memory gates are not converted yet.
+5. New `begin_owner_write()`: refuses with `Error::NotOwner` unless the role
+   is `Owner`, then runs `Fence::Check`. Owner-only repositories use it.
+
+A process may use a request handle for an RPC only when every gate that RPC
+touches is converted, and the `volatile` state it reads is in the database.
+
+### Gate conversion table
+
+Families group the 35 `gate` rows of the snapshot. "Lock" is the snapshot's
+writer-lock value (`partial` or `no`; none is `covered`).
+
+| Family | Gate | Lock | Target mechanism |
+|---|---|---|---|
+| Write, then publish in order | `browser_client_pin_gate` | partial | row lock + event in same transaction |
+| | `browser_tab_gate` | partial | row lock + event in same transaction |
+| | `pending_question_mutation_locks` | partial | row lock + event in same transaction |
+| | `attention_mutation_gates` | partial | row lock + event in same transaction |
+| | `discussion_control_gates` | partial | row lock + event in same transaction |
+| | `agent_queue_publish_gate` | no | version CAS (event carries queue version) |
+| Read-modify-write of one record | `agent_queue_persist_gate` | partial | version CAS (queue version + three-way merge, [intentd#3782](https://github.com/intent-hq/intentd/pull/3782)) |
+| | `settings_revision_gate` | no | version CAS (`tenant_config` revision) |
+| | `settings_secret_gates` | no | version CAS on the `TenantSecrets` row |
+| | `human_instruction_authority` | no | version CAS (admission records the authority version) |
+| | `identity_transition` | partial | row lock on the identity row, shared by invite minting |
+| | `group_persist_lane` | no | stays owner-only until an ordered design lands: a row lock alone does not keep enqueue order (a delayed upsert can recreate a settled group). Target: a versioned upsert plus a terminal settled state that refuses later upserts |
+| Quota (count, then insert) | `pr_monitor_registration` | partial | row lock on a per-owner counter row |
+| | `invite_nonce_permits` | no | row lock on a per-tenant counter row |
+| Dedupe and idempotency | `dismissal_notices_sent` | no | unique key (`INSERT ... ON CONFLICT DO NOTHING`) |
+| | `idempotency_inflight` | partial | unique key on a pending row; waiters replay the stored result |
+| | `attachment_idempotency_inflight` | partial | unique key on a pending row; waiters replay |
+| Single-flight work | `completion_deliveries_in_flight` | partial | work claim (`claim_delivery`) |
+| | `completion_watch_registration_gate` | partial | work claim; delivery reads the stored watch, not memory |
+| | `automatic_pr_refresh` | no | work claim per PR |
+| | `review_monitor_poll_lane` | no | work claim per monitor |
+| | `legacy_pr_monitor_poll_lane` | no | work claim per monitor |
+| | `gitlab_credential_gate` | no | work claim for refresh + version CAS on persist |
+| Multi-step lifecycle | `agent_retirement_gates` | no | work claim per agent |
+| | `archive_fence` | no | work claim per workspace |
+| | `workspace_mutations` | no | row lock on the workspace row + a deleting state that producers check |
+| Local process and disk | `archive_script_gates` | no | stays owner-only |
+| | `worktree_locks` | no | stays owner-only (the home serializes git work) |
+| | `scripts_running_state` | no | stays owner-only |
+| | `warm_in_flight` | no | stays per process (local repo cache) |
+| | `repository_review_capacity` | no | stays per process (local capacity) |
+| | `repository_resource_capacity` | no | stays per process |
+| | `repository_child_git_capacity` | no | stays per process |
+| | `repository_checkout_capacity` | no | stays per process |
+| | `repository_selection_capacity` | no | stays per process |
+
+Notes:
+
+1. "Stays per process" is correct when the bound protects this process's
+   CPU, memory or disk. N replicas then allow N times the work in total.
+2. The store also has process-local gates outside `Services`
+   (`tenant_registry::TenantState`: `note_write_lanes`, `desktop_writes`,
+   `browser_tab_displayed`, `queue_versions.write_lock`). They need the same
+   review before request handles go live.
+3. A version CAS that loses returns `Error::Conflict` (as the store-backed
+   `SettingsRegistry` does). The caller re-reads and retries, or reports the
+   conflict.
+
+### Decisions
+
+1. **Claims survive an owner takeover.** Work claims and delivery claims
+   depend only on their own `claim_id`, `ProcessToken` and expiry (by the
+   database clock), not on the tenant epoch. A takeover does not void a
+   request process's claim.
+2. **One shared mechanism puts events in the domain transaction.** A
+   `WriteTx` method appends the event in the caller's transaction and hands
+   it to the bus after commit. Gate families adopt it one at a time; the bus
+   batching writer stays for events that have no domain row.
+3. **A tenant state on the lock row closes request writes.** `tenant_writer`
+   gets a state (`open`, `closing`, `closed`). Every writer reads it under
+   the lock it already takes and refuses when the tenant is not `open`. No
+   extra query.
+
 ## Dependency-direction rules
 
 ```text
