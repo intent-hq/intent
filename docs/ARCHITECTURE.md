@@ -1330,6 +1330,176 @@ New enrichment fields on hot read paths carry the burden of proof: they must
 name their rung on this ladder before they land. The companion agent-facing
 contract lives in the intentd repo's AGENTS.md.
 
+## Stateless orchestrator groundwork
+
+**Status:** on local review branches, not on `main` yet. This section
+describes the seams that exist on those branches and their known limits. The
+design that uses them is in
+[Owner work vs request writes](#owner-work-vs-request-writes-orchestrator-mode).
+Nothing here runs more than one process per tenant yet. The desktop daemon
+(SQLite) behaves as before.
+
+| Seam | intentd branch | Main files |
+|---|---|---|
+| Event fabric | `refactor/event-fabric-seam` | `intent-services/src/events/bus/fabric.rs`, `events/bus.rs` |
+| Event seq cursor | `feat/store-event-seq` | `intent-store/src/event_repo.rs`, `postgres/events.rs` |
+| State inventory and guard | `chore/services-state-inventory` | `intent-services/state-inventory.toml`, `tests/services_state_inventory_lint.rs` |
+| Work claims | `feat/store-work-claims` | `intent-store/src/work_claim_repo.rs`, `postgres/work_claims.rs`, `intent-services/src/work_claims.rs` |
+| Settings and GitLab pair in the store | `feat/orchestrator-settings-in-store` | `intent-services/src/settings_registry.rs`, `settings_store_follower.rs`, `intent-store/src/postgres/tenant_config.rs` |
+| Agent queues from the store | `feat/db-authoritative-agent-queues` (on top of the inventory branch) | `intent-store/src/agent_queue_merge.rs`, `agent_queue_repo.rs`, `intent-services/src/agent_ops.rs` |
+
+### Event fabric
+
+1. `EventFabric` (`events/bus/fabric.rs`) is the transport under `EventBus`.
+   It has `publish(envelope)`, `receiver()` (raw stream, cursor,
+   `FenceHandle`, controls) and `receiver_count()`.
+2. `LocalFabric` is the only implementation. It is the former `RawBus`: one
+   `tokio::broadcast` ring and a raw cursor.
+3. `EventBus` holds `Arc<dyn EventFabric>`. `EventBus::new` builds a
+   `LocalFabric`; `EventBus::with_fabric` takes another one.
+4. `delivery_task`, filters, batching, fences and `Delivery::Lagged` do not
+   change.
+
+Limits:
+
+1. The `Monitor` and `HistoryChanged` lanes are local-only. A non-local
+   fabric must still deliver them in-process. The home tap stays off the
+   fabric.
+2. Fence receipts are an in-process barrier. A networked fabric needs its
+   own ordering contract for `events.lost` recovery.
+3. There is no networked fabric. An event published in one process reaches
+   only that process's subscribers.
+
+### Event seq cursor
+
+1. `EventSeq = u64` is a durable event's per-tenant log position. It is never
+   0 and increases in commit order.
+2. `Store::insert_event_seq` and `Store::insert_events_seq` return each event
+   with its seq. `insert_event(s)` delegate to them with the old signatures.
+3. `Store::events_after(after, limit)` reads events with seq greater than
+   `after`, in seq order. `Store::max_event_seq()` returns the highest seq, or
+   0. Neither filters by caller visibility.
+4. Postgres uses `row_seq` (`RETURNING row_seq`, set under the tenant writer
+   lock), with index `idx_event_row_seq`. SQLite uses `rowid`.
+
+Limits:
+
+1. **SQLite seq is per-process only.** A `rowid` can be reused after the
+   newest event row is deleted, and a full `VACUUM` can renumber rows. Do not
+   keep a SQLite cursor across restarts.
+2. **Postgres seqs have gaps.** All tables of a tenant share `row_seq`. Treat a
+   gap as normal. Do not detect loss by checking for seq + 1.
+3. The bus does not call `insert_events_seq` yet. No seq reaches the wire.
+
+### State inventory and CI guard
+
+1. `state-inventory.toml` has one row per `Services` field (231) and per
+   tenant restore, sweep or loop in `intent-app/src/tenant.rs` (25).
+2. Classes: `durable`, `cache`, `gate`, `volatile`, `owner`, `connection`,
+   `config`, `test`. A `gate` row names its invariant and says if the
+   Postgres tenant writer lock covers it (`covered`, `partial`, `no`).
+3. `services_state_inventory_lint.rs` fails when a field or loop is added,
+   removed or malformed. The message names the inventory file.
+
+| Class | Fields | Loops |
+|---|---|---|
+| cache | 25 | 1 |
+| gate | 34 (12 partial, 22 no) | 0 |
+| volatile | 47 | 0 |
+| owner | 32 | 24 |
+| connection / config / test | 8 / 36 / 49 | 0 |
+
+The queue branch moves `agent_queues` from `volatile` to `cache`.
+
+Limits:
+
+1. **The loop guard matches only name prefixes.** It finds calls in
+   `tenant.rs` that start with `spawn_`, `sweep_`, `rehydrate_`, `hydrate_`,
+   `heal_`, `resume_` or `refresh_`. A loop started through a helper with
+   another name is not seen.
+2. `volatile` is an eighth class for live state that is not a safe cache
+   (queues, failure streaks, device flows, upload sessions).
+3. `SqliteStore.work_claims` (from the work-claims branch) is process-local
+   and is not in the inventory.
+
+### Work claims
+
+1. `Store::claim_work(kind, key, ttl)` returns `Some(WorkClaim)` when the row
+   is free, expired by the DB clock, or held at an older tenant epoch. Each
+   claim has its own `claim_id`, so a second claimer in the same process also
+   loses.
+2. `Store::renew_work_claim` returns `false` when the claim is lost.
+   `Store::release_work_claim` deletes the row only if it still names this
+   claim.
+3. Postgres: table `work_claim`, primary key `(tenant_id, kind, work_key)`.
+   All statements run under `begin_write` and use `clock_timestamp()` only.
+   SQLite: an in-process map with the same rules.
+4. `spawn_token_usage_scan_loop` is the first user (`TOKEN_USAGE_SCAN_WORK =
+   "token-usage-scan"`, TTL = 2 x interval). `hold_work_claim`,
+   `keep_work_claim` and `release_held_work_claim` are in
+   `intent-services/src/work_claims.rs`. A process without the claim skips
+   the tick.
+
+Limits:
+
+1. Only the token-usage scan uses work claims. The other 23 loops still need
+   the tenant lease.
+2. A claim is void after a tenant epoch bump.
+3. An `Err` on renew keeps the claim and skips the tick. No test injects this
+   error.
+
+### Settings and the GitLab pair in the store
+
+1. `SettingsDocumentStore` is the persistence seam for `SettingsRegistry`.
+   `SettingsRegistry::load_from_store` builds a store-backed registry. The
+   file backend (desktop) does not change.
+2. Postgres table `tenant_config` holds the body and a revision.
+   `TenantConfigStore::compare_and_set(expected, body)` returns `Written(rev)`
+   or a conflict. A lost race is `Error::Conflict` (-32005).
+3. `settings_store_follower` polls every 2 s (`DEFAULT_POLL_INTERVAL`) and
+   applies newer revisions through `Services::apply_stored_settings_reload`.
+   This sends the same hooks and `settings:changed` as a file edit.
+4. `FileSecretStore::with_backend` puts the GitLab pair in `TenantSecrets`
+   rows, not in `secrets.json`.
+5. `serve_tenant` (`intentd-orchestrator/src/serve.rs`) uses `TenantSettings`
+   and `TenantSecrets`. The follower stops on fence.
+
+Limits:
+
+1. **A `settings.update` that loses the race returns `Conflict` until the
+   follower poll (2 s) adopts the new revision.** There is no auto-retry.
+2. `ConfigWatcher` refuses a store-backed registry.
+3. `strip_legacy` and boot migrations do not run for store-backed registries.
+
+### Agent queues from the store
+
+1. `Store::sync_agent_queue(agent, rows, claims)` writes the queue. On
+   Postgres, if the stored version moved, it does a 3-way merge of this
+   process's change onto the stored rows under the tenant writer lock.
+   Claimed ids that another process removed first come back as `lost`.
+2. `Store::refresh_agent_queue(agent, local)` merges stored rows into memory
+   when the version moved. On SQLite both are a plain replace or a no-op.
+3. `persist_queue_snapshot` syncs and adopts the merged result.
+   `agent.getQueue` refreshes first.
+4. The single-entry drain and the flush drain use `claim_queue_pop` and drop
+   lost entries. Shutdown reconcile syncs.
+
+Open items:
+
+1. `send_queued_message(s)_now`, the recovery redrive and the agent manager
+   pops in rehydrate do not claim yet. They can double-deliver across
+   processes.
+2. A crash between the drain and the user-row write loses the entry. A
+   kept claimed row needs a schema change.
+3. A cancel answers from memory. It can report success for an entry that
+   another process is already delivering.
+4. `has_ready_to_send`, diagnostics and event snapshots read memory. Nothing
+   starts a drain on one process when another process enqueues.
+5. `move_agent_queue` still uses compare-and-swap and fails on a stale
+   version.
+6. `queue_submission_order` can overlap across processes. Order uses row
+   position, so only metadata is affected.
+
 ## Owner work vs request writes (orchestrator mode)
 
 **Status:** design only. No code implements it yet. It applies only to the
@@ -1357,6 +1527,8 @@ Inputs:
    (`ProcessToken` + tenant epoch).
 
 The inventory and work claims are on review branches, not on `main` yet.
+For all seams and their limits, see
+[Stateless orchestrator groundwork](#stateless-orchestrator-groundwork).
 
 ```mermaid
 flowchart LR
