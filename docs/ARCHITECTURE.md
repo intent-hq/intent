@@ -1467,8 +1467,10 @@ Limits:
 Limits:
 
 1. **A `settings.update` that loses the race returns `Conflict`.** The
-   registry adopts the winning revision before it returns, so an immediate
-   retry lands. There is no automatic retry.
+   registry tries to adopt the winning revision before it returns, so an
+   immediate retry usually lands. The catch-up is best effort: if its read
+   fails or another write lands, the follower poll (2 s) adopts the revision
+   instead. There is no automatic retry.
 2. `ConfigWatcher` refuses a store-backed registry.
 
 Boot migrations still run for a store-backed registry: `recover_tenant`
