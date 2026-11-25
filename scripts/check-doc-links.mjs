@@ -28,13 +28,21 @@
 //
 // GitHub renders a monorepo link into a submodule as a parent-repository blob, which
 // 404s (intent-hq/intent#10040). So an inline Markdown link in a monorepo-owned file whose
-// target is inside a submodule must be followed directly (only whitespace and an
-// optional `(` between) by a link to the same path and anchor in the component repository:
+// target is inside a submodule must be followed directly (only whitespace, an optional
+// `(` and blockquote markers between) by a link to the same path and anchor in the
+// component repository:
 // `[x](packages/c/a.md#s) ([on GitHub](https://github.com/o/c/blob/main/a.md#s))`. The
 // owner and repository come from the submodule's github.com `url` in .gitmodules (the
 // tests require every submodule to have one); `blob/` or `tree/` with any single-segment
 // ref (a branch without `/`, a tag or a SHA) is accepted, and the error names the link
 // to add. Reference-style links and HTML `href`s are not checked.
+//
+// The reverse also 404s: a component guide (packages/*/AGENTS.md) renders in its own
+// repository, so a relative link that resolves outside its submodule escapes that
+// repository's root. It must be followed the same way by the GitHub link for its target:
+// intent-hq/intent for a monorepo file, or the sibling component's repository for a file
+// inside another submodule. Markdown links in a component guide resolve only from its
+// own directory, as on GitHub, never from the monorepo root.
 
 import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
@@ -63,6 +71,7 @@ const INLINE_LINK = /!?\[([^\]]*)\](?:\([^)]*\)|\[[^\]]*\])/g;
 const EMPHASIS = /(^|[^\p{L}\p{N}_])(_{1,2})(?=\S)(.+?)(?<=\S)\2(?![\p{L}\p{N}_])/gu;
 const ENTITY = /&(?:#(\d+)|#x([\da-f]+)|([a-z]+));/gi;
 const NAMED_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+const MONOREPO = 'intent-hq/intent';
 
 async function isFile(filePath) {
   try {
@@ -310,8 +319,8 @@ function isGitHubPair(raw, expected) {
   return linkedPath === expected.path && linkedAnchor === expected.anchor;
 }
 
-// Submodule links in a monorepo-owned file that lack a following component GitHub link.
-function missingGitHubPairs(content, source, root, modules, isExample) {
+// Links whose `expectedFor` GitHub target is not the link right after them.
+function missingGitHubPairs(content, isExample, expectedFor) {
   const links = [];
   for (const match of content.matchAll(MARKDOWN_LINK)) {
     const end = content.slice(match.index + match[0].length).match(LINK_END);
@@ -323,26 +332,52 @@ function missingGitHubPairs(content, source, root, modules, isExample) {
     if (!isLocalLink(link.raw)) return;
     const target = cleanTarget(link.raw);
     if (target === '') return;
-    // Same bases as the existence check; GitHub reads a leading `/` from the repository root.
-    const candidates = target.startsWith('/')
-      ? [path.join(root, target)]
-      : [path.resolve(path.dirname(source), target), path.resolve(root, target)];
-    const resolved = candidates.find((candidate) => modules.some((entry) => entry.github && isWithin(candidate, entry.path)));
-    if (!resolved) return;
-    const module = modules.find((entry) => entry.github && isWithin(resolved, entry.path));
-    const expected = {
-      repo: module.github,
-      path: path.relative(module.path, resolved).split(path.sep).join('/'),
-      anchor: anchorOf(link.raw),
-    };
+    const located = expectedFor(target);
+    if (!located) return;
+    const expected = { ...located, anchor: anchorOf(link.raw) };
     const next = links[index + 1];
-    if (next && /^\s*\(?$/.test(content.slice(link.end, next.start)) && isGitHubPair(next.raw, expected)) return;
+    const between = content.slice(link.end, next?.start).replace(/\n(?: {0,3}> ?)+/g, '\n');
+    if (next && /^\s*\(?$/.test(between) && isGitHubPair(next.raw, expected)) return;
     const suffix = expected.path ? `/blob/main/${expected.path.split('/').map(encodeURIComponent).join('/')}` : '';
     const unwrapped = unwrapTarget(link.raw);
     const anchor = expected.anchor === null ? '' : unwrapped.slice(unwrapped.indexOf('#'));
     missing.push({ index: link.start, target: link.raw, github: `https://github.com/${expected.repo}${suffix}${anchor}` });
   });
   return missing;
+}
+
+// The GitHub repository and path that render `resolved`: a submodule's own repository
+// inside it, otherwise the monorepo. Null inside a submodule without a github.com url.
+function githubLocation(resolved, root, modules) {
+  const module = modules.find((entry) => isWithin(resolved, entry.path));
+  if (module && !module.github) return null;
+  const base = module ? module.path : root;
+  return {
+    repo: module ? module.github : MONOREPO,
+    path: path.relative(base, resolved).split(path.sep).join('/'),
+  };
+}
+
+// A monorepo-owned file's link into a submodule renders as a monorepo blob, which 404s.
+function intoSubmodule(source, root, modules) {
+  return (target) => {
+    // Same bases as the existence check; GitHub reads a leading `/` from the repository root.
+    const candidates = target.startsWith('/')
+      ? [path.join(root, target)]
+      : [path.resolve(path.dirname(source), target), path.resolve(root, target)];
+    const resolved = candidates.find((candidate) => modules.some((entry) => entry.github && isWithin(candidate, entry.path)));
+    return resolved ? githubLocation(resolved, root, modules) : null;
+  };
+}
+
+// A component file's relative link that leaves the component escapes its GitHub repository.
+function outOfSubmodule(source, root, modules, module) {
+  return (target) => {
+    if (target.startsWith('/')) return null;
+    const resolved = path.resolve(path.dirname(source), target);
+    if (isWithin(resolved, module.path) || !isWithin(resolved, root)) return null;
+    return githubLocation(resolved, root, modules);
+  };
 }
 
 function lineAt(content, index) {
@@ -435,6 +470,7 @@ export async function inspectRepository(root) {
     const references = [];
     const literal = literalRanges(content);
     const isExample = (index) => literal.some(([start, end]) => index >= start && index < end);
+    const owner = modules.find((module) => isWithin(source, module.path));
     for (const match of content.matchAll(MARKDOWN_LINK)) {
       if (!isLocalLink(match[1])) continue;
       const target = cleanTarget(match[1]);
@@ -444,7 +480,7 @@ export async function inspectRepository(root) {
         target: target === '' ? source : target,
         anchor: anchor && !RUNTIME_ANCHOR.test(anchor) ? anchor : null,
         index: match.index,
-        bases: target === '' ? [path.dirname(source)] : uniquePaths([path.dirname(source), root]),
+        bases: target === '' || owner ? [path.dirname(source)] : uniquePaths([path.dirname(source), root]),
       });
     }
     for (const match of content.matchAll(REPO_PATH)) {
@@ -459,9 +495,11 @@ export async function inspectRepository(root) {
       });
     }
 
-    const pairFailures = modules.some((module) => isWithin(source, module.path))
-      ? []
-      : missingGitHubPairs(content, source, root, modules, isExample);
+    const pairFailures = missingGitHubPairs(
+      content,
+      isExample,
+      owner ? outOfSubmodule(source, root, modules, owner) : intoSubmodule(source, root, modules),
+    );
 
     for (const reference of references) {
       const resolved = uniquePaths(reference.bases.map((base) => path.resolve(base, reference.target)));
@@ -520,7 +558,7 @@ async function main() {
   }
   for (const failure of failures) {
     const detail = failure.github
-      ? `${failure.target} points into a submodule, which GitHub cannot render; follow it with ([on GitHub](${failure.github}))`
+      ? `${failure.target} crosses a repository boundary, so it 404s on GitHub; follow it with ([on GitHub](${failure.github}))`
       : failure.anchor
         ? `missing heading #${failure.anchor} in ${failure.resolved}`
         : `missing ${failure.target} (${failure.resolved})`;

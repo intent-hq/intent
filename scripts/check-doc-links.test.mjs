@@ -646,3 +646,146 @@ test('every repository submodule has a github.com url for the GitHub link rule',
   assert.ok(urls.length > 0, '.gitmodules declares submodule urls');
   for (const url of urls) assert.ok(githubRepository(url), `${url} is a github.com url`);
 });
+
+// Incident: packages/intentd/AGENTS.md and packages/cloudlands-fe/AGENTS.md linked
+// ../../AGENTS.md, which escapes the component repository on GitHub and 404s.
+const MONOREPO_FILES = {
+  ...PRODUCT_FILES,
+  'AGENTS.md': '# Conventions\n',
+  'docs/fe/guide.md': '# Setup\n',
+};
+
+test('requires an intent-hq/intent GitHub link after a component link that leaves the component', async (t) => {
+  const root = await fixture(t, {
+    ...MONOREPO_FILES,
+    'packages/product/AGENTS.md': [
+      '# Setup',
+      'Read [root](../../AGENTS.md#conventions) and [the FE guide](../../docs/fe/guide.md).',
+      '[paired](../../AGENTS.md#conventions)',
+      '([on GitHub](https://github.com/intent-hq/intent/blob/main/AGENTS.md#conventions))',
+      '> Quoted [root](../../AGENTS.md)',
+      '> ([on GitHub](https://github.com/intent-hq/intent/blob/main/AGENTS.md)) rule.',
+      '[own](docs/guide.md) [same](#setup)',
+    ].join('\n'),
+  });
+  assert.deepEqual(await inspectRepository(root), {
+    failures: [
+      {
+        source: 'packages/product/AGENTS.md',
+        line: 2,
+        target: '../../AGENTS.md#conventions',
+        github: 'https://github.com/intent-hq/intent/blob/main/AGENTS.md#conventions',
+      },
+      {
+        source: 'packages/product/AGENTS.md',
+        line: 2,
+        target: '../../docs/fe/guide.md',
+        github: 'https://github.com/intent-hq/intent/blob/main/docs/fe/guide.md',
+      },
+    ],
+    skipped: 0,
+  });
+});
+
+test('rejects a component escape link paired with another repository, path or anchor', async (t) => {
+  const root = await fixture(t, {
+    ...MONOREPO_FILES,
+    'packages/product/AGENTS.md': [
+      '[a](../../AGENTS.md) ([on GitHub](https://github.com/acme/product/blob/main/AGENTS.md))',
+      '[b](../../AGENTS.md#conventions) ([on GitHub](https://github.com/intent-hq/intent/blob/main/AGENTS.md))',
+      '[c](../../AGENTS.md) ([on GitHub](https://github.com/intent-hq/intent/blob/main/docs/fe/guide.md))',
+      '[d](../../AGENTS.md) and later ([on GitHub](https://github.com/intent-hq/intent/blob/main/AGENTS.md))',
+      '[e](../../AGENTS.md) ([on GitHub](https://github.com/Intent-HQ/Intent/tree/0123abc/AGENTS.md))',
+    ].join('\n'),
+  });
+  const { failures } = await inspectRepository(root);
+  assert.deepEqual(
+    failures.map((failure) => `${failure.line}:${failure.github}`),
+    [
+      '1:https://github.com/intent-hq/intent/blob/main/AGENTS.md',
+      '2:https://github.com/intent-hq/intent/blob/main/AGENTS.md#conventions',
+      '3:https://github.com/intent-hq/intent/blob/main/AGENTS.md',
+      '4:https://github.com/intent-hq/intent/blob/main/AGENTS.md',
+    ],
+  );
+});
+
+test('requires the sibling component GitHub link for a link into another submodule', async (t) => {
+  const root = await fixture(t, {
+    ...MONOREPO_FILES,
+    '.gitmodules': `${PRODUCT_MODULE}[submodule "packages/other"]\n\tpath = packages/other\n\turl = git@github.com:acme/other.git\n`,
+    'packages/other/.git': 'gitdir: elsewhere',
+    'packages/other/docs/app-guide.md': '# Guide\n',
+    'packages/product/AGENTS.md': [
+      '[guide](../other/docs/app-guide.md) ([on GitHub](https://github.com/intent-hq/intent/blob/main/packages/other/docs/app-guide.md))',
+      '[guide](../other/docs/app-guide.md#guide) ([on GitHub](https://github.com/acme/other/blob/main/docs/app-guide.md#guide))',
+    ].join('\n'),
+  });
+  assert.deepEqual(await inspectRepository(root), {
+    failures: [
+      {
+        source: 'packages/product/AGENTS.md',
+        line: 1,
+        target: '../other/docs/app-guide.md',
+        github: 'https://github.com/acme/other/blob/main/docs/app-guide.md',
+      },
+    ],
+    skipped: 0,
+  });
+});
+
+test('does not require GitHub links for example escape links in a component file', async (t) => {
+  const root = await fixture(t, {
+    ...MONOREPO_FILES,
+    'packages/product/AGENTS.md': [
+      '```md',
+      '[fenced](../../AGENTS.md)',
+      '```',
+      '`[inline](../../AGENTS.md)`',
+      '<!-- [comment](../../AGENTS.md) -->',
+    ].join('\n'),
+  });
+  assert.deepEqual(await inspectRepository(root), { failures: [], skipped: 0 });
+});
+
+test('resolves component links only from the component file, as GitHub does', async (t) => {
+  const root = await fixture(t, {
+    ...MONOREPO_FILES,
+    'docs/ARCHITECTURE.md': '# Architecture\n',
+    'packages/product/AGENTS.md': '[root only](docs/ARCHITECTURE.md) [escapes](../../../outside.md)\n',
+  });
+  assert.deepEqual(await inspectRepository(root), {
+    failures: [
+      { source: 'packages/product/AGENTS.md', line: 1, target: 'docs/ARCHITECTURE.md', resolved: 'packages/product/docs/ARCHITECTURE.md' },
+      { source: 'packages/product/AGENTS.md', line: 1, target: '../../../outside.md', resolved: '../outside.md' },
+    ],
+    skipped: 0,
+  });
+});
+
+test('component links into update = none or url-less siblings follow their .gitmodules entry', async (t) => {
+  const root = await fixture(
+    t,
+    {
+      ...MONOREPO_FILES,
+      '.gitmodules':
+        `${PRODUCT_MODULE}[submodule "packages/private"]\n\tpath = packages/private\n\turl = git@github.com:acme/private.git\n\tupdate = none\n` +
+        '[submodule "packages/local"]\n\tpath = packages/local\n',
+      'packages/local/.git': 'gitdir: elsewhere',
+      'packages/local/README.md': '',
+      'packages/product/AGENTS.md': '[private](../private/AGENTS.md) [local](../local/README.md)\n',
+    },
+    ['packages/private'],
+  );
+  assert.deepEqual(await inspectRepository(root), {
+    failures: [
+      {
+        source: 'packages/product/AGENTS.md',
+        line: 1,
+        target: '../private/AGENTS.md',
+        github: 'https://github.com/acme/private/blob/main/AGENTS.md',
+      },
+    ],
+    skipped: 1,
+  });
+});
