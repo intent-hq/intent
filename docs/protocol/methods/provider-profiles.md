@@ -50,6 +50,7 @@ Clients read `supportsProfiles` per catalog row and never hard-code the list.
 | `droid` | `FACTORY_API_KEY` | none | none (the key beats a stored login) |
 | `auggie` | `AUGMENT_SESSION_AUTH` | none | none (the session JSON beats a stored login) |
 | `cursor` | `CURSOR_API_KEY`, `CURSOR_AUTH_TOKEN` | none | [Cursor API key](#cursor-api-key) |
+| `dsh` | `DEEPSEEK_API_KEY` | `DSH_HOME` | [DeepSeek Harness API key](#dsh-api-key) |
 
 `droid` keeps its existing gate: its catalog row reports `supportsProfiles: true` (a
 capability, like the rest of the row) but stays `visible: false`, so clients offer no
@@ -524,12 +525,21 @@ Keychain on macOS). So:
 Both are launch-only and never saved. The key is never passed on the command line.
 Clients save this kind with `CURSOR_API_KEY` set and `CURSOR_AUTH_TOKEN` unset.
 
+<a id="dsh-api-key"></a>**DeepSeek Harness API key.** *(Additive.)* DeepSeek Harness
+(`dsh`) prefers a key saved in `$DSH_HOME/.credentials.yaml` over `DEEPSEEK_API_KEY`. A
+`dsh` profile that sets a non-empty `DEEPSEEK_API_KEY` and does not set `DSH_HOME`
+therefore runs with `DSH_HOME=~/.intent/dsh-api-key/<profileId>-<key digest>` on the host
+that runs the provider. This folder follows the Grok home rules. The user's own `~/.dsh`
+(saved key, settings, sessions) is not used by that profile. Clients save this kind with
+`DEEPSEEK_API_KEY` set and nothing unset.
+
 <a id="key-profile-auth-status"></a>**Auth status of the new bases' profiles.**
 `host.providerAuthStatus` probes a profile with the overlay its launches use (launch-only
 steps included), on the base's own probe: `grok models` (a Grok key profile reports
 `authenticated: true` once the key is present: Grok does not check it there),
-`cursor-agent models` (Cursor checks the key), the Droid ACP probe, and `auggie token
-print` (true once the session JSON is present). Only a test prompt proves that a key
+`cursor-agent models` (Cursor checks the key), the Droid ACP probe, `auggie token
+print` (true once the session JSON is present), and for `dsh` a presence check of the
+key in the overlay or the profile's DSH home (no process starts). Only a test prompt proves that a key
 works; clients run one after saving where the base supports it (`supportsTestPrompt`).
 
 **Delete blocking.** `delete` refuses while a saved setting explicitly selects the
