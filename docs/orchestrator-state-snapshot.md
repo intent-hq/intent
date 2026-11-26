@@ -90,7 +90,7 @@ Gates: 0 covered, 12 partial, 23 not covered by the tenant writer lock.
 | `sweep_expired_attachment_idempotency_keys` | sweep | owner | Deletes expired idempotency bindings; idempotent, safe to run on any replica. |
 | `spawn_pr_refresh_loop` | loop | owner | Background PR refresh every 60 s tick; duplicate runs double forge load. |
 | `spawn_pr_monitor_loop` | loop | owner | Centralized PR-monitor sweep; needs per-monitor claims. |
-| `spawn_token_usage_scan_loop` | loop | owner | Token-usage rescan every 300 s; the 'generic work claims' task adopts claims here first. |
+| `spawn_token_usage_scan_loop` | loop | owner | Token-usage rescan every 300 s. Since this snapshot it holds a lease (scope `token-usage-scan`, intentd#3793). |
 | `spawn_completion_delivery_loop` | loop | owner | Bus subscriber waking parents on child completion; DB delivery claims exist for watches. |
 | `spawn_auto_commit_loop` | loop | owner | agent:idle subscriber committing task-linked changes; touches the home worktree. |
 | `spawn_push_publisher` | loop | owner | Push relay publisher; one per tenant. |
