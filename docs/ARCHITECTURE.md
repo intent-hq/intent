@@ -1332,7 +1332,7 @@ contract lives in the intentd repo's AGENTS.md.
 
 ## Stateless orchestrator groundwork
 
-**Status:** on intentd `main` (merged 2026-11-25). This section
+**Status:** on intentd `main` (merged 2026-11-25; leases 2026-11-26). This section
 describes the seams those PRs add and their known limits. The
 design that uses them is in
 [Owner work vs request writes](#owner-work-vs-request-writes-orchestrator-mode).
@@ -1344,7 +1344,8 @@ Nothing here runs more than one process per tenant yet. The desktop daemon
 | Event fabric | [intentd#3783](https://github.com/intent-hq/intentd/pull/3783) | `intent-services/src/events/bus/fabric.rs`, `events/bus.rs` |
 | Event seq cursor | [intentd#3778](https://github.com/intent-hq/intentd/pull/3778) | `intent-store/src/event_repo.rs`, `postgres/events.rs` |
 | Process-local state snapshot | none (docs only) | [orchestrator-state-snapshot.md](./orchestrator-state-snapshot.md) |
-| Work claims | [intentd#3779](https://github.com/intent-hq/intentd/pull/3779) | `intent-store/src/work_claim_repo.rs`, `postgres/work_claims.rs`, `intent-services/src/work_claims.rs` |
+| Leases (replace work claims, [intentd#3779](https://github.com/intent-hq/intentd/pull/3779)) | [intentd#3793](https://github.com/intent-hq/intentd/pull/3793) | `intent-store/src/lease_repo.rs`, `lease_keeper.rs`, `postgres/leases.rs`, `intent-services/src/lease_keeper.rs` |
+| Machine link ownership on leases | [intentd#3794](https://github.com/intent-hq/intentd/pull/3794) | `intent-node-connections/src/ownership/leased.rs`, `intent-store/src/postgres/nodes.rs`, `intent-svc-remote/src/lib.rs` |
 | Settings and GitLab pair in the store | [intentd#3780](https://github.com/intent-hq/intentd/pull/3780) | `intent-services/src/settings_registry.rs`, `settings_store_follower.rs`, `intent-store/src/postgres/tenant_config.rs` |
 | Agent queues from the store | [intentd#3782](https://github.com/intent-hq/intentd/pull/3782) | `intent-store/src/agent_queue_merge.rs`, `agent_queue_repo.rs`, `intent-services/src/agent_ops.rs` |
 
@@ -1418,33 +1419,74 @@ snapshot). Re-check a row against the code before relying on it. Lasting
 protection belongs in types, for example process-local state reachable only
 through owner-only handles.
 
-### Work claims
+### Leases
 
-1. `Store::claim_work(kind, key, ttl)` returns `Some(WorkClaim)` when the row
-   is free, expired by the DB clock, or held at an older tenant epoch. Each
-   claim has its own `claim_id`, so a second claimer in the same process also
-   loses.
-2. `Store::renew_work_claim` returns `false` when the claim is lost.
-   `Store::release_work_claim` deletes the row only if it still names this
-   claim.
-3. Postgres: table `work_claim`, primary key `(tenant_id, kind, work_key)`.
-   All statements run under `begin_write` and use `clock_timestamp()` only.
-   SQLite: an in-process map with the same rules.
-4. `spawn_token_usage_scan_loop` is the first user (`TOKEN_USAGE_SCAN_WORK =
-   "token-usage-scan"`, TTL = 2 x interval). `hold_work_claim`,
-   `keep_work_claim` and `release_held_work_claim` are in
-   `intent-services/src/work_claims.rs`. A process without the claim skips
-   the tick.
+One lease mechanism replaces the work claims of intentd#3779. A lease does
+not depend on which process owns the tenant.
+
+1. A lease is a row keyed by `(scope, key)`. `Store::acquire_lease(scope,
+   key, ttl)` returns `Some(Lease)` when the key is free or expired by the
+   database clock. Each new holder gets a higher `token`, a fencing counter
+   per key.
+2. `Store::renew_lease` returns `false` when the lease is lost.
+   `Store::release_lease` frees the key only if it still names this lease.
+   `Store::lease_is_held` checks the lease id, the token and the expiry.
+3. A write that must not land after the lease is lost calls `guard_lease`
+   inside its own write transaction. On Postgres it takes a `FOR SHARE` lock
+   on the lease row; a lost lease fails the write with `Error::LeaseLost`.
+   `guard_lease` is crate-private, so guarded writes are `intent-store`
+   methods.
+4. Postgres: table `lease`, primary key `(tenant_id, scope, lease_key)`;
+   release keeps the row so the token keeps counting. Acquire, renew and
+   release take the tenant writer lock with `Fence::LeaseOnly`: no tenant
+   owner check, so a tenant takeover neither voids nor fences a lease.
+   `postgres_backend_lint` allows `Fence::LeaseOnly` only in
+   `postgres/leases.rs`. SQLite: an in-process map with the same rules.
+5. `LeaseKeeper` (`intent-store/src/lease_keeper.rs`, re-exported by
+   `intent_services::lease_keeper`) renews at half the TTL. Each renewal is
+   bounded by the lease's remaining time. When the lease is lost or a
+   renewal does not answer before expiry, its `LeaseFence` fires and the
+   held work stops. `release` frees the key on a clean stop.
+6. Users: `spawn_token_usage_scan_loop` (scope `"token-usage-scan"`; a
+   process without the lease skips the tick) and machine link ownership
+   (below).
 
 Limits:
 
-1. Only the token-usage scan uses work claims. The other 23 loops still need
-   the tenant lease. The scan's writes still go through `begin_write`, so
-   they still pass today's tenant-owner fence; a claim that is fenced on its
-   own belongs to the request write role (see the design below).
-2. A claim is void after a tenant epoch bump.
-3. An `Err` on renew keeps the claim and skips the tick. No test injects this
-   error.
+1. Two of the tenant's owned items use leases: the token-usage scan and
+   machine links. The other 23 loops, delivery claims and the tenant lease
+   itself do not yet.
+2. The token-usage scan's writes still go through `begin_write`, so they
+   still pass the tenant-owner fence.
+3. The SQLite `guard_lease` is a check when the write starts, not a row
+   lock. That is enough for one process.
+
+### Machine link ownership on leases
+
+1. `LeaseLinkOwnership` (`intent-node-connections/src/ownership/leased.rs`,
+   scope `"machine-link"`) holds one lease per machine link. A claim first
+   acquires or reuses the lease (its own committed write), then advances
+   the link generation in a separate write transaction guarded by that
+   lease. A failed generation update does not undo the acquisition: the
+   lease stays held until it is released or expires. The link epoch is the
+   lease token.
+2. The welcome record and every journal ack guard the lease in their own
+   transaction, so a process that lost the link cannot record either late.
+3. A lost lease (keeper fence) closes the link. A stopping connector
+   releases the lease only if it made the latest claim (same `LeaseOwner`
+   and generation), so a replaced connector cannot release its
+   replacement's link.
+4. The orchestrator turns it on for each tenant before the first connector
+   starts (`RemoteServicesExt::use_leased_link_ownership`). The desktop
+   keeps `LocalOwnership`.
+
+Limits:
+
+1. Re-adding a machine with its current credential leaves a probe claim as
+   the latest one, so an idle connector can keep the lease until its next
+   dial or stop.
+2. Link ownership no longer needs the tenant lease, but `serve_tenant`
+   still starts connectors only in the tenant owner.
 
 ### Settings and the GitLab pair in the store
 
@@ -1527,9 +1569,10 @@ Inputs:
 1. The [process-local state snapshot](./orchestrator-state-snapshot.md)
    (one row per `Services` field and per tenant loop, taken 2026-11-25). It
    lists 35 `gate`, 31 `owner` and 45 `volatile` fields, and 25 `owner` loops.
-2. Generic work claims: `Store::claim_work`, `renew_work_claim`,
-   `release_work_claim` (`intent-store/src/work_claim_repo.rs`,
-   `postgres/work_claims.rs`), first used by `spawn_token_usage_scan_loop`.
+2. Leases: `Store::acquire_lease`, `renew_lease`, `release_lease`,
+   `guard_lease` and `LeaseKeeper` (`intent-store/src/lease_repo.rs`,
+   `lease_keeper.rs`, `postgres/leases.rs`), used by
+   `spawn_token_usage_scan_loop` and machine link ownership.
 3. Delivery claims: `claim_delivery` in `postgres/completion_watches.rs`
    (`ProcessToken` + tenant epoch).
 
@@ -1553,17 +1596,18 @@ moves off the lease only when it gets its own claim.
 | Owned work | Where | Why it needs one owner |
 |---|---|---|
 | Lease bookkeeping | `lease.rs`: `claim_lease`, `renew_lease`, `release_lease` (`Fence::Skip`) | It is how the fence changes. |
-| Tenant loops not on work claims (23 of 24) | `intent-app/src/tenant.rs`: `spawn_pr_refresh_loop`, `spawn_pr_monitor_loop`, `spawn_completion_delivery_loop`, `spawn_auto_commit_loop`, `spawn_push_publisher`, `spawn_auto_archive_loop`, `spawn_auto_retire_loop`, `spawn_tenant_retention_loop`, ... | Two runners double forge calls, wakes, commits and pushes. |
+| Tenant loops not on leases (23 of 24) | `intent-app/src/tenant.rs`: `spawn_pr_refresh_loop`, `spawn_pr_monitor_loop`, `spawn_completion_delivery_loop`, `spawn_auto_commit_loop`, `spawn_push_publisher`, `spawn_auto_archive_loop`, `spawn_auto_retire_loop`, `spawn_tenant_retention_loop`, ... | Two runners double forge calls, wakes, commits and pushes. |
 | Startup rehydration | `rehydrate_hooks`, `rehydrate_pr_monitors`, `heal_event_subscriptions_on_startup` | They start timers and delivery tasks in this process. A second process would deliver again. |
-| Machine links | `resume_exposed_machines`; `LinkOwnership` (`intent-node-connections/src/ownership.rs`) | A machine accepts only the newest link generation. Only `LocalOwnership` (one fixed epoch) exists, so no per-machine claim is enforced yet. |
+| Machine links (start only) | `resume_exposed_machines` | Each link holds its own lease (`LeaseLinkOwnership`), but connectors still start only in the owner. |
 | Git receive hooks | head's git hub, installed by `serve_tenant` (`intentd-orchestrator/src/serve.rs`; test `tests/node_git_hooks.rs`) | Hub repositories are on the owner's local disk. |
 | In-memory timers and runtimes (`owner` fields) | `hold_release_timers`, debouncers, `completion_delivery_retries`, `pending_workspace_deletes`, `pty`, `mcp_hub`, `event_bus` | State is only in this process memory. |
 
 Rules:
 
-1. An owned item leaves the lease only after it takes a per-item claim
-   (`claim_work(kind, key, ttl)`, `claim_delivery`, or a Postgres
-   `LinkOwnership`). The token-usage scan is the first item to do this.
+1. An owned item leaves the tenant lease only after it holds its own
+   lease (`acquire_lease(scope, key, ttl)` with a `LeaseKeeper`). The
+   token-usage scan and machine links do this; delivery claims
+   (`claim_delivery`) still depend on the tenant epoch.
 2. A request replica starts no owned work. It does not call
    `start_background` and does not dial machines.
 
@@ -1642,14 +1686,14 @@ writer-lock value (`partial` or `no`; none is `covered`).
 | Dedupe and idempotency | `dismissal_notices_sent` | no | unique key (`INSERT ... ON CONFLICT DO NOTHING`) |
 | | `idempotency_inflight` | partial | unique key on a pending row; waiters replay the stored result |
 | | `attachment_idempotency_inflight` | partial | unique key on a pending row; waiters replay |
-| Single-flight work | `completion_deliveries_in_flight` | partial | work claim (`claim_delivery`) |
-| | `completion_watch_registration_gate` | partial | work claim; delivery reads the stored watch, not memory |
-| | `automatic_pr_refresh` | no | work claim per PR |
-| | `review_monitor_poll_lane` | no | work claim per monitor |
-| | `legacy_pr_monitor_poll_lane` | no | work claim per monitor |
-| | `gitlab_credential_gate` | no | work claim for refresh + version CAS on persist |
-| Multi-step lifecycle | `agent_retirement_gates` | no | work claim per agent |
-| | `archive_fence` | no | work claim per workspace |
+| Single-flight work | `completion_deliveries_in_flight` | partial | delivery claim (`claim_delivery`), moving onto a lease |
+| | `completion_watch_registration_gate` | partial | lease; delivery reads the stored watch, not memory |
+| | `automatic_pr_refresh` | no | lease per PR |
+| | `review_monitor_poll_lane` | no | lease per monitor |
+| | `legacy_pr_monitor_poll_lane` | no | lease per monitor |
+| | `gitlab_credential_gate` | no | lease for refresh + version CAS on persist |
+| Multi-step lifecycle | `agent_retirement_gates` | no | lease per agent |
+| | `archive_fence` | no | lease per workspace |
 | | `workspace_mutations` | no | row lock on the workspace row + a deleting state that producers check |
 | Local process and disk | `archive_script_gates` | no | stays owner-only |
 | | `worktree_locks` | no | stays owner-only (the home serializes git work) |
@@ -1675,10 +1719,10 @@ Notes:
 
 ### Decisions
 
-1. **Claims survive an owner takeover.** Work claims and delivery claims
-   depend only on their own `claim_id`, `ProcessToken` and expiry (by the
-   database clock), not on the tenant epoch. A takeover does not void a
-   request process's claim.
+1. **Claims survive an owner takeover.** A lease depends only on its own
+   id, token and expiry (by the database clock), not on the tenant epoch, so
+   a takeover does not void it. Delivery claims still use the tenant epoch
+   until they move onto leases.
 2. **One shared mechanism puts events in the domain transaction.** A
    `WriteTx` method appends the event in the caller's transaction and hands
    it to the bus after commit. Gate families adopt it one at a time; the bus
