@@ -153,6 +153,46 @@ the editor, which reacts to the full press: dispatch `pointerdown`, `mousedown`,
 for ⌘-click). A ⌘-clicked web link opens a Browser panel whose page area stays blank in
 the web sandbox; the page itself renders only in Electron.
 
+### Count Daemon Requests in the App Sandbox
+
+Dev builds carry an opt-in counter of the daemon requests the renderer sends, by JSON-RPC
+method. Use it to check that a flow does not send redundant reads, without patching the
+transport or wrapping `WebSocket`. Production and packaged builds never enable it.
+
+Turn it on in the app tab, then reload so counting starts with the first request:
+
+```javascript
+await ws.browser.exec([{ action: "evaluate", tabId,
+  expression: "localStorage.setItem('intent.devRequestCounter', '1'); location.reload()" }]);
+```
+
+After the reload hydrates, `window.__intentRequestCounter` exposes:
+
+| Call | Returns |
+|---|---|
+| `counts()` | Requests since the reload or the last `reset()`, as `{ method: count }` sorted by method |
+| `count(method)` | One method's count |
+| `reset()` | Nothing; starts the next measurement from zero |
+| `overBudget({ method: max })` | `[{ method, count, budget }]` for each method over its maximum; `[]` when all hold |
+
+To measure one flow, reset, perform it, then read the counts:
+
+```javascript
+await ws.browser.exec([{ action: "evaluate", tabId,
+  expression: "window.__intentRequestCounter.reset()" }]);
+// ...navigate or open the dialog under test, then wait for the page to settle...
+return ws.browser.exec([{ action: "evaluate", tabId,
+  expression: "JSON.stringify(window.__intentRequestCounter.counts())" }]);
+```
+
+In the browser build the counter sees every request the WebSocket transport sends, including
+`client.hello` and `events.subscribe`. In a dev Electron renderer it counts the requests the
+renderer forwards to the main process, not the main process's own requests (use the RPC
+Dev Console for those). Remove the `intent.devRequestCounter` key and reload to turn it off.
+
+The same counts are checked automatically by the
+[daemon request budgets](#daemon-request-budgets) test.
+
 ### Remote Sandbox Internals
 
 `scripts/dev-ports.sh` hashes the worktree's canonical path into one of 1,000 four-port
@@ -546,6 +586,24 @@ standalone checkout. Renderer tests must consume those full responses with real
 identity/catalog selectors and assert the model label or Auto plus the absence of
 warnings, fallback actions, model mutations and toasts. A hash check alone does not
 establish daemon provenance; the connected gate must regenerate and compare outputs.
+
+### Daemon request budgets
+
+`src/routes/__tests__/daemon-request-budgets.test.ts` guards against redundant daemon
+reads, such as a full workspace list read three times at startup or one permission read
+per workspace (cloudlands-fe#5063). It boots the real root layout, store, sagas, seeders
+and browser WebSocket transport against a scripted daemon (`src/test/fake-daemon-socket.ts`),
+counts requests with the dev-only request counter, and fails when a flow goes over a
+method's budget: startup, Home to Settings to Home, opening New workspace twice, a forced
+reconnect, and management grants that arrive during permission recovery. Run it with:
+
+```bash
+pnpm vitest run src/routes/__tests__/daemon-request-budgets.test.ts
+```
+
+`REQUEST_BUDGETS_REPORT=<file>` writes every method's count for each flow. Raise a budget
+only with the reason in the PR description; to see the counts in a running app, use
+[Count Daemon Requests in the App Sandbox](#count-daemon-requests-in-the-app-sandbox).
 
 ### Transfer-selection contract
 
