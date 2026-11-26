@@ -62,6 +62,13 @@ launch-only steps apply to named profiles only (`<base>@<id>`); a Default
 configuration's overrides run as saved. "Does not set `X`" below means the profile has
 no `set` or `unset` entry for `X` (compared ignoring ASCII case).
 
+<a id="account-folders"></a>The **account folders** are the variables in the Account
+folder column. Every rule below that names account folders means all of that column,
+compared ignoring ASCII case, under any base provider. Those rules link here and do not
+list the folders again, so a new base changes one row. `make check-provider-profile-bases`
+(part of `make consumer-checks`) compares this table, and the base-only rows of
+[Reserved keys](#reserved-keys), with the daemon's provider registry.
+
 Clients read the reference from `ProviderProfile.providerRef` and never compose it from
 a name.
 
@@ -307,8 +314,8 @@ interface ProfileActivation {
   login shell. A key that is absent inherits normally. Values are never shell-expanded
   or executed, with the one exception below. Profile entries override inherited
   values for the same key.
-- **Home expansion.** For the account folders only (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
-  `GROK_HOME` and `DSH_HOME`, compared ignoring ASCII case), a `set` value that is exactly `~` or starts with `~/` is
+- **Home expansion.** For the [account folders](#account-folders) only, a `set` value
+  that is exactly `~` or starts with `~/` is
   expanded to the daemon user's home directory when the profile environment is
   resolved. `~/.claude-work` becomes `<home>/.claude-work`. Expansion happens
   before account-home lookup, isolation and fingerprinting, so auth checks, model
@@ -343,8 +350,7 @@ interface ProfileActivation {
 - `list` returns masked values, except the folder paths below. No method returns any
   other saved value.
 - <a id="folder-paths-on-reads"></a>**Folder paths on reads.** A `set` entry whose key is
-  an account folder (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME` or `DSH_HOME`, compared
-  ignoring ASCII case, as for home expansion, under any base provider) reads back with `value` exactly as stored:
+  an [account folder](#account-folders) reads back with `value` exactly as stored:
   not masked and not home-expanded, so `~/.claude-work` reads as `~/.claude-work`.
   This applies to every `EnvEntryRead`: `providers.profiles.list` (profiles and
   `defaults`), the `profile` in `create` and `update` results, and the
@@ -373,9 +379,8 @@ interface ProfileActivation {
   `list` (profiles and `defaults`), the `profile` in `create` and `update` results,
   the `profiles` in `reorder` results, and the `defaultConfig` in `updateDefault`
   results. `create`, `update` and `updateDefault` write it.
-  - **Can't be marked.** A configuration that **sets** an account folder
-    (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME` or `DSH_HOME`, compared ignoring ASCII case, under any
-    base provider) is never remote-compatible. The folder is signed in on this
+  - **Can't be marked.** A configuration that **sets** an
+    [account folder](#account-folders) is never remote-compatible. The folder is signed in on this
     backend; another machine may lack it or hold a different account under the same
     path. A write that sends `remoteCompatible: true` for a configuration whose
     saved `env` would set an account folder fails with the `remote-account-folder`
@@ -455,12 +460,14 @@ nothing else. A failed reorder changes nothing.
 
 An unknown `profileId` returns `-32602` with `data.code: "not-found"`.
 
-**Reserved keys.** These are compared ignoring ASCII case. Intent owns them: launch
+<a id="reserved-keys"></a>**Reserved keys.** These are compared ignoring ASCII case. Intent owns them: launch
 replaces the value, or the daemon reads it to locate the shared installation before
 any profile environment applies. A saved override would therefore be ignored or would
 break the shared installation. The `env-key-reserved` message names the reason. For
-`HOME` and `USERPROFILE` it also points to the base's account folder, when it has one
-(`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GROK_HOME` or `DSH_HOME`), which selects an account.
+`HOME` and `USERPROFILE` it also points to the base's [account folder](#account-folders),
+when it has one, which selects an account. A reason that starts with a base id and
+"only" (for example "`cursor` only:") reserves the key for that base alone; every other
+row applies to every base.
 
 | Key or pattern | Why |
 | --- | --- |
@@ -472,16 +479,17 @@ break the shared installation. The `env-key-reserved` message names the reason. 
 | `npm_config_workspace*`, `npm_workspace*`, `npm_config_include_workspace_root` | Removed from adapter bootstrap launches |
 | `INTENT_*`, `INTENTD_*` | Intent session and bootstrap wiring |
 | `GIT_CONFIG_PARAMETERS`, `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` | Intent sets this at launch (session wiring and commit identity). Reserved for every base. |
-| `INITIAL_AGENT_MODE` | Intent sets this at launch (session wiring and commit identity). Reserved for Codex only; Claude Code profiles may set it. |
-| `AGENT_CLI_CREDENTIAL_STORE` | Cursor only: Intent sets it for a [Cursor API key](#cursor-api-key) profile. |
-| `DSH_TELEMETRY_DISABLED` | DeepSeek Harness only: Intent always sets it to turn off DSH telemetry, so a profile cannot turn it back on. |
+| `INITIAL_AGENT_MODE` | `codex` only: Intent sets the Codex permission mode at launch. Profiles of other bases may set it. |
+| `AGENT_CLI_CREDENTIAL_STORE` | `cursor` only: Intent sets it for a [Cursor API key](#cursor-api-key) profile. |
+| `DSH_TELEMETRY_DISABLED` | `dsh` only: Intent always sets it to turn off DSH telemetry, so a profile cannot turn it back on. |
 
 Reservation applies to both `set` and `unset`. A profile therefore cannot override or
 remove Intent's git commit identity or its credential-helper configuration.
 
-Account configuration variables remain supported, for example `CODEX_HOME`,
-`CLAUDE_CONFIG_DIR`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`
-and `CODEX_ACCESS_TOKEN`. Adding a reserved key requires a contract update so that
+Account configuration variables remain supported, for example the
+[account folders](#account-folders), the credentials of
+[Profile-capable bases](#profile-capable-bases), `ANTHROPIC_BASE_URL` and
+`OPENAI_BASE_URL`. Adding a reserved key requires a contract update so that
 existing profiles are not silently degraded.
 
 <a id="codex-api-key"></a>**Codex API key.** *(Additive.)* Codex ignores an API key
@@ -1094,8 +1102,8 @@ runs a provider CLI, so it never checks one:
   **Test** button on an orchestrator.
 - **Remote compatibility is implied.** Every profile, and every Default with
   overrides, counts as remote-compatible without the mark; reason
-  `not-marked` never fires. A configuration that sets an account folder
-  (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME` or `DSH_HOME`) stays refused with reason
+  `not-marked` never fires. A configuration that sets an
+  [account folder](#account-folders) stays refused with reason
   `account-folder`. `ProviderProfile` and `DefaultConfig` reads keep the stored
   `remoteCompatible` (so switching back to `regular` restores it); the catalog's
   `profiles[].remoteCompatible` and `defaultRemoteLaunch` report the effective
