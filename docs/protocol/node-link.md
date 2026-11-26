@@ -4795,8 +4795,8 @@ interface ProfileEnvOverlay {
   admission; the agent then has that profile selected.)
 - **Freshness.** The overlay is resolved again at every start, so the machine
   runs with the profile's current values.
-- **Account folders.** The backend never launches a configuration that sets
-  `CLAUDE_CONFIG_DIR` or `CODEX_HOME` on a machine: such a configuration is not
+- **Account folders.** The backend never launches a configuration that sets an
+  [account folder](./methods/provider-profiles.md#account-folders) on a machine: such a configuration is not
   [remote-compatible](./methods/provider-profiles.md#remote-compatibility) and is
   refused before any launch. A machine that still receives one (from an older
   backend) expands a leading `~` or `~/` against its own home and requires each
