@@ -56,6 +56,8 @@ lives in the submodule repos:
 | `packages/intentd` | [intent-hq/intentd](https://github.com/intent-hq/intentd) | Rust backend daemon |
 | `packages/cloudlands-fe` | [intent-hq/cloudlands-fe](https://github.com/intent-hq/cloudlands-fe) | Electron + SvelteKit desktop frontend |
 | `packages/ios` | [intent-hq/ios](https://github.com/intent-hq/ios) | SwiftUI iOS companion app (private) |
+| `packages/intent-apps` | [intent-hq/intent-apps](https://github.com/intent-hq/intent-apps) | Intent apps SDK and manifest schema (in development) |
+| `packages/intent-os` | [intent-hq/intent-os](https://github.com/intent-hq/intent-os) | Intent OS images and session |
 
 `packages/ios` is private and marked `update = none` in `.gitmodules`, so
 recursive clones and submodule updates skip it by default; internal developers

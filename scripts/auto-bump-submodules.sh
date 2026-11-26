@@ -18,6 +18,8 @@
 #
 # packages/ios is best-effort: if its remote tip cannot be read (private repo,
 # no token access), it is skipped with a warning and never fails the run.
+# Every other submodule (intentd, cloudlands-fe, and the public intent-apps
+# and intent-os) is required: an unreadable tip fails the run.
 #
 # When every pin was read and none is behind but an auto/submodule-bump PR is
 # still open (main already carries its pins, e.g. a labeled pin PR landed the

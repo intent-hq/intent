@@ -823,13 +823,16 @@ gitlinks trigger a continuation to pick up deferred tips after a queued bump mer
 cron run every 30 minutes is the backstop, and `workflow_dispatch` handles urgent bumps.
 
 The workflow authenticates with `SUBMODULE_BUMP_TOKEN` — a fine-grained PAT with
-contents:read on `intent-hq/intentd`, `intent-hq/cloudlands-fe`, and `intent-hq/ios`,
+contents:read on `intent-hq/intentd`, `intent-hq/cloudlands-fe`, `intent-hq/ios`,
+`intent-hq/intent-apps`, and `intent-hq/intent-os`,
 plus contents:write and pull-requests:write on `intent-hq/intent`. Like
 `MONOREPO_DISPATCH_TOKEN`, `INTENTD_RELEASES_TOKEN` and `MONOREPO_ISSUES_TOKEN`, it is
 fail-soft: when the secret is absent the step logs a warning and exits successfully (the
 cron backstop still advances the pins when dispatch is skipped). The private
 `packages/ios` submodule is best-effort — if its tip cannot be read, it is skipped with
-a warning and never fails the run.
+a warning and never fails the run. The public `packages/intent-apps` and `packages/intent-os`
+submodules are not best-effort: an unreadable tip fails the run like intentd. Neither is
+part of the cloudlands-fe release train, so their pin bumps ship nothing to a channel.
 
 ## Coordinated Release Ordering
 

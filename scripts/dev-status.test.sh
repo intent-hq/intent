@@ -462,7 +462,7 @@ assert isinstance(coverage["ready"], bool) and isinstance(coverage["detail"], st
 assert coverage["detail"].startswith("cargo-llvm-cov: "), coverage
 assert {"DEV_PORT", "DEV_TCP_PORT", "BRIDGE_PORT", "CDP_PORT"} <= set(report["ports"])
 assert report["sandboxes"] == []
-assert set(report["repos"]) == {"monorepo", "intentd", "cloudlands-fe"}
+assert set(report["repos"]) == {"monorepo", "intentd", "cloudlands-fe", "intent-apps", "intent-os"}
 assert list(report["repos"])[0] == "monorepo"
 monorepo = report["repos"]["monorepo"]
 assert {"gitState", "gitErrors", "branch", "dirty", "ahead", "behind", "behindOriginMain",
@@ -609,7 +609,7 @@ mkdir -p "$fixture/scripts"
 cp "$script" "$fixture/scripts/dev-status.sh"
 cp "$repo_root/scripts/github_readiness.py" "$fixture/scripts/github_readiness.py"
 git init -q -b main "$fixture"
-for name in intentd cloudlands-fe; do
+for name in intentd cloudlands-fe intent-apps intent-os; do
   git init -q -b main "$temp_dir/src-$name"
   git -C "$temp_dir/src-$name" commit -q --allow-empty -m "$name base"
   git_fixture submodule add -q "$temp_dir/src-$name" "packages/$name"
@@ -629,7 +629,7 @@ fixture_human_status() {
 }
 
 in_sync=$(fixture_status)
-[[ "$in_sync" == "{\"cloudlands-fe\": [true, \"$(git_fixture rev-parse --short=7 HEAD:packages/cloudlands-fe)\", false, 0], \"intentd\": [true, \"$intentd_pin\", false, 0]}" ]] \
+[[ "$in_sync" == "{\"cloudlands-fe\": [true, \"$(git_fixture rev-parse --short=7 HEAD:packages/cloudlands-fe)\", false, 0], \"intent-apps\": [true, \"$(git_fixture rev-parse --short=7 HEAD:packages/intent-apps)\", false, 0], \"intent-os\": [true, \"$(git_fixture rev-parse --short=7 HEAD:packages/intent-os)\", false, 0], \"intentd\": [true, \"$intentd_pin\", false, 0]}" ]] \
   || fail "in-sync fixture reported $in_sync"
 
 git -C "$fixture/packages/intentd" commit -q --allow-empty -m "moved off the pin"
