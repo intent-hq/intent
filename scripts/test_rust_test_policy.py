@@ -67,7 +67,10 @@ class RustTestPolicyTests(unittest.TestCase):
                         GIT_AUTHOR_NAME="test", GIT_AUTHOR_EMAIL="test@example.invalid",
                         GIT_COMMITTER_NAME="test", GIT_COMMITTER_EMAIL="test@example.invalid",
                         INTENT_ACP_CALLBACK_ADAPTER_FIXTURE=str(self.fixture),
-                        INTENTD_TEST_TIMEOUT_MULTIPLIER="7", RUSTFLAGS="--cfg caller")
+                        INTENTD_TEST_TIMEOUT_MULTIPLIER="7", RUSTFLAGS="--cfg caller",
+                        # HERMETIC defaults from the host (Linux + working bwrap):
+                        # pin the unwrapped mode so every host runs the same argv.
+                        HERMETIC="0")
         (self.component / "scripts").mkdir(parents=True)
         (self.root / "scripts").mkdir()
         # Keep real check/gate recipes through recursive make. Only unrelated

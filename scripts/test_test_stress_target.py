@@ -68,7 +68,9 @@ class TestStressTargetTests(unittest.TestCase):
                                     "GATE_CACHE_DIR", "COUNT", "LOAD", "LOAD_CPUS", "LOAD_CORES", "STALL", "STALL_MS",
                                     "STALL_EVERY_MS",
                                     "INTENTD_TEST_TIMEOUT_MULTIPLIER", "BASE", "HINT_STUB_EXIT"}}
-        environment.update(TEST_STRESS_LOG=str(self.log), HINT_LOG=str(self.hint_log), TEST_STRESS_CARGO_LOG=str(self.cargo_log),
+        # HERMETIC defaults from the host (Linux + working bwrap); pin the
+        # unwrapped mode so the runner argv is the same on every host.
+        environment.update(HERMETIC="0", TEST_STRESS_LOG=str(self.log), HINT_LOG=str(self.hint_log), TEST_STRESS_CARGO_LOG=str(self.cargo_log),
                            **(env or {}))
         result = subprocess.run(
             ["make", "--no-print-directory", "test-stress", *arguments,

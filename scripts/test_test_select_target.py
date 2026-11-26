@@ -67,7 +67,9 @@ class TestSelectTargetTests(unittest.TestCase):
                        if k not in {"MAKEFLAGS", "MFLAGS", "MAKELEVEL", "E", "RESUME", "GATE_FORCE",
                                     "NO_FAIL_FAST", "FEATURES", "HERMETIC", "COMPACT", "BUILD_JOBS",
                                     "TEST_THREADS", "GATE_CACHE_DIR", "BASE", "HINT_STUB_EXIT"}}
-        environment.update(TEST_SELECT_LOG=str(self.log), HINT_LOG=str(self.hint_log), TEST_SELECT_CARGO_LOG=str(self.cargo_log),
+        # HERMETIC defaults from the host (Linux + working bwrap); pin the
+        # unwrapped mode so the runner argv is the same on every host.
+        environment.update(HERMETIC="0", TEST_SELECT_LOG=str(self.log), HINT_LOG=str(self.hint_log), TEST_SELECT_CARGO_LOG=str(self.cargo_log),
                            **(env or {}))
         result = subprocess.run(
             ["make", "--no-print-directory", "test-select", *arguments,

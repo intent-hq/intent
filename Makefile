@@ -488,28 +488,37 @@ GATE_FORCE ?= 0
 # non-zero).
 NO_FAIL_FAST ?= 0
 GATE_CACHE_DIR ?= $(HOME)/.cache/intent/gate-runs
-# HERMETIC=1 runs test / test-changed / test-select the way CI's runners see the machine:
-# intentd's scripts/test-without-provider-clis.sh hides every provider CLI
-# (codex, claude, opencode, ...) in a private mount namespace, so a test that
-# only passes because the host has them fails here instead of on CI
-# (intentd#2462). Linux only; needs bwrap. Node stays visible, as on CI: the
-# gates' fixture checks need it, so HIDE_NODE=1 is refused here (run the
-# script directly around cargo nextest for a Node-free run). Resume records
-# are kept separate per mode. The wrapper's discovery self-check builds with
-# $(BUILD_JOBS) jobs.
-HERMETIC ?= 0
+# HERMETIC=1 runs test / test-changed / test-select / test-stress the way CI's
+# runners see the machine: intentd's scripts/test-without-provider-clis.sh hides
+# every provider CLI (codex, claude, opencode, ...) in a private mount
+# namespace, so a test that only passes because the host has them fails here
+# instead of on CI (intentd#2462, intentd#3792). It is the default on Linux
+# when bwrap can create a sandbox (probed lazily, only by these targets);
+# HERMETIC=0 opts out, and other hosts default to 0. Node stays visible, as on
+# CI: the gates' fixture checks need it, so HIDE_NODE=1 is refused here (run
+# the script directly around cargo nextest for a Node-free run). Resume
+# records are kept separate per mode. The wrapper's discovery self-check builds
+# with $(BUILD_JOBS) jobs.
+HERMETIC_ORIGIN := $(origin HERMETIC)
+HERMETIC_DETECTED = $(eval HERMETIC_DETECTED := $(shell [ "$$(uname -s 2>/dev/null)" = Linux ] && bwrap --dev-bind / / true >/dev/null 2>&1 && echo 1 || echo 0))$(HERMETIC_DETECTED)
+HERMETIC ?= $(HERMETIC_DETECTED)
+ifneq ($(HERMETIC_ORIGIN),undefined)
 ifneq ($(filter-out 0 1,$(HERMETIC)),)
 $(error HERMETIC must be 0 or 1, got '$(HERMETIC)')
 endif
-HERMETIC_WRAP := $(if $(filter 1,$(HERMETIC)),env INTENT_GATE_HERMETIC=1 CARGO_BUILD_JOBS=$(BUILD_JOBS) bash "$(INTENTD_DIR)/scripts/test-without-provider-clis.sh",)
-HERMETIC_RUNNER_WRAP := $(if $(filter 1,$(HERMETIC)),env INTENT_GATE_HERMETIC=1 CARGO_BUILD_JOBS=$(BUILD_JOBS) bash "$$INTENTD_DIR/scripts/test-without-provider-clis.sh" ,)
-# Fail before planning or building when HERMETIC=1 cannot run here, and say
-# which mode the run uses (also under DRY_RUN=1).
+endif
+HERMETIC_WRAP = $(if $(filter 1,$(HERMETIC)),env INTENT_GATE_HERMETIC=1 CARGO_BUILD_JOBS=$(BUILD_JOBS) bash "$(INTENTD_DIR)/scripts/test-without-provider-clis.sh",)
+HERMETIC_RUNNER_WRAP = $(if $(filter 1,$(HERMETIC)),env INTENT_GATE_HERMETIC=1 CARGO_BUILD_JOBS=$(BUILD_JOBS) bash "$$INTENTD_DIR/scripts/test-without-provider-clis.sh" ,)
+HERMETIC_HOW = $(if $(filter undefined,$(HERMETIC_ORIGIN)),default on this host,set explicitly)
+# Fail before planning or building when HERMETIC=1 cannot run here, and print
+# one line naming the mode the run uses (also under DRY_RUN=1).
 HERMETIC_PREFLIGHT = if [ "$(HERMETIC)" = 1 ]; then \
 		[ "$$(uname -s 2>/dev/null)" = Linux ] || { echo "[$@] ERROR: HERMETIC=1 is Linux only (it hides provider CLIs in a bwrap mount namespace)" >&2; exit 1; }; \
 		command -v bwrap >/dev/null 2>&1 || { echo "[$@] ERROR: HERMETIC=1 needs bwrap; run make doctor (Debian/Ubuntu: sudo apt-get install bubblewrap)" >&2; exit 1; }; \
 		[ "$${HIDE_NODE:-0}" != 1 ] || { echo "[$@] ERROR: HIDE_NODE=1 is not supported with HERMETIC=1: the gates' callback and transfer fixture checks need Node. For a Node-free run use $(INTENTD_DIR)/scripts/test-without-provider-clis.sh around cargo nextest" >&2; exit 1; }; \
-		echo "[$@] HERMETIC=1: tests run with every provider CLI hidden ($(INTENTD_DIR)/scripts/test-without-provider-clis.sh)"; \
+		echo "[$@] HERMETIC=1 ($(HERMETIC_HOW); HERMETIC=0 opts out): tests run with every provider CLI hidden, as on CI ($(INTENTD_DIR)/scripts/test-without-provider-clis.sh)"; \
+	else \
+		echo "[$@] HERMETIC=0 ($(HERMETIC_HOW); hermetic mode needs Linux with a working bwrap): tests see this host's provider CLIs, unlike CI"; \
 	fi
 
 # Node heap ceiling (MB) for the FE production build. The renderer's vite build
@@ -911,7 +920,7 @@ check: $(RUST_CHECK_TARGETS) ## Makefile target check + protocol field parity + 
 gate: check | check-callback-fixture check-transfer-fixture ## Run all local Rust gates (fmt, cargo-shear, clippy, Postgres store clippy, source lints, then nextest)
 	@$(INTENTD_TREE_CHECKED_ENV) $(MAKE) --no-print-directory test
 
-test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures, HERMETIC=1 hides provider CLIs like CI)
+test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures; hides provider CLIs like CI by default on Linux with bwrap, HERMETIC=0 opts out)
 
 test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
 	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_gate_storage scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_postgres_store_hint scripts.test_flake_triage scripts.test_nextest_stress scripts.test_host_load scripts.test_watch_capacity scripts.test_intentd_tree_preflight scripts.test_sandbox_shot_target scripts.test_live_rig
@@ -982,7 +991,7 @@ test-intentd: ensure-intentd-submodule | check-transfer-fixture
 # expands, so apostrophes or spaces in CURDIR/GATE_CACHE_DIR never reach a
 # nested quote; the script execs the runner from this directory, so the
 # relative scripts/ path resolves against the monorepo root.
-test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd branch changed vs BASE, recording the run (RESUME=1 resumes, NO_FAIL_FAST=1 continues past failures, HERMETIC=1 hides provider CLIs like CI, DRY_RUN=1 prints the plan)
+test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd branch changed vs BASE, recording the run (RESUME=1 resumes, NO_FAIL_FAST=1 continues past failures, HERMETIC as for test, DRY_RUN=1 prints the plan)
 	@if [ -z "$(DRY_RUN)" ] || [ "$(DRY_RUN)" = 0 ]; then \
 		python3 scripts/check_watch_capacity.py --quiet || exit $$?; \
 		cargo nextest --version >/dev/null 2>&1 || { \
@@ -1047,7 +1056,7 @@ fe-verify-changed: ensure-fe-submodule ensure-fe-toolchain ## Run only the front
 # caller policy and fixture preparation as `make test` (raw `cargo nextest`
 # leaves the callback/transfer fixture variables unset, so fixture tests fail
 # in bulk) and writes a gate-run record of its own (RESUME=1, GATE_FORCE=1,
-# NO_FAIL_FAST=1, HERMETIC=1 and COMPACT=1 apply unchanged). $(value E) keeps
+# NO_FAIL_FAST=1, HERMETIC and COMPACT=1 apply unchanged). $(value E) keeps
 # `$` (regex anchors) literal; apostrophes are escaped for the single-quoted
 # hand-off below, so E reaches nextest byte-for-byte. E must come from the make
 # command line (a stray exported E is not a selection) and is unexported, so it
@@ -1082,7 +1091,7 @@ $(error make $(firstword $(filter test-select test-stress,$(MAKECMDGOALS))) need
 endif
 endif
 
-test-select: ensure-intentd-submodule | check-transfer-fixture ## Run only the Rust tests matching E='<nextest filterset>' through the make test runner (fixtures, records; FEATURES=<crate/feature> enables Cargo features; RESUME=1, NO_FAIL_FAST=1, HERMETIC=1 as for test)
+test-select: ensure-intentd-submodule | check-transfer-fixture ## Run only the Rust tests matching E='<nextest filterset>' through the make test runner (fixtures, records; FEATURES=<crate/feature> enables Cargo features; RESUME=1, NO_FAIL_FAST=1, HERMETIC as for test)
 	@python3 scripts/check_watch_capacity.py --quiet
 	@cargo nextest --version >/dev/null 2>&1 || { \
 		echo "[test-select] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \

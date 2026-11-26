@@ -307,9 +307,10 @@ with no rollback.
   (95 bogus failures, intentd#2559); to prove a flake, its fix, or that a CI failure is not yours,
   use `make test-stress E=... COUNT=200 LOAD=1` (retries off, optional CPU + fsync load; `STALL=1`
   freezes the tests at random like a stalled CI runner, which LOAD missed for intentd#2917).
-- `make test` / `test-changed` / `test-select` print a unique `record:` attempt path, including
-  fully resumed runs. [Receipt and coverage details](CONTRIBUTING.md#test-attempt-receipts-and-resume-coverage)
-  explain evidence, interruption and seven-day tree retention. `RESUME=1` skips verified passes for
+- `make test` / `test-changed` / `test-select` print their mode and a unique `record:` attempt path.
+  On Linux with a working bwrap they default to `HERMETIC=1`, hiding provider CLIs as CI does (local
+  passes hid two CI timeouts on intentd#3792); `HERMETIC=0` opts out. [Receipt details](CONTRIBUTING.md#test-attempt-receipts-and-resume-coverage)
+  cover evidence and retention. `RESUME=1` skips verified passes for
   the same worktree, submodule pointers, toolchain, lockfile and effective settings (`GATE_FORCE=1`
   ignores them). To continue past a known flake, `RESUME=1 NO_FAIL_FAST=1 make test-changed` (or
   `make test`, `make fe-verify-changed`) runs the rest to completion, records them, and exits non-zero if anything failed ([intent-hq/intent#5645](https://github.com/intent-hq/intent/issues/5645)).
