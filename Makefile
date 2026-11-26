@@ -493,14 +493,18 @@ GATE_CACHE_DIR ?= $(HOME)/.cache/intent/gate-runs
 # every provider CLI (codex, claude, opencode, ...) in a private mount
 # namespace, so a test that only passes because the host has them fails here
 # instead of on CI (intentd#2462, intentd#3792). It is the default on Linux
-# when bwrap can create a sandbox (probed lazily, only by these targets);
+# when bwrap can create the wrapper's sandbox (probed only by these targets);
 # HERMETIC=0 opts out, and other hosts default to 0. Node stays visible, as on
 # CI: the gates' fixture checks need it, so HIDE_NODE=1 is refused here (run
 # the script directly around cargo nextest for a Node-free run). Resume
 # records are kept separate per mode. The wrapper's discovery self-check builds
 # with $(BUILD_JOBS) jobs.
 HERMETIC_ORIGIN := $(origin HERMETIC)
-HERMETIC_DETECTED = $(eval HERMETIC_DETECTED := $(shell [ "$$(uname -s 2>/dev/null)" = Linux ] && bwrap --dev-bind / / true >/dev/null 2>&1 && echo 1 || echo 0))$(HERMETIC_DETECTED)
+# The probe uses the namespaces the wrapper needs (a nested container can
+# allow a mount namespace but refuse a fresh /proc); keep it in sync with
+# scripts/bootstrap-dev-host.sh. Recursive, so only the test recipes run it.
+HERMETIC_PROBE = bwrap --dev-bind / / --tmpfs /tmp --unshare-pid --proc /proc --die-with-parent true
+HERMETIC_DETECTED = $(shell [ "$$(uname -s 2>/dev/null)" = Linux ] && $(HERMETIC_PROBE) >/dev/null 2>&1 && echo 1 || echo 0)
 HERMETIC ?= $(HERMETIC_DETECTED)
 ifneq ($(HERMETIC_ORIGIN),undefined)
 ifneq ($(filter-out 0 1,$(HERMETIC)),)
@@ -515,7 +519,7 @@ HERMETIC_HOW = $(if $(filter undefined,$(HERMETIC_ORIGIN)),default on this host,
 HERMETIC_PREFLIGHT = if [ "$(HERMETIC)" = 1 ]; then \
 		[ "$$(uname -s 2>/dev/null)" = Linux ] || { echo "[$@] ERROR: HERMETIC=1 is Linux only (it hides provider CLIs in a bwrap mount namespace)" >&2; exit 1; }; \
 		command -v bwrap >/dev/null 2>&1 || { echo "[$@] ERROR: HERMETIC=1 needs bwrap; run make doctor (Debian/Ubuntu: sudo apt-get install bubblewrap)" >&2; exit 1; }; \
-		[ "$${HIDE_NODE:-0}" != 1 ] || { echo "[$@] ERROR: HIDE_NODE=1 is not supported with HERMETIC=1: the gates' callback and transfer fixture checks need Node. For a Node-free run use $(INTENTD_DIR)/scripts/test-without-provider-clis.sh around cargo nextest" >&2; exit 1; }; \
+		[ "$${HIDE_NODE:-0}" != 1 ] || { echo "[$@] ERROR: HIDE_NODE=1 is not supported with HERMETIC=1: the gates' callback and transfer fixture checks need Node. For a Node-free run use $(INTENTD_DIR)/scripts/test-without-provider-clis.sh around cargo nextest, or pass HERMETIC=0 for an unwrapped run" >&2; exit 1; }; \
 		echo "[$@] HERMETIC=1 ($(HERMETIC_HOW); HERMETIC=0 opts out): tests run with every provider CLI hidden, as on CI ($(INTENTD_DIR)/scripts/test-without-provider-clis.sh)"; \
 	else \
 		echo "[$@] HERMETIC=0 ($(HERMETIC_HOW); hermetic mode needs Linux with a working bwrap): tests see this host's provider CLIs, unlike CI"; \

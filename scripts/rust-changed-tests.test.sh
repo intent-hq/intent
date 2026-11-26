@@ -289,6 +289,15 @@ else
   [[ "$planner_log" == *"runner:"$'\n'"python3"$'\n'* && "$stdout" != *"HERMETIC=1"* ]] \
     || fail "$case_name: runner argv was"$'\n'"$planner_log"
 
+  # A nested container can allow a plain mount namespace but refuse the fresh
+  # /proc the wrapper mounts: the default must probe the wrapper's namespaces.
+  case_name="test-changed recipe defaults to HERMETIC=0 when bwrap cannot mount the wrapper's /proc"
+  printf '#!/usr/bin/env bash\n[ "$*" = "--dev-bind / / true" ] && exit 0\necho "bwrap: Can'"'"'t mount proc on /newroot/proc: Operation not permitted" >&2; exit 1\n' >"$bin_dir/bwrap"
+  run_make test-changed
+  expect_make_ok
+  [[ "$stdout" == *"$hermetic_off_default"* ]] || fail "$case_name: mode not announced: $stdout"
+  [[ "$planner_log" == *"runner:"$'\n'"python3"$'\n'* ]] || fail "$case_name: runner argv was"$'\n'"$planner_log"
+
   case_name="test-changed recipe defaults to HERMETIC=0 when bwrap cannot create a sandbox"
   printf '#!/usr/bin/env bash\necho "bwrap: setting up uid map: Permission denied" >&2; exit 1\n' >"$bin_dir/bwrap"
   run_make test-changed
@@ -311,7 +320,7 @@ else
   case_name="test-changed recipe refuses HIDE_NODE=1 with HERMETIC=1 before planning"
   run_make test-changed HERMETIC=1 HIDE_NODE=1
   [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
-  [[ "$stderr" == *"[test-changed] ERROR: HIDE_NODE=1 is not supported with HERMETIC=1"* ]] || fail "$case_name: stderr: $stderr"
+  [[ "$stderr" == *"[test-changed] ERROR: HIDE_NODE=1 is not supported with HERMETIC=1"*"or pass HERMETIC=0"* ]] || fail "$case_name: stderr: $stderr"
   [[ -z "$planner_log" ]] || fail "$case_name: planner ran: $planner_log"
 
   case_name="test-changed recipe refuses HERMETIC=1 without bwrap before planning"

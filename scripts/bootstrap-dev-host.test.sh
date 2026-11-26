@@ -367,7 +367,7 @@ write_launcher uname '[ "$1" = -m ] && { echo x86_64; exit 0; }; echo Linux'
 run_doctor
 expect_line "[optional] bubblewrap: not installed, so make test keeps provider CLIs visible, unlike CI; Debian/Ubuntu: sudo apt-get install bubblewrap"
 gaps_without_bwrap=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
-write_launcher bwrap '[ "$*" = "--dev-bind / / true" ] && exit 0; exit 1'
+write_launcher bwrap '[ "$*" = "--dev-bind / / --tmpfs /tmp --unshare-pid --proc /proc --die-with-parent true" ] && exit 0; exit 1'
 run_doctor
 expect_line "[optional] bubblewrap: installed (make test hides provider CLIs like CI by default; HERMETIC=0 opts out)"
 gaps_with_bwrap=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
