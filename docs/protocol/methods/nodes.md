@@ -512,6 +512,7 @@ interface MachineModels {
     id: string;
     status: "signed-in" | "signed-out" | "unknown" | "auth-failed" | "cli-missing" | "prerequisite-missing";
     models: string[];               // the full list from the report, never capped
+    modelLabels?: Record<string, string>;  // display names by model id, when the machine named them
     modelsStale: boolean;
   }[];
   disabledProviders?: string[];
