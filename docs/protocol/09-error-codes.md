@@ -340,3 +340,15 @@ select the profile; and `provider-profile-replacement-required` with
 `data: { providerRef, reason }` when a qualified reference names a missing profile
 or a disabled base provider. The last one never falls back to another account.
 An unreadable profile file returns `-32603` with `data.code: "provider-profiles-unreadable"`.
+
+### Intent apps *(prepared)*
+
+An app connection ([§5.60](./methods/apps.md)) that calls a method outside the
+allowlist for its permission level gets the connection-level `-32003` without `data`,
+like a collaborator. The `app.*` refusals use `-32602` / `-32603` with these
+`data.code` values: `app-not-found`, `app-exists`, `path-not-found`,
+`invalid-manifest`, `invalid-bundle`, `level-unavailable`, `hash-mismatch`,
+`not-approved`, `file-not-found`, `session-invalid`, `attach-not-first`,
+`invalid-key`, `value-too-large`, `quota-exceeded`, `provider-unknown`,
+`model-unknown`, `invalid-params`, `rate-limited` and `timeout`. The
+[errors table](./methods/apps.md#errors) gives each one's numeric code and `data`.

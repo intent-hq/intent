@@ -311,6 +311,24 @@ A non-administrator connection receives only the event types below — live over
 
 Owner-only (the 57 refused types, `COLLABORATOR_REFUSED_EVENT_TYPES` in the intent-core golden): `terminal:data` / `terminal:exit` (raw PTY bytes) and `terminal:command` / `terminal:cwd` / `terminal:process` / `terminal:title`, `host:exec:stdout` / `stderr` / `exit`, `script:changed` / `output` / `state`, `build:started` / `build:completed`, `test:started` / `test:completed`, `browser:tab-opened` / `tab-updated` / `tab-closed`, `client:connected` / `client:disconnected`, `hook:run-started` / `hook:run-completed` (hook code and carried state), `agent:permission:request` / `agent:permission:resolved`, the agent delivery / subscription bookkeeping `agent:message:sent` / `agent:message:received` / `agent:message:delivery-failed` / `agent:delivery-confirmed` / `agent:event-delivery-failed` / `agent:event-delivery-timeout` / `agent:subscribed` / `agent:unsubscribed` / `agent:subscriptions-restored` / `agent:woken-by-subscription`, `workspace:transfer:progress` / `ready` / `failed`, `git:clone:progress` / `git:clone:done`, `gitRoot:registered` / `updated` / `unregistered`, `app:ui-highlight` / `app:ui-navigate` / `app:workspace-open`, `settings:changed`, `github:auth-changed`, `mcp.servers:status-changed`, `mcp:notification`.
 
+#### App principals *(prepared, §5.60)*
+
+The [Intent apps contract](./apps.md#sessions-and-the-app-principal) adds a third kind
+of caller beside the administrator and person principals. A fresh administrator
+connection that sends `app.session.attach { token }` as its first request is bound,
+for the rest of its life, to `{ kind: "app", appId, bundleHash, level, features, sessionId }`.
+
+- It is a non-administrator binding, but the collaborator allowlist above does **not**
+  apply to it. The same inbound chokepoint checks it against the
+  [app allowlist for its level](./apps.md#the-app-allowlists--methods-default-deny)
+  instead, with the same `-32003` refusal without `data` on a miss.
+- An app principal is never a workspace member, holds no role, takes no guest seat and
+  is not shown in presence or `workspace.members.list`.
+- `principal.me` on an app connection answers `kind: "app"` with the app's name as
+  `displayName` and `null` profile fields. On daemons that advertise `intentApps: 1`,
+  person principals also carry `kind: "person"`; a missing `kind` means `"person"`.
+- No `app.*` method is on the collaborator allowlist: the app library is owner-only.
+
 #### Attribution — who wrote a human message
 
 - **`fromPrincipalId` stamp.** Every user-origin entry point (`agent.sendMessage`, `agent.sendToTask`, `agent.queueMessage`, `agent.editQueuedMessage`, `agent.appendMessage`, `agent.editAndRegenerate`, `agent.wakeOrCreate`, `workspace.create`'s `initialAgent` message) stamps the bound wire caller's principal id into the message **metadata** under `fromPrincipalId` *before* the payload is persisted or enqueued — overwriting whatever the client supplied; an agent / daemon / unbound caller strips the key instead. Metadata only: the content is never annotated, so prompts stay byte-identical. A non-object `messageMetadata` is `-32602` (a human send must never fall back to the workspace default because its metadata had the wrong shape).
