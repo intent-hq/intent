@@ -185,7 +185,7 @@ return ws.browser.exec([{ action: "evaluate", tabId,
   expression: "JSON.stringify(window.__intentRequestCounter.counts())" }]);
 ```
 
-In the browser build the counter sees every frame the WebSocket transport sends, including
+In the browser build the counter sees every request the WebSocket transport sends, including
 `client.hello` and `events.subscribe`. In a dev Electron renderer it counts the requests the
 renderer forwards to the main process, not the main process's own requests (use the RPC
 Dev Console for those). Remove the `intent.devRequestCounter` key and reload to turn it off.
