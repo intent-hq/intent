@@ -86,6 +86,23 @@ stays valid. A bundle path is a relative path with `/` separators, no `..`
 segment, no leading `/`, no `\`, no NUL, at most 512 UTF-8 bytes, and it must name a
 regular file of the bundle.
 
+#### Validation rules
+
+These rules apply to every limit in this section; intentd, the SDK validator and the
+mock bridge must agree:
+
+- **chars** counts Unicode code points (not UTF-16 units, not bytes). **bytes** counts
+  UTF-8 bytes. "After trim" removes leading and trailing Unicode `White_Space`.
+- **Control characters** are C0 (U+0000–U+001F), DEL (U+007F) and C1 (U+0080–U+009F).
+  "No control chars" and the storage key rule both use this set.
+- **Printable ASCII** is U+0021–U+007E (no space).
+- **https URL**: printable ASCII only, at most 2048 chars, starts with the lowercase
+  prefix `https://`, and parses as an absolute URL (WHATWG URL) with a non-empty host.
+- **`intent-app.sig` limits**: at most 16384 bytes. It counts toward the 2000-file and
+  64 MiB limits, but not toward `fileCount` / `sizeBytes`.
+- **`signature` value**: checked only against `^[A-Za-z0-9_-]{1,1024}$`; the base64url
+  length modulo 4 is not checked in M1.
+
 #### Features
 
 | Feature | Level | Grants | Enforced by |
@@ -386,7 +403,7 @@ caller that is not an app principal (the administrator included) gets
 **Storage.** A durable key-value store per app id, in the daemon database. It is kept
 across `replace` installs and revokes and deleted by uninstall.
 
-- `key`: 1–256 UTF-8 bytes, no control characters (U+0000–U+001F, U+007F), else
+- `key`: 1–256 UTF-8 bytes, no control characters (C0, DEL, C1; see Validation rules), else
   `invalid-key`.
 - `value`: any JSON value, `null` included. Its compact serialized form is at most
   256 KiB, else `value-too-large`.
@@ -528,7 +545,7 @@ interface AppInfo {
 | host-local | `intent.app.info()` | 1 | From the `AppSession`; no daemon call |
 | host-local | `intent.window.setAlwaysOnTop(on)` | 2 `alwaysOnTop` | |
 | host-local | `intent.window.close()` | 1 | Closes the window; the host closes the session |
-| host-local | `intent.shortcuts.register(acc)` | 2 `globalShortcuts` | Electron accelerator syntax; at most 10 per app; taken by the OS or another app: `shortcut-unavailable` |
+| host-local | `intent.shortcuts.register(acc)` | 2 `globalShortcuts` | Electron accelerator syntax. Registering an accelerator the app already holds resolves (no-op). An 11th distinct accelerator: `invalid-params`. Taken by the OS or another app: `shortcut-unavailable` |
 | host-local | `intent.shortcuts.unregister(acc)` / `unregisterAll()` | 2 `globalShortcuts` | All are released when the window closes |
 | host-local | `intent.on("shortcut", fn)` | 2 `globalShortcuts` | `data = { accelerator }` |
 | host-local | `intent.on("session-ended", fn)` | 1 | `data = { reason: "closed" \| "revoked" \| "uninstalled" \| "updated" \| "disconnected" }`; the window closes after the listeners run. `"disconnected"` only when a reopen failed (below) |
@@ -555,6 +572,15 @@ where `call` is the bridge name without `intent.` (for example `"storage.get"`) 
 `{ ok: false, error: { code, message, data? } }`. Main to renderer:
 `"intent-app:event"` with `{ type, data }`. The host accepts these messages only from
 the app window's own `webContents` and frame `intent-app://<appId>/`.
+
+**`on()` is synchronous.** It returns the unsubscribe function. An unknown event type
+throws `not-supported` synchronously; `on("shortcut", …)` without the `globalShortcuts`
+feature throws `forbidden` synchronously.
+
+**Rejection shape.** The raw `window.intent` rejects with a plain object
+`{ code, message, data? }` (`data` omitted when empty), not an `Error` instance,
+because only plain objects survive `contextBridge` intact. The SDK turns it into an
+`IntentError`.
 
 **Errors seen by the app.** Calls reject with `IntentError { code, message, data? }`:
 
