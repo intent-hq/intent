@@ -307,8 +307,8 @@ interface ProfileActivation {
   login shell. A key that is absent inherits normally. Values are never shell-expanded
   or executed, with the one exception below. Profile entries override inherited
   values for the same key.
-- **Home expansion.** For the account folders only (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`
-  and `GROK_HOME`, compared ignoring ASCII case), a `set` value that is exactly `~` or starts with `~/` is
+- **Home expansion.** For the account folders only (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
+  `GROK_HOME` and `DSH_HOME`, compared ignoring ASCII case), a `set` value that is exactly `~` or starts with `~/` is
   expanded to the daemon user's home directory when the profile environment is
   resolved. `~/.claude-work` becomes `<home>/.claude-work`. Expansion happens
   before account-home lookup, isolation and fingerprinting, so auth checks, model
@@ -343,7 +343,7 @@ interface ProfileActivation {
 - `list` returns masked values, except the folder paths below. No method returns any
   other saved value.
 - <a id="folder-paths-on-reads"></a>**Folder paths on reads.** A `set` entry whose key is
-  an account folder (`CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `GROK_HOME`, compared
+  an account folder (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME` or `DSH_HOME`, compared
   ignoring ASCII case, as for home expansion, under any base provider) reads back with `value` exactly as stored:
   not masked and not home-expanded, so `~/.claude-work` reads as `~/.claude-work`.
   This applies to every `EnvEntryRead`: `providers.profiles.list` (profiles and
@@ -374,7 +374,7 @@ interface ProfileActivation {
   the `profiles` in `reorder` results, and the `defaultConfig` in `updateDefault`
   results. `create`, `update` and `updateDefault` write it.
   - **Can't be marked.** A configuration that **sets** an account folder
-    (`CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `GROK_HOME`, compared ignoring ASCII case, under any
+    (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME` or `DSH_HOME`, compared ignoring ASCII case, under any
     base provider) is never remote-compatible. The folder is signed in on this
     backend; another machine may lack it or hold a different account under the same
     path. A write that sends `remoteCompatible: true` for a configuration whose
@@ -460,7 +460,7 @@ replaces the value, or the daemon reads it to locate the shared installation bef
 any profile environment applies. A saved override would therefore be ignored or would
 break the shared installation. The `env-key-reserved` message names the reason. For
 `HOME` and `USERPROFILE` it also points to the base's account folder, when it has one
-(`CODEX_HOME`, `CLAUDE_CONFIG_DIR` or `GROK_HOME`), which selects an account.
+(`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GROK_HOME` or `DSH_HOME`), which selects an account.
 
 | Key or pattern | Why |
 | --- | --- |
@@ -474,6 +474,7 @@ break the shared installation. The `env-key-reserved` message names the reason. 
 | `GIT_CONFIG_PARAMETERS`, `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` | Intent sets this at launch (session wiring and commit identity). Reserved for every base. |
 | `INITIAL_AGENT_MODE` | Intent sets this at launch (session wiring and commit identity). Reserved for Codex only; Claude Code profiles may set it. |
 | `AGENT_CLI_CREDENTIAL_STORE` | Cursor only: Intent sets it for a [Cursor API key](#cursor-api-key) profile. |
+| `DSH_TELEMETRY_DISABLED` | DeepSeek Harness only: Intent always sets it to turn off DSH telemetry, so a profile cannot turn it back on. |
 
 Reservation applies to both `set` and `unset`. A profile therefore cannot override or
 remove Intent's git commit identity or its credential-helper configuration.
@@ -529,7 +530,8 @@ Clients save this kind with `CURSOR_API_KEY` set and `CURSOR_AUTH_TOKEN` unset.
 (`dsh`) prefers a key saved in `$DSH_HOME/.credentials.yaml` over `DEEPSEEK_API_KEY`. A
 `dsh` profile that sets a non-empty `DEEPSEEK_API_KEY` and does not set `DSH_HOME`
 therefore runs with `DSH_HOME=~/.intent/dsh-api-key/<profileId>-<key digest>` on the host
-that runs the provider. This folder follows the Grok home rules. The user's own `~/.dsh`
+that runs the provider. This folder follows the Grok home rules: it is launch-only and
+never saved, so it is not the saved `DSH_HOME` account folder of the rules above. The user's own `~/.dsh`
 (saved key, settings, sessions) is not used by that profile. Clients save this kind with
 `DEEPSEEK_API_KEY` set and nothing unset.
 
@@ -1093,7 +1095,7 @@ runs a provider CLI, so it never checks one:
 - **Remote compatibility is implied.** Every profile, and every Default with
   overrides, counts as remote-compatible without the mark; reason
   `not-marked` never fires. A configuration that sets an account folder
-  (`CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `GROK_HOME`) stays refused with reason
+  (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME` or `DSH_HOME`) stays refused with reason
   `account-folder`. `ProviderProfile` and `DefaultConfig` reads keep the stored
   `remoteCompatible` (so switching back to `regular` restores it); the catalog's
   `profiles[].remoteCompatible` and `defaultRemoteLaunch` report the effective
