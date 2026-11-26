@@ -291,7 +291,11 @@ last level, features and hash for display; a later `app.approve` can approve aga
   `.woff2` `font/woff2`, `.ttf` `font/ttf`, `.otf` `font/otf`, `.wasm`
   `application/wasm`, `.txt` `text/plain`, `.mp3` `audio/mpeg`, `.mp4` `video/mp4`,
   `.webm` `video/webm`, else `application/octet-stream`. Text types carry no charset
-  parameter; the host adds `; charset=utf-8` for `text/*`.
+  parameter; the host adds `; charset=utf-8` for `text/*`. It returns a whole file
+  (up to 16 MiB before base64), so intentd classifies it as `BulkTransfer` in
+  `PAYLOAD_CLASSES`. Over a remote (WSS) connection the host sends it on a
+  [transfer connection](./files-terminal-browser.md) and lists it in the app's
+  `TRANSFER_METHODS`; over the local socket it uses its one administrator connection.
 
 ### Sessions and the app principal
 
