@@ -441,19 +441,31 @@ that are registered on this daemon.
 when it has none or it is not one-shot-capable. Models come from the `models.list`
 cache (§5.30); no refresh is forced.
 
-**`app.complete`.** A one-shot model call through the `agent.completeOnce` route
-(no agent session, no workspace; the daemon uses a private temporary directory as the
-working directory). `prompt`: 1–200000 chars. `system`: at most 50000 chars, passed as
-`systemPrompt`. `provider` (the completeOnce `type`) defaults to `defaultProvider`;
-an id not in `app.models.list` is `provider-unknown`. `model` defaults to the
-provider's default; an id not in the provider's `models` is `model-unknown`.
-`reasoningEffort` is passed through as for completeOnce. `timeoutMs`: 1000–300000,
-default 120000; expiry is `-32603 { code: "timeout" }` and the provider process is
-reaped. At most 2 calls per app are in flight; a third is `rate-limited` with
-`retryAfterMs: 1000`. A closed provider gate, or no provider at all, is the typed
-`{ available: false, reason }` result, not an error. The result echoes the
-`provider` and `model` that ran. Model calls use the owner's provider sign-in; the
-daemon logs each call with `appId` for audit.
+**`app.complete`.** A one-shot model call on the same executors as
+`agent.completeOnce` (the auggie print route or an ephemeral ACP session; no agent
+session, no workspace; the daemon uses a private temporary directory as the working
+directory). It is a **separate entry point** with **explicit provider routing**: it
+does not call `agent.completeOnce` and does not change §5.32.
+
+- `provider` selects the provider directly. When it is omitted, `defaultProvider` from
+  `app.models.list` is used. An id not in `app.models.list` is `provider-unknown`. The
+  effective default provider never overrides an explicit `provider`.
+- `model` is a model id of the selected provider, resolved against that provider only
+  (never against the default provider). When it is omitted, the provider's
+  `defaultModel` is used. An id not in that provider's `models` is `model-unknown`.
+- completeOnce's `type` (a quick-action preference key such as `commit` or `review`)
+  is not used and not set by `app.complete`.
+- `prompt`: 1–200000 chars. `system`: at most 50000 chars; it is the system prompt.
+  `reasoningEffort` has the completeOnce meaning.
+- `timeoutMs`: 1000–300000, default 120000; expiry is `-32603 { code: "timeout" }` and
+  the provider process is reaped.
+- At most 2 calls per app are in flight; a third is `rate-limited` with
+  `retryAfterMs: 1000`.
+- A selected provider whose adapter cannot run (`available: false` in
+  `app.models.list`), or no provider at all (`provider` omitted and `defaultProvider`
+  is `null`), is the typed `{ available: false, reason }` result, not an error.
+- The result echoes the `provider` and `model` that ran. Model calls use the owner's
+  provider sign-in; the daemon logs each call with `appId` for audit.
 
 ### Errors
 
