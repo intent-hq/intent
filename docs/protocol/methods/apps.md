@@ -97,7 +97,10 @@ mock bridge must agree:
   "No control chars" and the storage key rule both use this set.
 - **Printable ASCII** is U+0021–U+007E (no space).
 - **https URL**: printable ASCII only, at most 2048 chars, starts with the lowercase
-  prefix `https://`, and parses as an absolute URL (WHATWG URL) with a non-empty host.
+  prefix `https://`, contains no `\`, has a character other than `/` right after the
+  prefix, and parses as an absolute URL (WHATWG URL) with a non-empty host. The two
+  extra rules refuse forms the parser repairs, such as `https:///path` (read as host
+  `path`) and `https://\path`.
 - **`intent-app.sig` limits**: at most 16384 bytes. It counts toward the 2000-file and
   64 MiB limits, but not toward `fileCount` / `sizeBytes`.
 - **`signature` value**: checked only against `^[A-Za-z0-9_-]{1,1024}$`; the base64url
