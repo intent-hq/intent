@@ -1459,11 +1459,16 @@ not depend on which process owns the tenant.
    3. Tenant ownership (scope `"tenant"`, below).
    4. Delivery claims (scopes `"completion-watch"` and
       `"delegation-group"`, below).
-   5. Lifecycle gates (`intent-store/src/lifecycle_leases.rs`): scopes
-      `"agent-retirement"`, `"workspace-retirement"`, `"archive-fence"` and
-      `"workspace-deletion"`, taken after the in-process lock. While a
-      workspace is being deleted, its lease also refuses agent inserts and
-      user messages from other processes in that workspace.
+   5. Lifecycle gates (`intent-store/src/lifecycle_leases.rs`, Postgres
+      only): scopes `"agent-retirement"`, `"workspace-retirement"`,
+      `"archive-fence"` and `"workspace-deletion"`, taken after the
+      in-process lock. While the deletion lease is live, it refuses agent
+      inserts and user messages from other processes in that workspace.
+      Limit: these leases do not fence their work. A fired fence is only
+      logged, and the work does not use `guard_writes`, so if renewal fails
+      past the 30 s TTL the deletion or retirement continues while another
+      process can take the key or admit producers. SQLite keeps the local
+      gates and takes no lifecycle lease.
    6. Single-flight work: `"pr-refresh"` (per workspace and root),
       `"pr-monitor-poll"` (per monitor; the row is re-read after taking the
       lease) and `"gitlab-credential-refresh"` (per host, plus a version
@@ -1511,14 +1516,25 @@ Limit: `postgres/lease.rs` still holds the tenant claim, the owner check
 3. The `claim_epoch` and `claim_token` columns are gone. A settled row
    retires its lease (`retire_lease`, which refuses the `"tenant"` scope).
 
-The wake send is guarded by the delivery lease (intentd#3810): a wake
-entry stays hidden from the queue drain until its guarded write commits, so
-a lost lease writes and sends nothing. Strict watch registration guards its
-pair lease in the insert and retries.
+The durable wake write is guarded by the delivery lease (intentd#3810).
+On Postgres a queued wake stays hidden from the queue drain until its
+guarded sync commits, and a direct send guards its message append; if the
+lease is lost before that commit, the wake is not written. Strict watch
+registration guards its pair lease in the insert and retries.
 
-Limit: delivery keeps an in-memory armed check before it reads the stored
-watch, because watch persistence is best effort and a missing row is
-ambiguous.
+Limits:
+
+1. The guard covers the wake's durable write only. Once it commits, a later
+   lease loss does not undo it: the claim is not carried into later
+   workers, requeues or drains, event publication and worker start run
+   after the commit, and the watch is retired in a separate guarded
+   transaction. If that settlement fails, it retries under the stable wake
+   id, which keeps the wake from being sent twice.
+2. On SQLite the enqueue is a held check followed by the normal
+   write-through, which is enough for one process.
+3. Delivery keeps an in-memory armed check before it reads the stored
+   watch, because watch persistence is best effort and a missing row is
+   ambiguous.
 
 ### Machine link ownership on leases
 
