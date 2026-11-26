@@ -72,6 +72,15 @@ test('launch-wired INITIAL_AGENT_MODE must keep its codex-only row', () => {
   assert.match(errors[0], /INITIAL_AGENT_MODE is reserved for codex only/);
 });
 
+test('a reshaped golden fails instead of turning every row into a warning', () => {
+  const renamed = { providers: GOLDEN.providers.map(({ profile, ...row }) => ({ ...row, profileSpec: profile })) };
+  assert.throws(() => compare({ markdown: DOC, golden: renamed }), /codex: row has an unknown shape/);
+  const noHome = structuredClone(GOLDEN);
+  delete noHome.providers[0].profile.apiKeyHome;
+  assert.throws(() => compare({ markdown: DOC, golden: noHome }), /codex: profile has an unknown shape/);
+  assert.throws(() => compare({ markdown: DOC, golden: { providers: [{ id: 'opencode', profile: null }] } }), /no provider has a profile/);
+});
+
 test('a missing or duplicated table fails', () => {
   assert.throws(() => compare({ markdown: DOC.replace('| Base |', '| Provider |'), golden: GOLDEN }), /expected one table headed \| Base \|.*found 0/);
   assert.throws(() => compare({ markdown: `${DOC}\n${DOC}`, golden: GOLDEN }), /found 2/);
@@ -94,4 +103,5 @@ test('folderLists matches comma, "or" and "and" lists only', () => {
   assert.equal(folderLists('`A_HOME`, `B_HOME`', folders).length, 1);
   assert.equal(folderLists('`A_HOME` | `B_HOME`', folders).length, 0);
   assert.equal(folderLists('`A_HOME`, `OTHER`, `B_HOME`', folders).length, 0);
+  assert.equal(folderLists('`A_HOME`, `XYZ`', ['A_HOME', 'X.*']).length, 0);
 });

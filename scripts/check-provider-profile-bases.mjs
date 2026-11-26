@@ -39,11 +39,14 @@ function onlyTable(markdown, header, label) {
 
 /** The golden's profile bases as { base, credentials, folders, launchStep, reserved }. */
 export function goldenBases(golden) {
+  const shape = `has an unknown shape; update scripts/check-provider-profile-bases.mjs`;
   requireValue(Array.isArray(golden?.providers), `${GOLDEN_PATH}: providers must be an array`);
-  return golden.providers.filter((row) => row.profile).map(({ id, profile }) => {
+  for (const row of golden.providers) requireValue(Object.hasOwn(row ?? {}, 'profile'), `${GOLDEN_PATH} ${row?.id}: row ${shape}`);
+  const bases = golden.providers.filter((row) => row.profile).map(({ id, profile }) => {
     requireValue(Array.isArray(profile.credentialKeys) && Array.isArray(profile.accountDirKeys)
-      && Array.isArray(profile.credentialLaunchEnv) && Array.isArray(profile.reservedKeys),
-    `${GOLDEN_PATH} ${id}: profile has an unknown shape; update scripts/check-provider-profile-bases.mjs`);
+      && Array.isArray(profile.credentialLaunchEnv) && Array.isArray(profile.reservedKeys)
+      && Object.hasOwn(profile, 'apiKeyHome'),
+    `${GOLDEN_PATH} ${id}: profile ${shape}`);
     return {
       base: id,
       credentials: sorted(profile.credentialKeys),
@@ -52,6 +55,8 @@ export function goldenBases(golden) {
       reserved: sorted(profile.reservedKeys),
     };
   });
+  requireValue(bases.length > 0, `${GOLDEN_PATH}: no provider has a profile; ${shape}`);
+  return bases;
 }
 
 /** The "Profile-capable bases" rows, in the same shape as goldenBases. */
@@ -83,7 +88,7 @@ export function docsBaseOnlyReserved(markdown) {
 /** Enumerations of two or more account folders (`A`, `B` or `C`) in a page. */
 export function folderLists(text, folders) {
   if (folders.length < 2) return [];
-  const name = `\`(?:${folders.join('|')})\``;
+  const name = `\`(?:${folders.map((folder) => folder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\``;
   const list = new RegExp(`${name}(?:\\s*,\\s*(?:(?:or|and)\\s+)?${name}|\\s+(?:or|and)\\s+${name})+`, 'g');
   return [...text.matchAll(list)].map((m) => ({ line: text.slice(0, m.index).split('\n').length, list: m[0].replace(/\s+/g, ' ') }));
 }
