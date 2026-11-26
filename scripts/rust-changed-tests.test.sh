@@ -15,6 +15,9 @@ unset NEXTEST_RUNNER RESUME GATE_FORCE NO_FAIL_FAST GATE_CACHE_DIR NEXTEST_HIDE_
 unset TRANSFER_SELECTION_FIXTURE_ROOT
 unset INTENT_ACP_CALLBACK_ADAPTER_FIXTURE NODE_OPTIONS
 unset COMPACT CARGO_INCREMENTAL CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_TEST_DEBUG
+# HERMETIC defaults from the host (Linux + a working bwrap); the cases below
+# stub uname and bwrap to choose it.
+unset HERMETIC HIDE_NODE
 # make test-changed defaults it to 3 and names it in the summary line.
 unset INTENTD_TEST_TIMEOUT_MULTIPLIER
 
@@ -238,10 +241,21 @@ else
 
   # HERMETIC=1 wraps the runner in intentd's no-provider-CLI sandbox script
   # (intentd#2551), after a Linux + bwrap preflight that runs before planning.
+  # Until here PATH has no uname or bwrap, so the earlier cases ran with the
+  # off-Linux default HERMETIC=0. Every run prints one line naming its mode.
+  hermetic_off_default="[test-changed] HERMETIC=0 (default on this host; hermetic mode needs Linux with a working bwrap): tests see this host's provider CLIs, unlike CI"
+  case_name="test-changed recipe defaults to HERMETIC=0 without uname or bwrap"
+  run_make test-changed
+  expect_make_ok
+  [[ "$stdout" == *"$hermetic_off_default"* ]] || fail "$case_name: mode not announced: $stdout"
+  [[ "$planner_log" == *"runner:"$'\n'"python3"$'\n'* ]] || fail "$case_name: runner argv was"$'\n'"$planner_log"
+
   printf '#!/usr/bin/env bash\necho Linux\n' >"$bin_dir/uname"
   printf '#!/usr/bin/env bash\nexit 0\n' >"$bin_dir/bwrap"
   chmod +x "$bin_dir/uname" "$bin_dir/bwrap"
-  hermetic_line="[test-changed] HERMETIC=1: tests run with every provider CLI hidden (packages/intentd/scripts/test-without-provider-clis.sh)"
+  hermetic_line="[test-changed] HERMETIC=1 (set explicitly; HERMETIC=0 opts out): tests run with every provider CLI hidden, as on CI (packages/intentd/scripts/test-without-provider-clis.sh)"
+  hermetic_default_line="[test-changed] HERMETIC=1 (default on this host; HERMETIC=0 opts out): tests run with every provider CLI hidden, as on CI (packages/intentd/scripts/test-without-provider-clis.sh)"
+  hermetic_runner="runner:"$'\n'"env"$'\n'"INTENT_GATE_HERMETIC=1"$'\n'"CARGO_BUILD_JOBS="
 
   case_name="test-changed recipe wraps the runner under HERMETIC=1"
   run_make test-changed HERMETIC=1 BUILD_JOBS=3
@@ -250,11 +264,47 @@ else
   expected="runner:"$'\n'"env"$'\n'"INTENT_GATE_HERMETIC=1"$'\n'"CARGO_BUILD_JOBS=3"$'\n'"bash"$'\n'"packages/intentd/scripts/test-without-provider-clis.sh"$'\n'"python3"$'\n'"scripts/resumable_nextest.py"$'\n'"--repo-root"$'\n'"$mk"
   [[ "$planner_log" == *"$expected"* ]] || fail "$case_name: runner argv was"$'\n'"$planner_log"
 
-  case_name="test-changed recipe leaves the runner unwrapped by default"
+  case_name="test-changed recipe defaults to HERMETIC=1 on Linux with a working bwrap"
   run_make test-changed
+  expect_make_ok
+  [[ "$stdout" == *"$hermetic_default_line"* ]] || fail "$case_name: mode not announced: $stdout"
+  [[ "$planner_log" == *"$hermetic_runner"* ]] || fail "$case_name: runner argv was"$'\n'"$planner_log"
+
+  case_name="test-changed recipe announces the HERMETIC=1 default under DRY_RUN=1"
+  run_make test-changed DRY_RUN=1
+  expect_make_ok
+  [[ "$stdout" == *"$hermetic_default_line"* ]] || fail "$case_name: stdout: $stdout"
+
+  case_name="HERMETIC=0 opts out on a host that defaults to HERMETIC=1"
+  run_make test-changed HERMETIC=0
+  expect_make_ok
+  [[ "$stdout" == *"[test-changed] HERMETIC=0 (set explicitly; "*"tests see this host's provider CLIs, unlike CI"* ]] \
+    || fail "$case_name: mode not announced: $stdout"
+  [[ "$planner_log" == *"runner:"$'\n'"python3"$'\n'* && "$stdout" != *"HERMETIC=1"* ]] \
+    || fail "$case_name: runner argv was"$'\n'"$planner_log"
+
+  case_name="HERMETIC=0 from the environment opts out too"
+  HERMETIC=0 run_make test-changed
   expect_make_ok
   [[ "$planner_log" == *"runner:"$'\n'"python3"$'\n'* && "$stdout" != *"HERMETIC=1"* ]] \
     || fail "$case_name: runner argv was"$'\n'"$planner_log"
+
+  # A nested container can allow a plain mount namespace but refuse the fresh
+  # /proc the wrapper mounts: the default must probe the wrapper's namespaces.
+  case_name="test-changed recipe defaults to HERMETIC=0 when bwrap cannot mount the wrapper's /proc"
+  printf '#!/usr/bin/env bash\n[ "$*" = "--dev-bind / / true" ] && exit 0\necho "bwrap: Can'"'"'t mount proc on /newroot/proc: Operation not permitted" >&2; exit 1\n' >"$bin_dir/bwrap"
+  run_make test-changed
+  expect_make_ok
+  [[ "$stdout" == *"$hermetic_off_default"* ]] || fail "$case_name: mode not announced: $stdout"
+  [[ "$planner_log" == *"runner:"$'\n'"python3"$'\n'* ]] || fail "$case_name: runner argv was"$'\n'"$planner_log"
+
+  case_name="test-changed recipe defaults to HERMETIC=0 when bwrap cannot create a sandbox"
+  printf '#!/usr/bin/env bash\necho "bwrap: setting up uid map: Permission denied" >&2; exit 1\n' >"$bin_dir/bwrap"
+  run_make test-changed
+  expect_make_ok
+  [[ "$stdout" == *"$hermetic_off_default"* ]] || fail "$case_name: mode not announced: $stdout"
+  [[ "$planner_log" == *"runner:"$'\n'"python3"$'\n'* ]] || fail "$case_name: runner argv was"$'\n'"$planner_log"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$bin_dir/bwrap"
 
   case_name="test-changed recipe announces HERMETIC=1 under DRY_RUN=1"
   run_make test-changed HERMETIC=1 DRY_RUN=1
@@ -270,7 +320,7 @@ else
   case_name="test-changed recipe refuses HIDE_NODE=1 with HERMETIC=1 before planning"
   run_make test-changed HERMETIC=1 HIDE_NODE=1
   [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
-  [[ "$stderr" == *"[test-changed] ERROR: HIDE_NODE=1 is not supported with HERMETIC=1"* ]] || fail "$case_name: stderr: $stderr"
+  [[ "$stderr" == *"[test-changed] ERROR: HIDE_NODE=1 is not supported with HERMETIC=1"*"or pass HERMETIC=0"* ]] || fail "$case_name: stderr: $stderr"
   [[ -z "$planner_log" ]] || fail "$case_name: planner ran: $planner_log"
 
   case_name="test-changed recipe refuses HERMETIC=1 without bwrap before planning"
@@ -286,7 +336,15 @@ else
   [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
   [[ "$stderr" == *"[test-changed] ERROR: HERMETIC=1 is Linux only"* ]] || fail "$case_name: stderr: $stderr"
   [[ -z "$planner_log" ]] || fail "$case_name: planner ran: $planner_log"
-  rm -f "$bin_dir/uname"
+
+  case_name="test-changed recipe defaults to HERMETIC=0 off Linux even with bwrap"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$bin_dir/bwrap"
+  chmod +x "$bin_dir/bwrap"
+  run_make test-changed
+  expect_make_ok
+  [[ "$stdout" == *"$hermetic_off_default"* ]] || fail "$case_name: mode not announced: $stdout"
+  [[ "$planner_log" == *"runner:"$'\n'"python3"$'\n'* ]] || fail "$case_name: runner argv was"$'\n'"$planner_log"
+  rm -f "$bin_dir/uname" "$bin_dir/bwrap"
 
   case_name="HERMETIC accepts only 0 or 1"
   run_make test-changed HERMETIC=true

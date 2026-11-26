@@ -991,11 +991,12 @@ check_all() {
 
   if [[ "$(uname -s)" == Linux ]]; then
     if ! command -v bwrap >/dev/null 2>&1; then
-      optional "bubblewrap: not installed (only make test HERMETIC=1 needs it); Debian/Ubuntu: sudo apt-get install bubblewrap"
-    elif bwrap --dev-bind / / true >/dev/null 2>&1; then
-      optional "bubblewrap: installed (make test HERMETIC=1 hides provider CLIs like CI)"
+      optional "bubblewrap: not installed, so make test keeps provider CLIs visible, unlike CI; Debian/Ubuntu: sudo apt-get install bubblewrap"
+    # Same probe as the Makefile HERMETIC default (HERMETIC_PROBE).
+    elif bwrap --dev-bind / / --tmpfs /tmp --unshare-pid --proc /proc --die-with-parent true >/dev/null 2>&1; then
+      optional "bubblewrap: installed (make test hides provider CLIs like CI by default; HERMETIC=0 opts out)"
     else
-      optional "bubblewrap: $(command -v bwrap) cannot create a sandbox (unprivileged user namespaces blocked?), so make test HERMETIC=1 will fail"
+      optional "bubblewrap: $(command -v bwrap) cannot create a sandbox (unprivileged user namespaces blocked?), so make test keeps provider CLIs visible, unlike CI"
     fi
   fi
   if xvfb_needed; then
