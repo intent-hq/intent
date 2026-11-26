@@ -20,10 +20,6 @@ export const BASES_HEADER = ['Base', 'Credentials (auto-mark)', 'Account folder'
 export const RESERVED_HEADER = ['Key or pattern', 'Why'];
 const BASES_TABLE = `${DOCS_PATH} "Profile-capable bases" table`;
 const RESERVED_TABLE = `${DOCS_PATH} "Reserved keys" table`;
-// Base-only keys the daemon reserves as launch wiring outside the profile spec,
-// so the golden does not carry them (intentd provider_profiles.rs
-// launch_wired_keys).
-export const LAUNCH_WIRED = [['codex', 'INITIAL_AGENT_MODE']];
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BASE_ONLY = /^`([a-z][a-z0-9-]*)` only:/;
 
@@ -122,8 +118,7 @@ export function compare({ markdown, golden, pages = [] }) {
   }
 
   const marked = docsBaseOnlyReserved(markdown);
-  const wanted = [...expected.flatMap(({ base, reserved }) => reserved.map((key) => ({ base, key }))),
-    ...LAUNCH_WIRED.map(([base, key]) => ({ base, key }))];
+  const wanted = expected.flatMap(({ base, reserved }) => reserved.map((key) => ({ base, key })));
   const same = (a) => (b) => a.base === b.base && a.key === b.key;
   for (const want of wanted.filter((want) => !marked.some(same(want)))) {
     errors.push(`${RESERVED_TABLE}: ${want.key} is reserved for ${want.base} only; add a row whose reason starts with "\`${want.base}\` only:"`);

@@ -18,7 +18,7 @@ const DOC = `
 const profile = (overrides) => ({ credentialKeys: [], accountDirKeys: [], apiKeyHome: null, credentialLaunchEnv: [], reservedKeys: [], ...overrides });
 const GOLDEN = {
   providers: [
-    { id: 'codex', profile: profile({ credentialKeys: ['OPENAI_API_KEY', 'CODEX_API_KEY'], accountDirKeys: ['CODEX_HOME'], apiKeyHome: { key: 'CODEX_API_KEY' } }) },
+    { id: 'codex', profile: profile({ credentialKeys: ['OPENAI_API_KEY', 'CODEX_API_KEY'], accountDirKeys: ['CODEX_HOME'], apiKeyHome: { key: 'CODEX_API_KEY' }, reservedKeys: ['INITIAL_AGENT_MODE'] }) },
     { id: 'opencode', profile: null },
     { id: 'droid', profile: profile({ credentialKeys: ['FACTORY_API_KEY'], reservedKeys: ['DROID_TELEMETRY'] }) },
   ],
@@ -64,12 +64,6 @@ test('a base-only reserved key without its marked row fails', () => {
   const { errors } = compare({ markdown: DOC.replace('`droid` only:', 'Droid only:'), golden: GOLDEN });
   assert.equal(errors.length, 1);
   assert.match(errors[0], /"Reserved keys" table: DROID_TELEMETRY is reserved for droid only; add a row whose reason starts with "`droid` only:"/);
-});
-
-test('launch-wired INITIAL_AGENT_MODE must keep its codex-only row', () => {
-  const { errors } = compare({ markdown: DOC.replace(/^.*INITIAL_AGENT_MODE.*\n/m, ''), golden: GOLDEN });
-  assert.equal(errors.length, 1);
-  assert.match(errors[0], /INITIAL_AGENT_MODE is reserved for codex only/);
 });
 
 test('a reshaped golden fails instead of turning every row into a warning', () => {
