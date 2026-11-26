@@ -1464,9 +1464,12 @@ Limits:
 ### Machine link ownership on leases
 
 1. `LeaseLinkOwnership` (`intent-node-connections/src/ownership/leased.rs`,
-   scope `"machine-link"`) holds one lease per machine link. A claim
-   acquires or reuses the lease and advances the link generation in one
-   guarded write transaction. The link epoch is the lease token.
+   scope `"machine-link"`) holds one lease per machine link. A claim first
+   acquires or reuses the lease (its own committed write), then advances
+   the link generation in a separate write transaction guarded by that
+   lease. A failed generation update does not undo the acquisition: the
+   lease stays held until it is released or expires. The link epoch is the
+   lease token.
 2. The welcome record and every journal ack guard the lease in their own
    transaction, so a process that lost the link cannot record either late.
 3. A lost lease (keeper fence) closes the link. A stopping connector
