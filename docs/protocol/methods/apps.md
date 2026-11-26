@@ -45,7 +45,8 @@ owner-only.
 ### App format
 
 A bundle is a directory inside a workspace. It contains `intent-app.json` (the
-manifest) at its root, plus static files.
+manifest) at its root, plus static files, plus an optional detached signature file
+`intent-app.sig` at its root ([Publisher and signature](#publisher-and-signature-reserved)).
 
 #### Manifest file (intent-app.json)
 
@@ -69,12 +70,19 @@ manifest) at its root, plus static files.
     "minHeight": 240,                   // optional, 240–height
     "resizable": true,                  // default true
     "alwaysOnTop": false                // default false; true needs the "alwaysOnTop" feature
-  }
+  },
+  "publisher": {                        // optional, reserved (stored, not verified in M1)
+    "name": "Example Labs",             // required in the object, 1–128 chars after trim, no control chars
+    "url": "https://example.com",       // optional, absolute https URL, ≤ 2048 chars
+    "keyId": "ed25519:Rk9P…"            // optional, 1–256 printable ASCII chars, opaque; names the signing key
+  },
+  "updateUrl": "https://example.com/apps/pomodoro-timer"   // optional, reserved: absolute https URL, ≤ 2048 chars; M1 never fetches it
 }
 ```
 
-Unknown top-level keys, unknown keys in `permissions` or `window`, and wrong types are
-`invalid-manifest`. A bundle path is a relative path with `/` separators, no `..`
+Unknown top-level keys, unknown keys in `permissions`, `window` or `publisher`, and
+wrong types are `invalid-manifest`. A manifest without `publisher` and `updateUrl`
+stays valid. A bundle path is a relative path with `/` separators, no `..`
 segment, no leading `/`, no `\`, no NUL, at most 512 UTF-8 bytes, and it must name a
 regular file of the bundle.
 
@@ -95,12 +103,15 @@ at install with `level-unavailable`.
 
 At most 2000 regular files, each at most 16 MiB, at most 64 MiB in total. Symlinks,
 device files and sockets anywhere under the bundle root are `invalid-bundle`. Empty
-directories are ignored. `intent-app.json` must be at most 64 KiB.
+directories are ignored. `intent-app.json` must be at most 64 KiB. `intent-app.sig`
+must be at most 16 KiB and counts toward the file limits.
 
 #### Bundle hash
 
 The hash is computed over every regular file under the bundle root, the manifest
-included. intentd, the SDK and the mock bridge must produce the same bytes:
+included, **except** the one root path `intent-app.sig` (a file of that name in a
+subdirectory is hashed like any other). intentd, the SDK and the mock bridge must
+produce the same bytes:
 
 1. Collect each file's bundle path (relative, `/` separators, UTF-8 as stored on disk,
    no normalization).
@@ -109,7 +120,39 @@ included. intentd, the SDK and the mock bridge must produce the same bytes:
    length as ASCII decimal digits, one `0x00` byte, the file content bytes.
 4. The hash is the string `"sha256:"` followed by the 64-char lowercase hex digest.
 
-Approval is bound to this hash. Any change to any file gives a new hash.
+Approval is bound to this hash. Any change to any hashed file gives a new hash. A
+change to `intent-app.sig` alone does not, so a replace install that only adds or
+changes the signature keeps the approval.
+
+#### Publisher and signature (reserved)
+
+M1 **stores and returns** publisher and signature data, **checks only their shape**,
+and **never verifies** them. Verification arrives with the package-file milestone;
+until then no client may show a publisher as confirmed or treat a signature as trust.
+
+- `publisher` is part of the manifest, so it is covered by the bundle hash.
+- `intent-app.sig` is a detached signature over the bundle hash, so it does not change
+  the hash it signs. It is UTF-8 JSON:
+
+```jsonc
+// intent-app.sig — every key required, no other keys
+{
+  "sigVersion": 1,                     // exactly 1
+  "algorithm": "ed25519",              // reserved: 1–32 chars of [a-z0-9-]; "ed25519" is the only value defined
+  "keyId": "ed25519:Rk9P…",            // 1–256 printable ASCII chars; should equal manifest publisher.keyId
+  "bundleHash": "sha256:9f2c…",        // the bundle hash that was signed
+  "signature": "q83v…"                 // base64url without padding, 1–1024 chars
+}
+```
+
+- Reserved signed message (for the later milestone): the UTF-8 bytes of
+  `"intent-app-sig-v1\n"` followed by the `bundleHash` string.
+- A malformed `intent-app.sig` (not JSON, too large, a missing, extra or wrong-typed
+  key) is `invalid-bundle` with `path: "intent-app.sig"`. A well-formed file whose
+  `bundleHash` or `keyId` does not match is **not** an error in M1: it is stored and
+  returned as `status: "unverified"`.
+- `intent-app.sig` is stored with the app but is not a bundle file: `app.readBundle`
+  answers `file-not-found` for it, and `fileCount` / `sizeBytes` exclude it.
 
 #### Serving and isolation
 
@@ -150,7 +193,18 @@ Approval is bound to this hash. Any change to any file gives a new hash.
   "source": { "workspaceId": "ws-1", "path": "apps/pomodoro" },   // the install source | null when the workspace is gone
   "installedAt": "2026-11-26T11:59:00.000Z", // first install of this id
   "updatedAt": "2026-11-26T11:59:00.000Z",   // last install, approval or revoke
-  "open": false                              // a session is live for this app
+  "open": false,                             // a session is live for this app
+  "publisher": {                             // manifest publisher as stored | null
+    "name": "Example Labs", "url": "https://example.com", "keyId": "ed25519:Rk9P…",   // url, keyId: string | null
+    "verified": false                        // always false in M1
+  },
+  "updateUrl": "https://example.com/apps/pomodoro-timer",   // manifest updateUrl | null; reserved, never fetched in M1
+  "signature": {                             // intent-app.sig as stored | null when the bundle has none
+    "sigVersion": 1, "algorithm": "ed25519", "keyId": "ed25519:Rk9P…",
+    "bundleHash": "sha256:9f2c…", "signature": "q83v…",
+    "status": "unverified",                  // M1: always "unverified". Reserved later: "valid" | "invalid" | "untrusted-key"
+    "verified": false                        // true only when status is "valid"; always false in M1
+  }
 }
 
 // AppSession — app.session.open result (token only here), app.session.attach result (no token)
