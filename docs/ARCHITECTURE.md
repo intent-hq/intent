@@ -1348,6 +1348,9 @@ Nothing here runs more than one process per tenant yet. The desktop daemon
 | Machine link ownership on leases | [intentd#3794](https://github.com/intent-hq/intentd/pull/3794) | `intent-node-connections/src/ownership/leased.rs`, `intent-store/src/postgres/nodes.rs`, `intent-svc-remote/src/lib.rs` |
 | Tenant ownership as a lease | [intentd#3800](https://github.com/intent-hq/intentd/pull/3800) | `intent-store/src/postgres/lease.rs` (`TenantLeaseKeeper`), `lease_repo.rs`, `intentd-orchestrator/src/serve.rs` |
 | Delivery claims as leases | [intentd#3801](https://github.com/intent-hq/intentd/pull/3801) | `intent-store/src/completion_watch_repo.rs`, `postgres/completion_watches.rs`, `postgres/leases.rs` |
+| Lifecycle gates as leases | [intentd#3808](https://github.com/intent-hq/intentd/pull/3808) | `intent-store/src/lifecycle_leases.rs` |
+| Single-flight gates as leases | [intentd#3809](https://github.com/intent-hq/intentd/pull/3809) | `intent-store/src/lease_keeper.rs` (`guard_writes`), PR refresh, PR monitor and GitLab refresh code in `intent-services` |
+| Lease-guarded wake send | [intentd#3810](https://github.com/intent-hq/intentd/pull/3810) | `intent-services/src/agent_ops.rs`, `agent_subscriptions.rs` |
 | Settings and GitLab pair in the store | [intentd#3780](https://github.com/intent-hq/intentd/pull/3780) | `intent-services/src/settings_registry.rs`, `settings_store_follower.rs`, `intent-store/src/postgres/tenant_config.rs` |
 | Agent queues from the store | [intentd#3782](https://github.com/intent-hq/intentd/pull/3782) | `intent-store/src/agent_queue_merge.rs`, `agent_queue_repo.rs`, `intent-services/src/agent_ops.rs` |
 
@@ -1456,6 +1459,19 @@ not depend on which process owns the tenant.
    3. Tenant ownership (scope `"tenant"`, below).
    4. Delivery claims (scopes `"completion-watch"` and
       `"delegation-group"`, below).
+   5. Lifecycle gates (`intent-store/src/lifecycle_leases.rs`): scopes
+      `"agent-retirement"`, `"workspace-retirement"`, `"archive-fence"` and
+      `"workspace-deletion"`, taken after the in-process lock. While a
+      workspace is being deleted, its lease also refuses agent inserts and
+      user messages from other processes in that workspace.
+   6. Single-flight work: `"pr-refresh"` (per workspace and root),
+      `"pr-monitor-poll"` (per monitor; the row is re-read after taking the
+      lease) and `"gitlab-credential-refresh"` (per host, plus a version
+      check on the stored refresh token; a token a peer already rotated is a
+      transient error, not a disconnect).
+7. `LeaseKeeper::guard_writes(fut)` makes every owner-checked Postgres
+   write inside `fut` guard the lease in its own transaction, so work that
+   lost its lease writes nothing late.
 
 Limits:
 
@@ -1495,10 +1511,14 @@ Limit: `postgres/lease.rs` still holds the tenant claim, the owner check
 3. The `claim_epoch` and `claim_token` columns are gone. A settled row
    retires its lease (`retire_lease`, which refuses the `"tenant"` scope).
 
-Limit: the durable wake send is not guarded by the lease. Stable wake ids
-make normal retries converge, but if the lease expires between the held
-check and the insert, a second holder can also send, so a wake can be sent
-twice.
+The wake send is guarded by the delivery lease (intentd#3810): a wake
+entry stays hidden from the queue drain until its guarded write commits, so
+a lost lease writes and sends nothing. Strict watch registration guards its
+pair lease in the insert and retries.
+
+Limit: delivery keeps an in-memory armed check before it reads the stored
+watch, because watch persistence is best effort and a missing row is
+ambiguous.
 
 ### Machine link ownership on leases
 
@@ -1724,14 +1744,14 @@ writer-lock value (`partial` or `no`; none is `covered`).
 | | `idempotency_inflight` | partial | unique key on a pending row; waiters replay the stored result |
 | | `attachment_idempotency_inflight` | partial | unique key on a pending row; waiters replay |
 | Single-flight work | `completion_deliveries_in_flight` | partial | lease per watch or group (intentd#3801) |
-| | `completion_watch_registration_gate` | partial | lease; delivery reads the stored watch, not memory |
-| | `automatic_pr_refresh` | no | lease per PR |
-| | `review_monitor_poll_lane` | no | lease per monitor |
-| | `legacy_pr_monitor_poll_lane` | no | lease per monitor |
-| | `gitlab_credential_gate` | no | lease for refresh + version CAS on persist |
-| Multi-step lifecycle | `agent_retirement_gates` | no | lease per agent |
-| | `archive_fence` | no | lease per workspace |
-| | `workspace_mutations` | no | row lock on the workspace row + a deleting state that producers check |
+| | `completion_watch_registration_gate` | partial | pair lease guarded in the insert (intentd#3810); the in-memory armed check stays |
+| | `automatic_pr_refresh` | no | lease `pr-refresh` per workspace and root (intentd#3809) |
+| | `review_monitor_poll_lane` | no | lease `pr-monitor-poll` per monitor (intentd#3809) |
+| | `legacy_pr_monitor_poll_lane` | no | lease `pr-monitor-poll` per monitor (intentd#3809) |
+| | `gitlab_credential_gate` | no | lease `gitlab-credential-refresh` per host + version check on persist (intentd#3809) |
+| Multi-step lifecycle | `agent_retirement_gates` | no | lease `agent-retirement` per agent (intentd#3808) |
+| | `archive_fence` | no | lease `archive-fence` per workspace (intentd#3808) |
+| | `workspace_mutations` | no | lease `workspace-deletion`; other processes' agent inserts and user messages in that workspace are refused (intentd#3808) |
 | Local process and disk | `archive_script_gates` | no | stays owner-only |
 | | `worktree_locks` | no | stays owner-only (the home serializes git work) |
 | | `scripts_running_state` | no | stays owner-only |
