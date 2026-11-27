@@ -1513,8 +1513,9 @@ Limit: `postgres/lease.rs` still holds the tenant claim, the owner check
 
 1. `tenant_writer.state` is `open`, `closing` or `closed`
    (`intent-store/src/tenant_state.rs`, intentd#3836). Every writer reads
-   it in the same statement as the writer lock it already takes, so the
-   check costs no extra query, whoever holds the tenant lease.
+   it while it holds the writer lock it already takes, in the existing
+   statement that follows the lock (the one that reads the tenant lease),
+   so the check adds no query, whoever holds the tenant lease.
 2. `open`: writes run. `closing`: a write in flight when the state moved
    commits (the move waits for its row lock); every later write fails with
    `Error::TenantClosed`. `closed`: the tenant's work has stopped too.
@@ -1522,8 +1523,14 @@ Limit: `postgres/lease.rs` still holds the tenant claim, the owner check
    from `closing`, and back to `open` from any state. A move from another
    state changes nothing and reports the state it found, so a tenant
    reopened during a stop stays open.
-4. The orchestrator moves a tenant to `closing` before it stops its work,
-   to `closed` after, and to `open` when it starts it.
+4. A graceful orchestrator stop runs in this order: drain the tenant's work
+   while it is still `open` (agent checkpoints are written during the
+   drain), try to move it to `closing`, self-fence and stop, try to move it
+   to `closed`, then release the tenant lease. Starting a tenant moves it to
+   `open`. The moves are best effort: the move to `closing` has a 3 s budget
+   and the move to `closed` 1 s; a failure or timeout is logged, and a
+   tenant that already lost its lease skips them, so an error, a timeout or
+   a lost lease can leave the tenant in another state.
 5. SQLite: always open; a move is a no-op.
 
 Limit: the event bus logs `TenantClosed` refusals at error level during
