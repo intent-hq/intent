@@ -137,7 +137,9 @@ app-wide plugins; `agentPlugins: 1` gates support.
 The prepared [Intent apps contract (§5.60)](./methods/apps.md) adds sixteen router
 methods and one fast-path method, `app.session.attach`, which narrows a fresh
 administrator connection to an app principal with a default-deny allowlist per
-permission level. `intentApps: 1` gates support.
+permission level. `intentApps: 1` gates support. Installing from an uploaded app
+package adds no method: `file.attachmentUpload.begin` gains `purpose: "app-package"`
+and `app.install` gains an `uploadId` arm; `intentAppPackages: 1` gates support.
 
 The documented surface reserves **528 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
 
