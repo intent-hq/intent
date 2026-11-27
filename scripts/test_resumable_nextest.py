@@ -598,7 +598,12 @@ class CallbackPreflightTests(unittest.TestCase):
         unrelated = [[["-p", "alpha", "--lib", "--bins", "--tests"]],
                      [["-p", "intent-acp", "--test", "wire_contract"]],
                      [["-p", "intent-services", "--bins"]],
-                     [["-p", "intent-services", "--bin", "helper"]]]
+                     [["-p", "intent-services", "--bin", "helper"]],
+                     # make test-changed FEATURES=... puts the features in the plan.
+                     [["-p", "intentd-orchestrator", "--test", "two_tenants",
+                       "--features", "intentd-orchestrator/postgres"]],
+                     [["-p", "alpha", "--lib", "--features=alpha/x", "-F", "alpha/y"]]]
+        affected += [[["-p", "intent-acp", "--features", "intent-acp/x"]]]
         for plans in affected:
             with self.subTest(plans=plans):
                 self.assertTrue(gate.needs_callback_fixture(plans))
@@ -3746,9 +3751,14 @@ class TransferFixtureSelectionTests(unittest.TestCase):
                      ["-p", "intent-acp", "--lib"],
                      ["-p", "intent-services", "--test", "one"],
                      ["--package=intent-services", "--bins"],
-                     ["--package", "intent-services", "--bin", "one"]):
+                     ["--package", "intent-services", "--bin", "one"],
+                     ["-p", "intentd-orchestrator", "--test", "two_tenants",
+                      "--features", "intentd-orchestrator/postgres"],
+                     ["-p", "intent-services", "--test", "one", "--features=intent-store/postgres"],
+                     ["-p", "alpha", "-F", "alpha/x", "--lib"]):
             with self.subTest(plan=plan):
                 self.assertFalse(gate.needs_transfer_fixture([plan]))
+        self.assertTrue(gate.needs_transfer_fixture([["-p", "intent-services", "--features", "x"]]))
 
     def test_fixture_identity_separates_resume_credit(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(
