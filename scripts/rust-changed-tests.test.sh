@@ -239,6 +239,31 @@ else
   [[ -z "$cargo_log" ]] || fail "$case_name: cargo was invoked: $cargo_log"
   expect_planner "--instrumented" "" 1 -2 -2 none never
 
+  # FEATURES reaches the planner as --features (intentd's changed-tests.sh
+  # puts it in the plans of the crates that have it) and the Postgres hint,
+  # as for test-select; an exported FEATURES is ignored there too.
+  case_name="test-changed recipe passes FEATURES to the planner and the hint"
+  run_make test-changed DRY_RUN=1 FEATURES=intentd-orchestrator/postgres
+  expect_make_ok
+  expect_planner "--features"$'\n'"intentd-orchestrator/postgres" "" 1 -2 -2 none never
+  [[ "$hint_log" == *$'\n'"--features"$'\n'"intentd-orchestrator/postgres" ]] || fail "$case_name: hint argv was"$'\n'"$hint_log"
+
+  case_name="test-changed recipe passes a FEATURES list with an apostrophe as one word"
+  run_make test-changed "FEATURES=intent-store/postgres,a'b"
+  expect_make_ok
+  expect_planner "--features"$'\n'"intent-store/postgres a'b" "" "" -2 -2 none never
+
+  case_name="test-changed recipe ignores an exported FEATURES"
+  FEATURES=intent-store/postgres run_make test-changed
+  expect_make_ok
+  expect_planner "" "" "" -2 -2 none never
+  [[ "$hint_log" != *"--features"* ]] || fail "$case_name: hint argv was"$'\n'"$hint_log"
+
+  case_name="coverage-changed recipe passes FEATURES to the planner"
+  run_make coverage-changed DRY_RUN=1 FEATURES=' intentd-orchestrator/postgres , '
+  expect_make_ok
+  expect_planner "--instrumented"$'\n'"--features"$'\n'"intentd-orchestrator/postgres" "" 1 -2 -2 none never
+
   # HERMETIC=1 wraps the runner in intentd's no-provider-CLI sandbox script
   # (intentd#2551), after a Linux + bwrap preflight that runs before planning.
   # Until here PATH has no uname or bwrap, so the earlier cases ran with the
