@@ -122,8 +122,8 @@ join and must not treat byte equality as a cursor.
   `totalLines` counts the log's lines like the bare-string header. Bytes and positions are
   taken atomically with the log's appends. With no run yet, `runId` is `null`, `data` is
   `""` and every position is `"0"`. `cursor` cannot be combined with `paginate` or
-  `nextToken` (`-32602`). Machine runs (`remoteAgentId`) do not stream `script:output`;
-  their reads ignore `cursor` and keep the bare string.
+  `nextToken` (`-32602`). Machine runs (`remoteAgentId`) do not stream `script:output`,
+  so clients read them without `cursor` and get the bare string.
 - **Events.** Each `script:output` event for log output adds `runId`, `daemonBootId`,
   `startOffset` and `endOffset`. The daemon writes a chunk to the log before it publishes
   the chunk, so a snapshot whose `endOffset` is at or past an event's `endOffset` holds
