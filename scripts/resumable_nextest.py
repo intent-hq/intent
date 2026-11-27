@@ -266,6 +266,7 @@ def needs_callback_fixture(plans: list[list[str]]) -> bool:
     --tests includes library unit tests in Cargo; --test NAME and --bins do not.
     Unknown flags, package globs/specs and filter expressions are conservative:
     require the fixture rather than trying to duplicate Cargo/nextest selection.
+    Cargo features (make test-changed FEATURES=...) change no target selection.
     """
     if not plans:
         return True
@@ -284,6 +285,10 @@ def needs_callback_fixture(plans: list[list[str]]) -> bool:
                 targets.add(arg)
             elif arg in ("--lib", "--bins", "--tests"):
                 targets.add(arg)
+            elif arg in ("--features", "-F"):
+                next(args, "")
+            elif arg.startswith(("--features=", "-F")):
+                pass
             else:
                 return True
         if not packages or any(not re.fullmatch(r"[A-Za-z0-9_-]+", p) for p in packages):
@@ -638,6 +643,10 @@ def needs_transfer_fixture(plans: list[list[str]]) -> bool:
                 targets.add(arg)
             elif arg in ("--lib", "--bins", "--tests"):
                 targets.add(arg)
+            elif arg in ("--features", "-F"):
+                next(args, "")
+            elif arg.startswith(("--features=", "-F")):
+                pass
             else:
                 return True
         if not packages or any(not re.fullmatch(r"[A-Za-z0-9_-]+", p) for p in packages):

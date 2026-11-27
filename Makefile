@@ -998,11 +998,14 @@ test-intentd: ensure-intentd-submodule | check-transfer-fixture
 # The script exits 3 when a build-wide file (Cargo.toml/Cargo.lock, nextest
 # config, toolchain) changed; the target then announces the fallback and runs
 # the full `make test` (skipped under DRY_RUN=1, which only prints the plan).
+# make test takes no FEATURES, so with FEATURES that fallback is instead the
+# whole workspace through `make test-select E='all()' FEATURES=...` (same
+# runner and fixtures, built with the features), not a run without them.
 # The runner line names its paths as "$VAR" references that the script's eval
 # expands, so apostrophes or spaces in CURDIR/GATE_CACHE_DIR never reach a
 # nested quote; the script execs the runner from this directory, so the
 # relative scripts/ path resolves against the monorepo root.
-test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd branch changed vs BASE, recording the run (RESUME=1 resumes, NO_FAIL_FAST=1 continues past failures, HERMETIC as for test, DRY_RUN=1 prints the plan)
+test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd branch changed vs BASE, recording the run (FEATURES=<crate/feature> as for test-select, RESUME=1 resumes, NO_FAIL_FAST=1 continues past failures, HERMETIC as for test, DRY_RUN=1 prints the plan)
 	@if [ -z "$(DRY_RUN)" ] || [ "$(DRY_RUN)" = 0 ]; then \
 		python3 scripts/check_watch_capacity.py --quiet || exit $$?; \
 		cargo nextest --version >/dev/null 2>&1 || { \
@@ -1014,14 +1017,21 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 		echo "[test-changed] NO_FAIL_FAST=1: nextest runs with --no-fail-fast"; \
 	fi
 	@$(HERMETIC_PREFLIGHT)
-	@$(POSTGRES_STORE_HINT) || true
+	@$(POSTGRES_STORE_HINT)$(TEST_SELECT_FEATURES) || true
 	@INTENTD_DIR="$(INTENTD_DIR)" BASE="$(BASE)" DRY_RUN="$(DRY_RUN)" \
 		BUILD_JOBS="$(BUILD_JOBS)" TEST_THREADS="$(TEST_THREADS)" \
 		GATE_REPO_ROOT="$(CURDIR)" GATE_CACHE_DIR="$(GATE_CACHE_DIR)" \
 		RESUME="$(RESUME)" GATE_FORCE="$(GATE_FORCE)" NO_FAIL_FAST="$(NO_FAIL_FAST)" \
 		NEXTEST_RUNNER='$(HERMETIC_RUNNER_WRAP)python3 scripts/resumable_nextest.py --repo-root "$$GATE_REPO_ROOT" --intentd-dir "$$INTENTD_DIR" --cache-dir "$$GATE_CACHE_DIR" --resume "$$RESUME" --force "$$GATE_FORCE" --no-fail-fast "$$NO_FAIL_FAST"' \
-		"$(INTENTD_DIR)/scripts/changed-tests.sh"; status=$$?; \
+		"$(INTENTD_DIR)/scripts/changed-tests.sh"$(TEST_SELECT_FEATURES); status=$$?; \
 	if [ "$$status" -ne 3 ]; then exit "$$status"; fi; \
+	if [ -n '$(TEST_CHANGED_FEATURES)' ]; then \
+		if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ]; then \
+			echo "[test-changed] DRY_RUN: would fall back to the full suite with FEATURES='$(TEST_CHANGED_FEATURES_SHOWN)': make test-select E='all()'"; exit 0; \
+		fi; \
+		echo "[test-changed] falling back to the full suite with FEATURES='$(TEST_CHANGED_FEATURES_SHOWN)': make test-select E='all()'"; \
+		$(INTENTD_TREE_CHECKED_ENV) exec $(MAKE) --no-print-directory test-select E='all()' FEATURES='$(TEST_CHANGED_FEATURES)'; \
+	fi; \
 	if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ]; then \
 		echo "[test-changed] DRY_RUN: would fall back to the full 'make test'"; exit 0; \
 	fi; \
@@ -1077,6 +1087,11 @@ fe-verify-changed: ensure-fe-submodule ensure-fe-toolchain ## Run only the front
 # which compile to empty binaries without it. A filter that selects no runnable
 # test fails either target; the runner validates the list. Like E, only a
 # make-line or makefile FEATURES counts: an exported one is ignored.
+# test-changed and coverage-changed hand FEATURES to intentd's changed-tests.sh
+# as --features: it joins the plans of the crates that have each feature, and a
+# plan whose targets all build empty without a feature that is off fails before
+# running, naming the FEATURES value to use
+# (FEATURES=intentd-orchestrator/postgres for the orchestrator's tests).
 TEST_SELECT_E = $(subst ','\'',$(value E))
 ifneq ($(findstring environment,$(origin FEATURES)),)
 FEATURES :=
@@ -1086,6 +1101,10 @@ COMMA := ,
 TEST_SELECT_FEATURES_LIST = $(strip $(subst $(COMMA), ,$(FEATURES)))
 TEST_SELECT_FEATURES = $(if $(TEST_SELECT_FEATURES_LIST), --features '$(subst ','\'',$(TEST_SELECT_FEATURES_LIST))')
 unexport E FEATURES
+# test-changed's fallback hands FEATURES on inside single quotes; the shown
+# form is the same list as a shell word would print it inside double quotes.
+TEST_CHANGED_FEATURES = $(subst ','\'',$(TEST_SELECT_FEATURES_LIST))
+TEST_CHANGED_FEATURES_SHOWN = $(subst ','\\'',$(TEST_SELECT_FEATURES_LIST))
 # The Postgres store tests build only with FEATURES=intent-store/postgres, so a
 # filtered run without it leaves them out silently (intentd#3672 lost a new
 # parity test from a 365-test test-select). The hint warns when the intentd
@@ -1216,7 +1235,7 @@ flake-triage: ensure-intentd-submodule ## Stress E='<filterset>' (or the failing
 # (the instrumented run is not resumable). The script does not install
 # cargo-llvm-cov / llvm-tools itself, hence the preflight (skipped under
 # DRY_RUN=1, which only prints the plan).
-coverage-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd branch changed vs BASE under llvm-cov, as intentd's PR coverage-changed job does (DRY_RUN=1 prints the plan)
+coverage-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd branch changed vs BASE under llvm-cov, as intentd's PR coverage-changed job does (FEATURES=<crate/feature> as for test-select, DRY_RUN=1 prints the plan)
 	@if [ -z "$(DRY_RUN)" ] || [ "$(DRY_RUN)" = 0 ]; then \
 		python3 scripts/check_watch_capacity.py --quiet || exit $$?; \
 		cargo nextest --version >/dev/null 2>&1 || { \
@@ -1230,7 +1249,7 @@ coverage-changed: ensure-intentd-submodule ## Run only the Rust tests the intent
 		$(call CALLBACK_FIXTURE_EXPORT,soft); \
 	fi; \
 	BASE="$(BASE)" DRY_RUN="$(DRY_RUN)" BUILD_JOBS="$(BUILD_JOBS)" TEST_THREADS="$(TEST_THREADS)" \
-		$(INTENTD_DIR)/scripts/changed-tests.sh --instrumented
+		$(INTENTD_DIR)/scripts/changed-tests.sh --instrumented$(TEST_SELECT_FEATURES)
 
 # nextest ignores PAGER, so --no-pager is passed explicitly (see the pager
 # export above). ARGS passes through, e.g. `make list-tests ARGS="-p intentd"`.

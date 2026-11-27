@@ -213,6 +213,19 @@ else
   [[ "$stdout" == *"[test-changed] falling back to the full 'make test'" ]] || fail "$case_name: stdout: $stdout"
   [[ "$planner_log" == *$'\n'"make:"$'\n'"--no-print-directory"$'\n'"test" ]] || fail "$case_name: make re-entry argv was"$'\n'"$planner_log"
 
+  # make test takes no FEATURES, so a build-wide change with FEATURES falls
+  # back to the whole workspace through test-select, which builds with them
+  # (its runner argv is pinned by scripts/test_test_select_target.py).
+  case_name="test-changed recipe keeps FEATURES on the full-suite fallback"
+  PLANNER_STUB_EXIT=3 run_make test-changed MAKE="$bin_dir/make-stub" "FEATURES=intentd-orchestrator/postgres,a'b"
+  expect_make_ok
+  [[ "$stdout" == *"[test-changed] falling back to the full suite with FEATURES='intentd-orchestrator/postgres a'\\''b': make test-select E='all()'"* ]] || fail "$case_name: stdout: $stdout"
+  [[ "$planner_log" == *$'\n'"make:"$'\n'"--no-print-directory"$'\n'"test-select"$'\n'"E=all()"$'\n'"FEATURES=intentd-orchestrator/postgres a'b" ]] || fail "$case_name: make re-entry argv was"$'\n'"$planner_log"
+  PLANNER_STUB_EXIT=3 run_make test-changed DRY_RUN=1 MAKE="$bin_dir/make-stub" FEATURES=intentd-orchestrator/postgres
+  expect_make_ok
+  [[ "$stdout" == *"[test-changed] DRY_RUN: would fall back to the full suite with FEATURES='intentd-orchestrator/postgres': make test-select E='all()'" ]] || fail "$case_name: dry-run stdout: $stdout"
+  [[ "$planner_log" != *"make:"* ]] || fail "$case_name: dry run re-entered make: $planner_log"
+
   case_name="test-changed recipe propagates other planner failures"
   PLANNER_STUB_EXIT=5 run_make test-changed MAKE="$bin_dir/make-stub"
   [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
@@ -238,6 +251,31 @@ else
   expect_make_ok
   [[ -z "$cargo_log" ]] || fail "$case_name: cargo was invoked: $cargo_log"
   expect_planner "--instrumented" "" 1 -2 -2 none never
+
+  # FEATURES reaches the planner as --features (intentd's changed-tests.sh
+  # puts it in the plans of the crates that have it) and the Postgres hint,
+  # as for test-select; an exported FEATURES is ignored there too.
+  case_name="test-changed recipe passes FEATURES to the planner and the hint"
+  run_make test-changed DRY_RUN=1 FEATURES=intentd-orchestrator/postgres
+  expect_make_ok
+  expect_planner "--features"$'\n'"intentd-orchestrator/postgres" "" 1 -2 -2 none never
+  [[ "$hint_log" == *$'\n'"--features"$'\n'"intentd-orchestrator/postgres" ]] || fail "$case_name: hint argv was"$'\n'"$hint_log"
+
+  case_name="test-changed recipe passes a FEATURES list with an apostrophe as one word"
+  run_make test-changed "FEATURES=intent-store/postgres,a'b"
+  expect_make_ok
+  expect_planner "--features"$'\n'"intent-store/postgres a'b" "" "" -2 -2 none never
+
+  case_name="test-changed recipe ignores an exported FEATURES"
+  FEATURES=intent-store/postgres run_make test-changed
+  expect_make_ok
+  expect_planner "" "" "" -2 -2 none never
+  [[ "$hint_log" != *"--features"* ]] || fail "$case_name: hint argv was"$'\n'"$hint_log"
+
+  case_name="coverage-changed recipe passes FEATURES to the planner"
+  run_make coverage-changed DRY_RUN=1 FEATURES=' intentd-orchestrator/postgres , '
+  expect_make_ok
+  expect_planner "--instrumented"$'\n'"--features"$'\n'"intentd-orchestrator/postgres" "" 1 -2 -2 none never
 
   # HERMETIC=1 wraps the runner in intentd's no-provider-CLI sandbox script
   # (intentd#2551), after a Linux + bwrap preflight that runs before planning.
