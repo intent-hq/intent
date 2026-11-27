@@ -149,8 +149,8 @@ copy compares `size` across windows.
 **Transfer connections.** Over a remote (WSS) connection, the app sends every
 method that may carry more than the read budget on a short-lived connection of
 its own, so a large frame never blocks the main connection: `file.readChunk`,
-`git.showFileChunk`, `note.readAssetChunk`, `workspace.export.read`, and the
-attachment uploads (`file.placeAttachment`, `file.attachmentUpload.*`). A
+`git.showFileChunk`, `note.readAssetChunk`, `workspace.export.read`, `app.readBundle`
+([§5.60](./apps.md), whole file up to 16 MiB), and the attachment uploads (`file.placeAttachment`, `file.attachmentUpload.*`). A
 transfer connection carries requests only: no `client.hello` beyond what a
 scoped read needs, no subscriptions and no heartbeat. Over the local Unix socket
 the app keeps one connection: there is no uplink to saturate, and the same-host
