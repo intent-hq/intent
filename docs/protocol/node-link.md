@@ -2603,13 +2603,16 @@ opens, as a local agent's are applied, before the agent's first prompt:
    provider that requires its model selection to succeed (Codex, Cursor,
    Antigravity, DeepSeek Harness) fails the start when it rejects the model;
    the others keep their default.
-2. **Effort.** `reasoningEffort` is the session's level. The machine sends it
-   through the session's `thought_level` config option after the model. It
-   sends nothing when the provider already runs that level or does not offer it.
-   Without `reasoningEffort` the machine restores the provider's default: the
-   adapter's own `default` value when it offers one, else the level the
-   session opened on, which the machine records with the session. A loaded
-   session's current level never counts as its default.
+2. **Effort.** The machine resolves the session's level as a local agent
+   does: a non-empty `reasoningEffort` wins; without it, a recognized legacy
+   Codex effort suffix on `model` (`gpt-5.5/low`, `gpt-5.5[low]`) is the
+   fallback. It sends the level through the session's `thought_level` config
+   option after the model, and sends nothing when the provider already runs
+   that level or does not offer it. Only when neither supplies a level does
+   the machine restore the provider's default: the adapter's own `default`
+   value when it offers one, else the level the session opened on, which the
+   machine records with the session. A loaded session's current level never
+   counts as its default.
 3. **Changes.** The backend sends both on every launch. A changed model
    relaunches the agent ([switching a remote agent's model](./methods/nodes.md#switching-a-remote-agents-model));
    a changed effort applies at the next launch.
