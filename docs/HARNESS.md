@@ -145,7 +145,7 @@ All rows use the same conditional daemon prompt-text path above:
 
 | Runtime in the candidate | Initial doctrine channel | Qualification |
 | --- | --- | --- |
-| Claude `@agentclientprotocol/claude-agent-acp@0.81.1` | Session metadata | Node 22+/npm 7+; secondary CLI version is not globally pinned. No new native role-mapping proof. |
+| Claude `@agentclientprotocol/claude-agent-acp@0.81.1` | Session metadata | Node 22+/npm 7.7+; secondary CLI version is not globally pinned. No new native role-mapping proof. |
 | Codex `@agentclientprotocol/codex-acp@2.1.1` | First-turn prepend | Installed CLI qualified separately; no within-Codex-loop claim. |
 | Pi `pi-acp@0.0.34`, Pi CLI 0.81.0+ | First-turn prepend | Initial workspace MCP uses the Pi extension; native extension-loop delivery is not established. |
 | Auggie CLI 0.7.0+ | `--rules` file | `--mcp-config` remains the initial tool channel; native acceptance is separate. |
