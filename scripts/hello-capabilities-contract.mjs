@@ -21,6 +21,8 @@ export const DAEMON_MODES = ['regular', 'node', 'orchestrator'];
 const PROFILE_KEYS = ['id', 'description', 'daemonMode', 'startupStatus', 'remoteMachines', 'capabilities'];
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const CAPABILITY = /^[a-z][A-Za-z0-9]*$/;
+// The value and daemonMode limits match today's wire contract (§5.17): a flag is
+// `true` or a positive integer version, and daemonMode is one of three modes.
 
 function exactKeys(value, expected, label) {
   requireValue(value !== null && typeof value === 'object' && !Array.isArray(value), `${label} must be an object`);
@@ -55,9 +57,9 @@ export function validateFixture(doc) {
       requireValue(value === true || (Number.isInteger(value) && value >= 1),
         `${label}: capability ${name} must be true or a positive integer, got ${JSON.stringify(value)}`);
     }
-    requireValue((profile.capabilities.startupStatus === 1) === profile.startupStatus,
+    requireValue(Object.hasOwn(profile.capabilities, 'startupStatus') === profile.startupStatus,
       `${label}: capabilities.startupStatus must match startupStatus`);
-    requireValue((profile.capabilities.remoteMachines === 1) === profile.remoteMachines,
+    requireValue(Object.hasOwn(profile.capabilities, 'remoteMachines') === profile.remoteMachines,
       `${label}: capabilities.remoteMachines must match remoteMachines`);
   }
   requireValue(ids.has(DEFAULT_PROFILE), `profiles must include ${DEFAULT_PROFILE}`);

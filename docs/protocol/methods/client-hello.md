@@ -343,10 +343,12 @@ subscribe to discussion events, and private discussions remain human-only.
   `capabilities` (feature-detection flags, e.g. `{ "liveState": true }` for the snapshot+delta
   channels of §6.9).
 - **Capability golden.** [`fixtures/hello/capabilities.json`](../fixtures/hello/capabilities.json)
-  lists the exact `server.capabilities` a current daemon announces, one profile per composition
-  (`regular`, `orchestrator`, `node`). intentd generates it from its hello builder and a golden
-  test fails when the two disagree; client test doubles announce the `regular` profile from the
-  same file. Both keep copies through `scripts/hello-capabilities-contract.mjs`
+  lists the `server.capabilities` a current daemon announces, one profile per composition
+  (`regular`, `orchestrator`, `node`). Each profile names its inputs (`daemonMode`,
+  `startupStatus`, `remoteMachines`); test-only flags such as `reviewMonitoring` are left out.
+  intentd generates the file from its hello builder, and a golden test fails when the builder
+  and intentd's copy disagree; client test doubles announce the `regular` profile from their
+  copy. Both keep copies through `scripts/hello-capabilities-contract.mjs`
   ([Copied fixtures](../README.md#copied-fixtures)). It describes the current daemon only: older
   daemons announce fewer flags, so clients still feature-detect each one.
 - **`server.daemonMode`** (additive, docs first). `"regular"`, `"node"` or `"orchestrator"`:

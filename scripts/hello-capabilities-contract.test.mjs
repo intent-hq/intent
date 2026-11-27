@@ -37,6 +37,13 @@ test('a profile whose flags disagree with its capabilities fails', () => {
   rejects((doc) => { delete profile(doc, 'regular').capabilities.startupStatus; }, /capabilities.startupStatus must match startupStatus/);
 });
 
+test('a version bump of a flagged capability stays valid', () => {
+  const doc = canonical();
+  profile(doc, 'regular').capabilities.startupStatus = 2;
+  profile(doc, 'regular').capabilities.remoteMachines = 3;
+  assert.doesNotThrow(() => validateFixture(doc));
+});
+
 test('unsorted, malformed or false capabilities fail', () => {
   rejects((doc) => {
     const entry = profile(doc, 'regular');
