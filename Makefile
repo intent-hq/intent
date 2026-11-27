@@ -998,6 +998,9 @@ test-intentd: ensure-intentd-submodule | check-transfer-fixture
 # The script exits 3 when a build-wide file (Cargo.toml/Cargo.lock, nextest
 # config, toolchain) changed; the target then announces the fallback and runs
 # the full `make test` (skipped under DRY_RUN=1, which only prints the plan).
+# make test takes no FEATURES, so with FEATURES that fallback is instead the
+# whole workspace through `make test-select E='all()' FEATURES=...` (same
+# runner and fixtures, built with the features), not a run without them.
 # The runner line names its paths as "$VAR" references that the script's eval
 # expands, so apostrophes or spaces in CURDIR/GATE_CACHE_DIR never reach a
 # nested quote; the script execs the runner from this directory, so the
@@ -1022,6 +1025,13 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 		NEXTEST_RUNNER='$(HERMETIC_RUNNER_WRAP)python3 scripts/resumable_nextest.py --repo-root "$$GATE_REPO_ROOT" --intentd-dir "$$INTENTD_DIR" --cache-dir "$$GATE_CACHE_DIR" --resume "$$RESUME" --force "$$GATE_FORCE" --no-fail-fast "$$NO_FAIL_FAST"' \
 		"$(INTENTD_DIR)/scripts/changed-tests.sh"$(TEST_SELECT_FEATURES); status=$$?; \
 	if [ "$$status" -ne 3 ]; then exit "$$status"; fi; \
+	if [ -n '$(TEST_CHANGED_FEATURES)' ]; then \
+		if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ]; then \
+			echo "[test-changed] DRY_RUN: would fall back to the full suite with FEATURES='$(TEST_CHANGED_FEATURES_SHOWN)': make test-select E='all()'"; exit 0; \
+		fi; \
+		echo "[test-changed] falling back to the full suite with FEATURES='$(TEST_CHANGED_FEATURES_SHOWN)': make test-select E='all()'"; \
+		$(INTENTD_TREE_CHECKED_ENV) exec $(MAKE) --no-print-directory test-select E='all()' FEATURES='$(TEST_CHANGED_FEATURES)'; \
+	fi; \
 	if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ]; then \
 		echo "[test-changed] DRY_RUN: would fall back to the full 'make test'"; exit 0; \
 	fi; \
@@ -1091,6 +1101,10 @@ COMMA := ,
 TEST_SELECT_FEATURES_LIST = $(strip $(subst $(COMMA), ,$(FEATURES)))
 TEST_SELECT_FEATURES = $(if $(TEST_SELECT_FEATURES_LIST), --features '$(subst ','\'',$(TEST_SELECT_FEATURES_LIST))')
 unexport E FEATURES
+# test-changed's fallback hands FEATURES on inside single quotes; the shown
+# form is the same list as a shell word would print it inside double quotes.
+TEST_CHANGED_FEATURES = $(subst ','\'',$(TEST_SELECT_FEATURES_LIST))
+TEST_CHANGED_FEATURES_SHOWN = $(subst ','\\'',$(TEST_SELECT_FEATURES_LIST))
 # The Postgres store tests build only with FEATURES=intent-store/postgres, so a
 # filtered run without it leaves them out silently (intentd#3672 lost a new
 # parity test from a 365-test test-select). The hint warns when the intentd

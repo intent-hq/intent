@@ -213,6 +213,19 @@ else
   [[ "$stdout" == *"[test-changed] falling back to the full 'make test'" ]] || fail "$case_name: stdout: $stdout"
   [[ "$planner_log" == *$'\n'"make:"$'\n'"--no-print-directory"$'\n'"test" ]] || fail "$case_name: make re-entry argv was"$'\n'"$planner_log"
 
+  # make test takes no FEATURES, so a build-wide change with FEATURES falls
+  # back to the whole workspace through test-select, which builds with them
+  # (its runner argv is pinned by scripts/test_test_select_target.py).
+  case_name="test-changed recipe keeps FEATURES on the full-suite fallback"
+  PLANNER_STUB_EXIT=3 run_make test-changed MAKE="$bin_dir/make-stub" "FEATURES=intentd-orchestrator/postgres,a'b"
+  expect_make_ok
+  [[ "$stdout" == *"[test-changed] falling back to the full suite with FEATURES='intentd-orchestrator/postgres a'\\''b': make test-select E='all()'"* ]] || fail "$case_name: stdout: $stdout"
+  [[ "$planner_log" == *$'\n'"make:"$'\n'"--no-print-directory"$'\n'"test-select"$'\n'"E=all()"$'\n'"FEATURES=intentd-orchestrator/postgres a'b" ]] || fail "$case_name: make re-entry argv was"$'\n'"$planner_log"
+  PLANNER_STUB_EXIT=3 run_make test-changed DRY_RUN=1 MAKE="$bin_dir/make-stub" FEATURES=intentd-orchestrator/postgres
+  expect_make_ok
+  [[ "$stdout" == *"[test-changed] DRY_RUN: would fall back to the full suite with FEATURES='intentd-orchestrator/postgres': make test-select E='all()'" ]] || fail "$case_name: dry-run stdout: $stdout"
+  [[ "$planner_log" != *"make:"* ]] || fail "$case_name: dry run re-entered make: $planner_log"
+
   case_name="test-changed recipe propagates other planner failures"
   PLANNER_STUB_EXIT=5 run_make test-changed MAKE="$bin_dir/make-stub"
   [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
