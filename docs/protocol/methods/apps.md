@@ -228,10 +228,13 @@ same as for a directory bundle:
 - A symlink entry (Unix mode `S_IFLNK` in the external attributes) or any other
   non-regular entry (device, FIFO, socket).
 - More than 2000 files, a declared or decompressed file larger than 16 MiB, a declared
-  or decompressed total larger than 64 MiB, `intent-app.json` larger than 64 KiB,
-  `intent-app.sig` larger than 16 KiB, or a bundle path longer than 512 bytes. Declared
-  sizes are checked before decompression and actual sizes while decompressing, so a
-  small archive that inflates beyond the limits (a zip bomb) stops at the limit.
+  or decompressed total larger than 64 MiB, `intent-app.sig` larger than 16 KiB, or a
+  bundle path longer than 512 bytes. Declared sizes are checked before decompression and
+  actual sizes while decompressing, so a small archive that inflates beyond the limits
+  (a zip bomb) stops at the limit.
+
+An `intent-app.json` larger than 64 KiB is `invalid-manifest` with `field: ""`, the same
+as for a directory bundle; the daemon checks its declared size before decompression.
 
 A package is at most **80 MiB** (`83886080` bytes) as uploaded. Every other manifest and
 bundle rule applies unchanged after unpacking. The scratch directory is private to the
