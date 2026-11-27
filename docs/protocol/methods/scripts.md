@@ -42,7 +42,7 @@ not remove the owner's definition or output.
 | script.start | workspaceId (req), scriptId (req) | { ok, scriptId } — the runtime status is flipped to `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) **before the reply**, atomically with the supervisor's registration and with the previous run's terminal fields (`pid`, `startedAt`, `exitCode`, `stoppedAt`, `error`, `detectedUrl`) cleared, so a `script.status` read after the reply never observes the pre-launch `idle`; the owned launch task publishes the `starting` transition as `script:state` strictly ahead of the spawn's `running` (or `exited` + `error` on a launch failure). A script already `running` or `starting` is a no-op |
 | script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } — stops an active run; resetting a finished script from `exited` to `idle` emits a `script:state` snapshot (§6.5; see the self-contained change extension below). On a **non-running** script that carries the was-running marker this is the **dismiss** affordance: it clears the marker (`previouslyRunning` on a service row, the hydrated `lost` reading on a command row; in memory plus a best-effort row write), emits the cleared runtime snapshot, and returns ok instead of erroring. Stopping an already idle, unmarked script is a no-op with no state event |
 | script.restart | workspaceId (req), scriptId (req) | { ok, scriptId } |
-| script.output | workspaceId (req), scriptId (req), maxLines? | output text of the latest run, read from its on-disk log (see *Script output persistence*): the newest `maxLines` lines (default 100, 1–10,000) under a `[... lines]` header, cut to fit 480,000 bytes (see *Bounded output reads*) |
+| script.output | workspaceId (req), scriptId (req), maxLines?, cursor? (`scriptOutputCursor: 1`) | output text of the latest run, read from its on-disk log (see *Script output persistence*): the newest `maxLines` lines (default 100, 1–10,000) under a `[... lines]` header, cut to fit 480,000 bytes (see *Bounded output reads*). With `cursor: true`: `{ runId, daemonBootId, data, startOffset, endOffset, logStartOffset, totalLines }` — base64 raw log bytes and their position in the run's output stream (see *Script output cursors*) |
 | script.status | workspaceId (req), scriptId (req) | { status, restartCount, pid?, exitCode?, startedAt?, stoppedAt?, error?, detectedUrl?, servedPorts?, previouslyRunning?, ready?, readiness?, exitReason?, startedBy? } — the `ScriptRuntimeState` snapshot; `status` and `restartCount` are always present, every other field is **omitted when unset** (never `null` — a cleared `exitCode` is absent, so hooks test `exitCode !== undefined`); `status` is one of `idle \| starting \| running \| restarting \| exited`. `exited` **always** carries `exitCode` (new in intentd, unreleased): when the real status was not observable it is the sentinel `-1` together with an `error` naming the cause — see the total exit contract note below. `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) is the `script.start` launch window: set synchronously before `script.start` replies, with the previous run's terminal fields cleared, and held until the spawn's `running` (or `exited` on a launch failure), so a poll issued right after `start` never reads the pre-launch `idle` or a stale `exitCode`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running`. `previouslyRunning?: true` (new in intentd, within v5.1) marks a **service** script that was running when the daemon last stopped; a command script in the same situation hydrates as `exited` / `exitCode: -1` / `error` instead — see the was-running marker note below |
 | script.run | workspaceId (req), scriptId (req), maxLines?, timeoutSeconds? (alias timeout?) | { exitCode?, output, outputTruncated?, timedOut?, warning? } — `output` keeps the newest bytes that fit 480,000 bytes once JSON-escaped, and `outputTruncated: true` (absent otherwise) marks a cut (see *Bounded output reads*); `exitCode` follows the same total exit contract as the runtime state (new in intentd, unreleased): `-1` when the exit was unobservable — see the total exit contract note below |
 
@@ -91,6 +91,70 @@ too big on its own is split on a UTF-8 boundary: the page serves the line's last
 fits and adds `lineContinues: true`, and `nextToken` resumes inside that line, so the next
 page's newest item is the line's earlier part. Prepend that item to the previous page's
 oldest item to rebuild the line; no output is dropped.
+
+#### Script output cursors (additive extension)
+
+Exact integer `server.capabilities.scriptOutputCursor: 1` (also returned by
+`system.capabilities`, see [client.hello](./client-hello.md)) says that `script.output`
+accepts `cursor: true` and that `script:output` events (§6.5) carry stream positions, so a
+client can join a saved snapshot to the live stream exactly. It follows the
+[terminal cursor contract](./files-terminal-browser.md) (§5.13) with a run's output stream
+in place of a terminal's. Older daemons omit the capability, ignore `cursor` and reply with
+the bare string, and their events carry no positions: clients then keep their previous
+join and must not treat byte equality as a cursor.
+
+- **Stream identity** is (`daemonBootId`, `scriptId`, `runId`). `daemonBootId` is the
+  `terminal.list` boot ID: it changes when the daemon restarts. Positions from different
+  identities are never compared.
+- **Positions** are unsigned decimal strings that count the raw PTY output bytes of the
+  run, from `"0"` at the run's first byte. Ranges are half-open (`[startOffset, endOffset)`)
+  and the decoded length equals `endOffset - startOffset`. The count never goes back
+  within one boot: a service auto-restart continues the same run and its positions, and
+  the per-run cap drops the oldest bytes without moving the kept ones. A run whose log was
+  written in an earlier boot counts its retained bytes from `"0"`.
+- **`script.output` with `cursor: true`** replies `{ runId, daemonBootId, data,
+  startOffset, endOffset, logStartOffset, totalLines }`. `data` is base64 of the newest
+  `maxLines` lines (default 100, 1–10,000) of the latest run's log, at most the newest
+  359,424 raw bytes (the §5.13 serve window); a window cut inside a line starts after its
+  next newline when the window holds one. `logStartOffset` is the position of the oldest
+  byte the log keeps contiguous with `endOffset`: `startOffset > logStartOffset` means
+  older saved output was left out of this reply, and `logStartOffset > "0"` means older
+  output was dropped (by the per-run cap, or before unsaved output; see below).
+  `totalLines` counts the lines from `logStartOffset` like the bare-string header. Bytes and positions are
+  taken atomically with the log's appends. With no run yet, `runId` is `null`, `data` is
+  `""` and every position is `"0"`. `cursor` cannot be combined with `paginate` or
+  `nextToken` (`-32602`). Machine runs (`remoteAgentId`) do not stream `script:output`,
+  so clients read them without `cursor` and get the bare string.
+- **Events.** Each `script:output` event for log output adds `runId`, `daemonBootId`,
+  `startOffset` and `endOffset`. The daemon writes a chunk to the log before it publishes
+  the chunk, so a snapshot whose `endOffset` is at or past an event's `endOffset` holds
+  that event's bytes. Daemon notices that are not in the log (the `--- Restarting … ---`
+  and `--- Exited too quickly … ---` lines) carry none of these fields.
+- **Unsaved output.** When the daemon cannot save output (a disk error, or a failed
+  compaction past twice the cap), positions still advance and events still stream it; the
+  log lacks those bytes, so a later snapshot cannot replay them. Saved output older than
+  the newest unsaved byte is left out of cursor replies (`logStartOffset` moves past the
+  hole), so `data` is always one contiguous range; the bare-string form still returns it.
+
+A cursor-aware viewer subscribes before it reads the snapshot and buffers live events while
+the read is in flight. It renders `data` and sets `next = endOffset`, then applies each
+buffered and later event in order:
+
+1. An event without positions is a notice: render it and keep `next`.
+2. Do not render an event of another stream identity than the joined one. Read a fresh
+   snapshot once for that identity: when the snapshot names it, the snapshot replaces the
+   joined stream; otherwise the event was older than the snapshot, and later events of that
+   identity are discarded. `startOffset: "0"` marks a run's start, not that the run is
+   newer than the snapshot.
+3. Discard an event with `endOffset <= next`. If `startOffset <= next < endOffset`, render
+   its bytes from `next - startOffset` and set `next = endOffset`. Equal bytes at different
+   positions are distinct output.
+4. An event with `startOffset > next` reveals a gap (a lagging subscriber, or output older
+   than the PTY's attach backlog). Stop rendering positioned events, read a fresh snapshot
+   with `cursor: true`, render its bytes from `next` when `startOffset <= next`, and then
+   apply the held events from step 3 on. When the snapshot starts past `next`, the
+   missing output is not available in that reply: mark the gap or replace the view with the
+   snapshot, then set `next = endOffset`. Never join across a gap silently.
 
 #### Paged commands
 
