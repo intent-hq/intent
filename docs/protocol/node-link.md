@@ -2537,6 +2537,7 @@ interface LaunchCommand {
   workspaceId: string;
   provider: string;        // base provider id
   model?: string;
+  reasoningEffort?: string; // any protocol; see Model and effort
   baseCommit: string;      // the agent's base ref
   repoKey: string;         // opaque name of the machine's checkout cache for this repository
   agentFeatures: unknown;  // the session's agentFeatures snapshot, gating its workspace API
@@ -2588,6 +2589,37 @@ the compact or full form within that version.
    backend cannot detect this, so a remote agent on an older machine can get the
    pre-3.10 description under a 3.10 stamp until the machine is updated. The
    field needs no nodeProtocol version.
+
+#### Model and effort
+
+The machine applies `model` and `reasoningEffort` to the provider session it
+opens, as a local agent's are applied, before the agent's first prompt:
+
+1. **Model.** A provider with a CLI model flag gets `model` as that flag. A
+   provider that takes its model on the session (Claude Code, Codex, Cursor,
+   Grok, Antigravity, DeepSeek Harness and others) gets it after `session/new`
+   or `session/load`, through `session/set_config_option`
+   (`configId: "model"`) or `session/set_model`, as a local agent does. A
+   provider that requires its model selection to succeed (Codex, Cursor,
+   Antigravity, DeepSeek Harness) fails the start when it rejects the model;
+   the others keep their default.
+2. **Effort.** The machine resolves the session's level as a local agent
+   does: a non-empty `reasoningEffort` wins; without it, a recognized legacy
+   Codex effort suffix on `model` (`gpt-5.5/low`, `gpt-5.5[low]`) is the
+   fallback. It sends the level through the session's `thought_level` config
+   option after the model, and sends nothing when the provider already runs
+   that level or does not offer it. Only when neither supplies a level does
+   the machine restore the provider's default: the adapter's own `default`
+   value when it offers one, else the level the session opened on, which the
+   machine records with the session. A loaded session's current level never
+   counts as its default.
+3. **Changes.** The backend sends both on every launch. A changed model
+   relaunches the agent ([switching a remote agent's model](./methods/nodes.md#switching-a-remote-agents-model));
+   a changed effort applies at the next launch.
+4. **Older machines** ignore `reasoningEffort` and, before
+   [intent-hq/intent#10197](https://github.com/intent-hq/intent/issues/10197),
+   applied `model` only as a CLI flag, so such a provider ran its default model.
+   The field needs no nodeProtocol version.
 
 The machine refuses a launch its [limits](#capacity-and-permission) deny
 (`node-capacity`) or for a provider it cannot run, including one turned off in
