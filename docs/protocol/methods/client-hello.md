@@ -179,6 +179,13 @@ intent-hq/intentd#3549; the app's gate is intent-hq/cloudlands-fe#4809. Exactly 
 auto-start toggle on a running script only for exact integer `1`; older daemons omit it and
 replace (stop) the run on any upsert.
 
+**Script output cursors (additive extension).** Exactly integer
+`server.capabilities.scriptOutputCursor: 1`, also returned by `system.capabilities`, says
+`script.output` accepts `cursor: true` and `script:output` events carry `runId`,
+`daemonBootId`, `startOffset` and `endOffset`, so a viewer joins the saved snapshot to the
+live stream by position ([Script output cursors](./scripts.md#script-output-cursors-additive-extension)).
+Older daemons omit it, ignore `cursor` and keep the bare-string reply.
+
 **Bounded reads (behaviour change).** Exactly integer `server.capabilities.boundedReads: 1`,
 also returned by `system.capabilities`, says the daemon answers read methods with bounded
 defaults: a default page size and a maximum where a method takes a limit, and a 480,000-byte
