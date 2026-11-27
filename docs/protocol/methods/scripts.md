@@ -117,9 +117,10 @@ join and must not treat byte equality as a cursor.
   `maxLines` lines (default 100, 1–10,000) of the latest run's log, at most the newest
   359,424 raw bytes (the §5.13 serve window); a window cut inside a line starts after its
   next newline when the window holds one. `logStartOffset` is the position of the oldest
-  byte the log keeps: `startOffset > logStartOffset` means older saved output was left out
-  of this reply, and `logStartOffset > "0"` means the per-run cap dropped older output.
-  `totalLines` counts the log's lines like the bare-string header. Bytes and positions are
+  byte the log keeps contiguous with `endOffset`: `startOffset > logStartOffset` means
+  older saved output was left out of this reply, and `logStartOffset > "0"` means older
+  output was dropped (by the per-run cap, or before unsaved output; see below).
+  `totalLines` counts the lines from `logStartOffset` like the bare-string header. Bytes and positions are
   taken atomically with the log's appends. With no run yet, `runId` is `null`, `data` is
   `""` and every position is `"0"`. `cursor` cannot be combined with `paginate` or
   `nextToken` (`-32602`). Machine runs (`remoteAgentId`) do not stream `script:output`,
@@ -131,22 +132,27 @@ join and must not treat byte equality as a cursor.
   and `--- Exited too quickly … ---` lines) carry none of these fields.
 - **Unsaved output.** When the daemon cannot save output (a disk error, or a failed
   compaction past twice the cap), positions still advance and events still stream it; the
-  log lacks those bytes, so a later snapshot cannot replay them.
+  log lacks those bytes, so a later snapshot cannot replay them. Saved output older than
+  the newest unsaved byte is left out of cursor replies (`logStartOffset` moves past the
+  hole), so `data` is always one contiguous range; the bare-string form still returns it.
 
 A cursor-aware viewer subscribes before it reads the snapshot and buffers live events while
 the read is in flight. It renders `data` and sets `next = endOffset`, then applies each
 buffered and later event in order:
 
 1. An event without positions is a notice: render it and keep `next`.
-2. An event of another boot needs a fresh snapshot. An event of another run of the same
-   boot starts that run's stream when its `startOffset` is `"0"` (render it, set
-   `next = endOffset` under the new `runId`); otherwise read a fresh snapshot.
+2. Do not render an event of another stream identity than the joined one. Read a fresh
+   snapshot once for that identity: when the snapshot names it, the snapshot replaces the
+   joined stream; otherwise the event was older than the snapshot, and later events of that
+   identity are discarded. `startOffset: "0"` marks a run's start, not that the run is
+   newer than the snapshot.
 3. Discard an event with `endOffset <= next`. If `startOffset <= next < endOffset`, render
    its bytes from `next - startOffset` and set `next = endOffset`. Equal bytes at different
    positions are distinct output.
 4. An event with `startOffset > next` reveals a gap (a lagging subscriber, or output older
-   than the PTY's attach backlog). Read a fresh snapshot with `cursor: true` and render its
-   bytes from `next` when `startOffset <= next`. When the snapshot starts past `next`, the
+   than the PTY's attach backlog). Stop rendering positioned events, read a fresh snapshot
+   with `cursor: true`, render its bytes from `next` when `startOffset <= next`, and then
+   apply the held events from step 3 on. When the snapshot starts past `next`, the
    missing output is not available in that reply: mark the gap or replace the view with the
    snapshot, then set `next = endOffset`. Never join across a gap silently.
 
