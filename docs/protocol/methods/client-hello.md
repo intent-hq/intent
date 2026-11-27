@@ -342,6 +342,15 @@ subscribe to discussion events, and private discussions remain human-only.
   surface version from [Protocol Version & Compatibility](../versioning.md)), and
   `capabilities` (feature-detection flags, e.g. `{ "liveState": true }` for the snapshot+delta
   channels of §6.9).
+- **Capability golden.** [`fixtures/hello/capabilities.json`](../fixtures/hello/capabilities.json)
+  lists the `server.capabilities` a current daemon announces, one profile per composition
+  (`regular`, `orchestrator`, `node`). Each profile names its inputs (`daemonMode`,
+  `startupStatus`, `remoteMachines`); test-only flags such as `reviewMonitoring` are left out.
+  intentd generates the file from its hello builder, and a golden test fails when the builder
+  and intentd's copy disagree; client test doubles announce the `regular` profile from their
+  copy. Both keep copies through `scripts/hello-capabilities-contract.mjs`
+  ([Copied fixtures](../README.md#copied-fixtures)). It describes the current daemon only: older
+  daemons announce fewer flags, so clients still feature-detect each one.
 - **`server.daemonMode`** (additive, docs first). `"regular"`, `"node"` or `"orchestrator"`:
   the mode of the running daemon ([reported daemon mode](./nodes.md#reported-daemon-mode)).
   Older daemons omit it; absence means unknown, so clients fall back to the `node-mode`

@@ -19,6 +19,7 @@ import { COPY as browserRouting } from './browser-routing-contract.mjs';
 import { COPY as backendKeychain } from './backend-keychain-contract.mjs';
 import { COPY as checkoutRepoConfig } from './checkout-repo-config-contract.mjs';
 import { COPY as eventStreamRecovery } from './event-stream-recovery-contract.mjs';
+import { COPY as helloCapabilities } from './hello-capabilities-contract.mjs';
 import { blobId, git, historyBlobs, isFixtureCopy, requireValue, runScript } from './lib/fixture-copy.mjs';
 import { COPY as noteTruncatedRead } from './note-truncated-read-contract.mjs';
 import { COPY as scriptsCompact } from './scripts-compact-contract.mjs';
@@ -31,7 +32,7 @@ export const COMPONENTS = ['cloudlands-fe', 'intentd', 'ios'];
 
 /** Every fixture copied through the shared tool. A new spec must be added here. */
 export const REGISTERED = [
-  browserRouting, backendKeychain, checkoutRepoConfig, eventStreamRecovery, noteTruncatedRead, scriptsCompact,
+  browserRouting, backendKeychain, checkoutRepoConfig, eventStreamRecovery, helloCapabilities, noteTruncatedRead, scriptsCompact,
   suggestedPrompts, turnStart,
 ];
 

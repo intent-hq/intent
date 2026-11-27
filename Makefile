@@ -252,7 +252,7 @@ check-provider-profile-bases: ## Check the provider-profiles.md profile-base tab
 	@node scripts/check-provider-profile-bases.mjs
 
 check-fixture-copies: ## Fail when a component copies a docs/protocol fixture without the shared fixture-copy tool, then check every registered copy
-	@node --test scripts/lib/fixture-copy.test.mjs scripts/check-fixture-copies.test.mjs
+	@node --test scripts/lib/fixture-copy.test.mjs scripts/check-fixture-copies.test.mjs scripts/hello-capabilities-contract.test.mjs
 	@node scripts/check-fixture-copies.mjs
 
 check-agent-worker-contract: ## Validate synthetic worker observation goldens, model and regression sensitivity
