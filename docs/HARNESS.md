@@ -230,9 +230,9 @@ copy of `FROM` and writes nothing unless every edit applies. It edits:
 5. `harness/v<FROM>.rs`: its test stops pinning `FROM` as the current version.
 6. `harness/v<TO>.rs` (new): reuses every `FROM` surface; its test pins `TO`
    as current.
-7. This repo's [protocol/methods/agents.md](./protocol/methods/agents.md)
-   (Prompt breakdown section): both lists of versions that record a
-   breakdown. A standalone intentd clone skips this edit and says so.
+
+The protocol docs do not list harness versions, so a bump needs no monorepo
+docs change.
 
 Then make the version's own change by hand:
 
@@ -251,11 +251,8 @@ Then make the version's own change by hand:
    admissions. To drop either, edit those lists by hand: it is a per-version
    decision, not a routine edit.
 
-Land it in this order:
-
-1. A monorepo docs PR with the `agents.md` change merges first.
-2. Then the intentd PR. Run `make check` and `make test-select
-   E='test(harness)'` before opening it.
+Run `make check` and `make test-select E='test(harness)'` before opening the
+intentd PR.
 
 Registry unit tests enforce that the current constant resolves, that rows
 are coherent (unique versions, wired doctrine, non-empty labels), and that
