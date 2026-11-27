@@ -535,9 +535,9 @@ workflow_filters() {
   push=$(yaml_block on 0 <"$workflow" | yaml_block push 2)
   [[ -n $push ]] || fail "workflow has no push trigger to resume a merged queued bump"
   [[ $(yaml_list branches 4 <<<"$push") == main ]] || fail "continuation must be limited to main"
-  [[ $(yaml_list paths 4 <<<"$push" | sort) == $'packages/cloudlands-fe\npackages/intentd\npackages/ios' ]] || fail "continuation paths must be the three gitlinks"
+  [[ $(yaml_list paths 4 <<<"$push" | LC_ALL=C sort) == $'packages/cloudlands-fe\npackages/intent-apps\npackages/intent-os\npackages/intentd\npackages/ios' ]] || fail "continuation paths must be the five gitlinks"
   ! grep -qE 'branches-ignore:|paths-ignore:' <<<"$push" || fail "unsupported negative push filters"
-  for component in intentd cloudlands-fe ios; do
+  for component in intentd cloudlands-fe ios intent-apps intent-os; do
     push_matches main "packages/$component" || fail "merge of $component pins cannot trigger continuation"
   done
   ! push_matches main docs/protocol/methods/mcp-bindings.md || fail "docs-only push retriggers the updater"

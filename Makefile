@@ -92,6 +92,8 @@ endif
 # make word list, so the submodule targets need the default path.
 FE_DIR = packages/cloudlands-fe
 IOS_DIR = packages/ios
+INTENT_APPS_DIR = packages/intent-apps
+INTENT_OS_DIR = packages/intent-os
 
 # FE dependency freshness guard shared by every target that needs an installed
 # frontend tree. pnpm writes the lockfile it installed from to
@@ -128,13 +130,14 @@ ORIG_PATH := $(PATH)
 RUSTUP_CARGO = $(shell cd $(INTENTD_DIR) 2>/dev/null && [ -r rust-toolchain.toml ] && RUSTUP_AUTO_INSTALL=0 rustup which cargo 2>/dev/null)
 export PATH = $(addsuffix :,$(dir $(RUSTUP_CARGO)))$(CARGO_BIN_DIR):$(ORIG_PATH)
 
-# `ensure-submodules` covers ALL submodules (intentd + FE + iOS), initializing
-# any that are missing. The FE and iOS submodules are heavy and not needed for
+# `ensure-submodules` covers ALL submodules (intentd + FE + iOS + intent-apps +
+# intent-os), initializing any that are missing. intent-apps and intent-os are
+# public and small, so they initialize like intentd and the FE. The FE and iOS submodules are heavy and not needed for
 # backend-only workflows, so those workflows use the narrower per-submodule
 # targets instead: `ensure-intentd-submodule` for every Rust target
 # (build/test/fmt/clippy/check), and `ensure-fe-submodule` /
 # `ensure-ios-submodule` on demand (same idempotent init-if-missing contract).
-SUBMODULES = $(INTENTD_DIR) $(FE_DIR) $(IOS_DIR)
+SUBMODULES = $(INTENTD_DIR) $(FE_DIR) $(IOS_DIR) $(INTENT_APPS_DIR) $(INTENT_OS_DIR)
 
 # Dev-seat data + ports (overridable, e.g. `make dev-daemon DEV_TCP_PORT=6181`).
 #
@@ -584,7 +587,7 @@ ensure-fe-toolchain: ensure-fe-submodule
 # non-interactive (no `Username for https://github.com:` prompt when no
 # credentials are cached); internal devs who want to authenticate
 # interactively can use `make ensure-ios-submodule`, which still prompts.
-ensure-submodules: ## Initialize any missing submodules — intentd, FE, iOS (idempotent; iOS is fail-soft)
+ensure-submodules: ## Initialize any missing submodules — intentd, FE, iOS, intent-apps, intent-os (idempotent; iOS is fail-soft)
 	@for sm in $(SUBMODULES); do \
 		if [ ! -e "$$sm/.git" ]; then \
 			echo "[ensure-submodules] initializing $$sm"; \

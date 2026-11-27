@@ -11,3 +11,11 @@
 	url = https://github.com/intent-hq/ios.git
 	branch = main
 	update = none
+[submodule "packages/intent-apps"]
+	path = packages/intent-apps
+	url = https://github.com/intent-hq/intent-apps.git
+	branch = main
+[submodule "packages/intent-os"]
+	path = packages/intent-os
+	url = https://github.com/intent-hq/intent-os.git
+	branch = main

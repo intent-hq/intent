@@ -508,6 +508,8 @@ report = {
         "monorepo": monorepo_status(),
         "intentd": repo_status("packages/intentd", gh_ready),
         "cloudlands-fe": repo_status("packages/cloudlands-fe", gh_ready),
+        "intent-apps": repo_status("packages/intent-apps", gh_ready),
+        "intent-os": repo_status("packages/intent-os", gh_ready),
     },
     "docs": {"remoteHost": "AGENTS.md#developing-on-a-remote-host"},
 }

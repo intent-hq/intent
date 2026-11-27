@@ -107,6 +107,8 @@ This monorepo ties the components together as git submodules and carries the cro
 | `packages/intentd` | [intent-hq/intentd](https://github.com/intent-hq/intentd) | Rust backend daemon |
 | `packages/cloudlands-fe` | [intent-hq/cloudlands-fe](https://github.com/intent-hq/cloudlands-fe) | Electron + SvelteKit desktop app |
 | `packages/ios` | [intent-hq/ios](https://github.com/intent-hq/ios) | SwiftUI iPhone and iPad app (private for now) |
+| `packages/intent-apps` | [intent-hq/intent-apps](https://github.com/intent-hq/intent-apps) | Intent apps SDK and manifest schema (in development) |
+| `packages/intent-os` | [intent-hq/intent-os](https://github.com/intent-hq/intent-os) | Intent OS images and session |
 
 To run the daemon on its own, for example on a remote host, see [Self-hosting the daemon](docs/self-hosting.md).
 

@@ -9,6 +9,8 @@ on:
       - packages/intentd
       - packages/cloudlands-fe
       - packages/ios
+      - packages/intent-apps
+      - packages/intent-os
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
