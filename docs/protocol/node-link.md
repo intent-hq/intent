@@ -2596,13 +2596,20 @@ The machine applies `model` and `reasoningEffort` to the provider session it
 opens, as a local agent's are applied, before the agent's first prompt:
 
 1. **Model.** A provider with a CLI model flag gets `model` as that flag. A
-   provider without one (Claude Code, Codex, Cursor, Grok, Antigravity) gets it
-   after `session/new` or `session/load`, through `session/set_config_option`
-   (`configId: "model"`) or `session/set_model`. A rejected model for Codex,
-   Cursor or Antigravity fails the start; other providers keep their default.
+   provider that takes its model on the session (Claude Code, Codex, Cursor,
+   Grok, Antigravity, DeepSeek Harness and others) gets it after `session/new`
+   or `session/load`, through `session/set_config_option`
+   (`configId: "model"`) or `session/set_model`, as a local agent does. A
+   provider that requires its model selection to succeed (Codex, Cursor,
+   Antigravity, DeepSeek Harness) fails the start when it rejects the model;
+   the others keep their default.
 2. **Effort.** `reasoningEffort` is the session's level. The machine sends it
    through the session's `thought_level` config option after the model. It
    sends nothing when the provider already runs that level or does not offer it.
+   Without `reasoningEffort` the machine restores the provider's default: the
+   adapter's own `default` value when it offers one, else the level the
+   session opened on, which the machine records with the session. A loaded
+   session's current level never counts as its default.
 3. **Changes.** The backend sends both on every launch. A changed model
    relaunches the agent ([switching a remote agent's model](./methods/nodes.md#switching-a-remote-agents-model));
    a changed effort applies at the next launch.
