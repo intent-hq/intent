@@ -21,20 +21,26 @@ The daemon advertises exactly integer `server.capabilities.intentApps: 1`
 values mean unsupported, and the client hides the app library. The flag grants no
 permission. Catalog presence is not a support probe.
 
+The daemon advertises exactly integer `server.capabilities.intentAppPackages: 1` when
+it also implements [App packages](#app-packages): the `app-package` upload and the
+`uploadId` arm of `app.install`. Without it, a client offers only the workspace
+install. `intentAppPackages` is never present without `intentApps: 1`.
+
 ### Roles
 
 | Party | Connection | What it does |
 | --- | --- | --- |
 | Library owner | Administrator connection (local UDS seat or the legacy owner token) | Installs, approves, revokes, uninstalls; opens app sessions; reads bundle files for the `intent-app://` scheme |
-| Agent | MCP / `ws.rpc` (acts as the primary principal) | May call `app.install` (including `dryRun`), `app.list`, `app.get`. Refused for the user-only methods below |
+| Agent | MCP / `ws.rpc` (acts as the primary principal) | May call `app.install` from a workspace (including `dryRun`), `app.list`, `app.get`. Refused for the user-only methods and the package install below |
 | App host | The desktop main process (cloudlands-fe) | Owns the app window, the `intent-app://` scheme, the preload bridge and one app connection per open app |
 | App | Renderer of the app window | Calls `window.intent` only. It never sees a token and never connects to the daemon itself |
 
-**User-only methods.** `app.approve` and `app.session.open` are refused with
-`-32003 { code: "forbidden", detail: "user-only" }` when the call comes from an agent
-(an MCP tool or a `ws.rpc` proxy call). An agent can therefore never approve an app or
-obtain a session token. All other `app.*` library methods are administrator methods
-that agents may call.
+**User-only methods.** `app.approve`, `app.session.open`, `app.install` with
+`uploadId`, and `file.attachmentUpload.begin` with `purpose: "app-package"` are refused
+with `-32003 { code: "forbidden", detail: "user-only" }` when the call comes from an
+agent (an MCP tool or a `ws.rpc` proxy call). An agent can therefore never approve an
+app, obtain a session token or install a package; it installs from its workspace. All
+other `app.*` library methods are administrator methods that agents may call.
 
 **Guests and host members.** No `app.*` method is on the collaborator allowlist
 ([§5.48](./multiplayer.md#the-collaborator-allowlist--methods-default-deny)) or the
@@ -44,9 +50,11 @@ owner-only.
 
 ### App format
 
-A bundle is a directory inside a workspace. It contains `intent-app.json` (the
-manifest) at its root, plus static files, plus an optional detached signature file
-`intent-app.sig` at its root ([Publisher and signature](#publisher-and-signature-reserved)).
+A bundle is a directory. It contains `intent-app.json` (the manifest) at its root,
+plus static files, plus an optional detached signature file `intent-app.sig` at its
+root ([Publisher and signature](#publisher-and-signature-reserved)). The daemon reads a
+bundle from a directory inside a workspace, or from an uploaded
+[app package](#app-packages) (a zip of the bundle directory).
 
 #### Manifest file (intent-app.json)
 
@@ -147,8 +155,8 @@ changes the signature keeps the approval.
 #### Publisher and signature (reserved)
 
 M1 **stores and returns** publisher and signature data, **checks only their shape**,
-and **never verifies** them. Verification arrives with the package-file milestone;
-until then no client may show a publisher as confirmed or treat a signature as trust.
+and **never verifies** them. Verification arrives with a later milestone (package
+signatures); until then no client may show a publisher as confirmed or treat a signature as trust.
 
 - `publisher` is part of the manifest, so it is covered by the bundle hash.
 - `intent-app.sig` is a detached signature over the bundle hash, so it does not change
@@ -173,6 +181,65 @@ until then no client may show a publisher as confirmed or treat a signature as t
   returned as `status: "unverified"`.
 - `intent-app.sig` is stored with the app but is not a bundle file: `app.readBundle`
   answers `file-not-found` for it, and `fileCount` / `sizeBytes` exclude it.
+
+#### App packages
+
+An app package is one file that holds a bundle: a ZIP archive (PKWARE APPNOTE) of the
+bundle directory. The suggested extension is `.intentapp`; the daemon ignores the file
+name and reads the content. A plain `.zip` of the bundle folder is a valid package.
+
+**Layout.** `intent-app.json` is either at the archive root, or inside exactly one
+top-level folder (`<folder>/intent-app.json`), which is the layout that "Compress" in
+macOS Finder and "Send to → Compressed folder" in Windows Explorer give for a folder.
+In the second case the daemon removes the `<folder>/` prefix from every entry, and every
+other entry must be inside that folder too. Entries under a root `__MACOSX/` folder
+(macOS resource forks) are skipped before the layout check. Directory entries (names
+that end in `/`) are skipped; empty directories are ignored, as in a directory bundle.
+
+**Same hash.** The daemon writes the entries to a private scratch directory and then
+reads that directory with the same validation and the same
+[bundle hash](#bundle-hash) as a workspace install. A package of a folder and a
+workspace install of the same folder give the same `bundleHash`, so one approval
+applies to both. Zip metadata (timestamps, permissions, comments, compression, entry
+order) does not change the hash.
+
+**Refusals.** The daemon checks the whole central directory before it decompresses any
+entry. These are `invalid-package` (`detail` names the rule, `entry` names the raw entry
+or `null`):
+
+- Not a ZIP archive, a damaged archive, or a split or multi-disk archive.
+- An encrypted entry (traditional PKWARE or AES), or a compression method other than
+  0 (stored) and 8 (deflate).
+- An entry name that is not valid UTF-8 (raw name bytes; the language-encoding flag is
+  not required), or that contains `\`, NUL or a control character, starts with `/`,
+  has a drive prefix (`C:`), or has an empty, `.` or `..` segment. These are path
+  escapes; the daemon never writes such an entry.
+- Two entries with the same name, a file entry that is also a folder of another entry
+  (`a` and `a/b`), or two names that the daemon's file system treats as the same name
+  (for example letter case on macOS and Windows).
+- No `intent-app.json` at the root and not exactly one top-level folder that contains it.
+- More than 10000 entries in the central directory (skipped entries included).
+- An entry that decompresses to more bytes than its declared size, or whose CRC-32 does
+  not match. The daemon stops reading the entry at the declared size plus one byte.
+
+These are `invalid-bundle` with the bundle `path` (after the prefix is removed), the
+same as for a directory bundle:
+
+- A symlink entry (Unix mode `S_IFLNK` in the external attributes) or any other
+  non-regular entry (device, FIFO, socket).
+- More than 2000 files, a declared or decompressed file larger than 16 MiB, a declared
+  or decompressed total larger than 64 MiB, `intent-app.sig` larger than 16 KiB, or a
+  bundle path longer than 512 bytes. Declared sizes are checked before decompression and
+  actual sizes while decompressing, so a small archive that inflates beyond the limits
+  (a zip bomb) stops at the limit.
+
+An `intent-app.json` larger than 64 KiB is `invalid-manifest` with `field: ""`, the same
+as for a directory bundle; the daemon checks its declared size before decompression.
+
+A package is at most **80 MiB** (`83886080` bytes) as uploaded. Every other manifest and
+bundle rule applies unchanged after unpacking. The scratch directory is private to the
+daemon (mode `0700` on Unix), files are created with no-follow, create-new opens, and the
+directory is deleted when the install ends, on success or failure.
 
 #### Serving and isolation
 
@@ -210,7 +277,7 @@ until then no client may show a publisher as confirmed or treat a signature as t
     "bundleHash": "sha256:9f2c…",            // the hash the user approved | null
     "approvedAt": "2026-11-26T12:00:00.000Z" // | null
   },
-  "source": { "workspaceId": "ws-1", "path": "apps/pomodoro" },   // the install source | null when the workspace is gone
+  "source": { "workspaceId": "ws-1", "path": "apps/pomodoro" },   // the workspace install source | null for a package install or when the workspace is gone
   "installedAt": "2026-11-26T11:59:00.000Z", // first install of this id
   "updatedAt": "2026-11-26T11:59:00.000Z",   // last install, approval or revoke
   "open": false,                             // a session is live for this app
@@ -249,7 +316,7 @@ last level, features and hash for display; a later `app.approve` can approve aga
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `app.install` | `workspaceId` (req), `path` (req), `replace?: boolean` (default false), `dryRun?: boolean` (default false) | `{ app: App, replaced: boolean, approvalReset: boolean, dryRun: boolean }` |
+| `app.install` | Exactly one source: `workspaceId` + `path`, or `uploadId` (`intentAppPackages: 1`). Plus `replace?: boolean` (default false), `dryRun?: boolean` (default false) | `{ app: App, replaced: boolean, approvalReset: boolean, dryRun: boolean }` |
 | `app.uninstall` | `appId` (req) | `{ removed: boolean }` |
 | `app.list` | none | `{ apps: App[] }` |
 | `app.get` | `appId` (req) | `{ app: App }` |
@@ -267,6 +334,23 @@ last level, features and hash for display; a later `app.approve` can approve aga
   (`approval.status: "pending"`, `open: false`) and stores nothing, ends nothing and
   publishes nothing; `app-exists` still applies so an agent learns about the conflict.
   Publishes `app:installed`, then `app:approval-changed` when `approvalReset`.
+  Both sources, neither source, `uploadId` together with `workspaceId` or `path`, or
+  `path` without `workspaceId` is `invalid-params`.
+- **`app.install` from a package.** User-only. `uploadId` names an upload that was
+  opened with `file.attachmentUpload.begin { purpose: "app-package" }` and has all its
+  chunks ([Package upload](#package-upload)). The daemon verifies the staged bytes as
+  `file.attachmentUpload.commit` does (the declared size, gap-free `seq` from 0, the
+  declared SHA-256), unpacks the [app package](#app-packages), and then runs the same
+  install as the workspace arm: same checks, same `replace` / `dryRun` rules, same
+  result and events. `App.source` is `null`. An unknown, expired or already used
+  `uploadId`, an upload with a different `purpose`, an incomplete upload, a SHA-256
+  mismatch, or an upload that is busy with a chunk or another install is
+  `upload-invalid` with a `detail`. A successful install that is not `dryRun` ends the
+  upload and deletes its staged bytes. A `dryRun` and every failure keep the upload, so
+  the client can call `app.install` again (for example with `replace: true` after
+  `app-exists`, or without `dryRun` after a preview); the client calls
+  `file.attachmentUpload.abort` when it does not install. An abort after a successful
+  install answers `{ aborted: false }`.
 - **`app.uninstall`.** Ends every session, deletes the installed files, the approval and
   the app's `app.storage` data. The host clears the session partition when it sees
   `app:removed`. An unknown `appId` answers `{ removed: false }` and publishes nothing.
@@ -296,6 +380,63 @@ last level, features and hash for display; a later `app.approve` can approve aga
   `PAYLOAD_CLASSES`. Over a remote (WSS) connection the host sends it on a
   [transfer connection](./files-terminal-browser.md) and lists it in the app's
   `TRANSFER_METHODS`; over the local socket it uses its one administrator connection.
+
+### Package upload
+
+A client sends a package to the daemon with the existing staged upload of
+[§5.9](./files-terminal-browser.md) (`file.attachmentUpload.begin` / `.chunk` /
+`.abort`), with the additive `begin` param `purpose: "app-package"`. The package does
+not need a workspace, and the client uses the same chunk loop and the same transfer
+connection rules as for an attachment. `app.install { uploadId }` takes the place of
+`file.attachmentUpload.commit`:
+
+```jsonc
+// 1. begin — no workspaceId
+{ "method": "file.attachmentUpload.begin",
+  "params": { "purpose": "app-package", "fileName": "pomodoro-timer.intentapp",
+              "sizeBytes": 18734, "sha256": "<64 hex chars of the whole file>" } }
+// → { "uploadId": "upload-…", "maxChunkBytes": 16777216 }
+
+// 2. chunk — unchanged (seq from 0, base64, any order, a retry of a seq is idempotent)
+{ "method": "file.attachmentUpload.chunk",
+  "params": { "uploadId": "upload-…", "seq": 0, "data": "<base64>" } }
+// → { "uploadId": "upload-…", "seq": 0, "receivedBytes": 18734 }
+
+// 3. install — in place of commit
+{ "method": "app.install", "params": { "uploadId": "upload-…", "replace": false, "dryRun": false } }
+// → { "app": App, "replaced": false, "approvalReset": false, "dryRun": false }
+
+// On cancel, or after a failure the client does not retry:
+{ "method": "file.attachmentUpload.abort", "params": { "uploadId": "upload-…" } }
+// → { "uploadId": "upload-…", "aborted": true }
+```
+
+Rules for an `app-package` upload, in addition to the §5.9 rules:
+
+- **Who.** An administrator connection that is not an agent. An agent is
+  `-32003 { code: "forbidden", detail: "user-only" }`. `file.attachmentUpload.begin`
+  is on the collaborator allowlist for attachments, so for a guest or host member the
+  daemon checks the `purpose` itself and answers `-32003` (Forbidden). An app
+  connection never reaches `file.*`. `chunk` and `abort` of an `app-package` upload
+  from any other caller answer as for an unknown `uploadId`, so the upload cannot be
+  probed.
+- **Params.** `purpose` is `"attachment"` (the default, today's behavior) or
+  `"app-package"`; any other value is `-32602`. With `"app-package"`, `workspaceId` and
+  `idempotencyKey` must be absent (`-32602`), `mimeType` is ignored, `fileName` passes
+  the same basename check, and `sizeBytes` is at most 83886080 (80 MiB), else `-32602`
+  naming the limit.
+- **Bounds.** At most **2** live `app-package` uploads per daemon (a `begin` at the cap
+  is `-32602` naming the live count); the same 15-minute idle TTL. They do not count
+  toward the per-workspace attachment cap.
+- **Commit.** `file.attachmentUpload.commit` of an `app-package` upload is `-32602`
+  ("use app.install") and keeps the upload.
+- **Locality.** An `app-package` upload belongs to the contacted daemon: it carries no
+  `workspaceId`, so it is never routed to a workspace home, and `app.install` with that
+  `uploadId` must go to the same daemon. Uploads live in memory only; a daemon restart
+  drops them.
+- **Calls on another connection.** As for attachments, the upload is not bound to the
+  connection that began it. The client may send `app.install` on its main connection
+  while the chunks go on a transfer connection.
 
 ### Sessions and the app principal
 
@@ -483,8 +624,10 @@ service failures are `-32603`. `data.detail` (a string) may add context; never p
 | -32602 | `{ code: "app-not-found" }` | Unknown `appId` (every method with `appId` except `app.uninstall`) |
 | -32602 | `{ code: "app-exists" }` | `app.install` of an installed `id` without `replace: true` (also on `dryRun`) |
 | -32602 | `{ code: "path-not-found", detail }` | `app.install` path missing, not a directory, without `intent-app.json`, or outside the workspace root |
+| -32602 | `{ code: "upload-invalid", detail }` | `app.install` with an `uploadId` that is unknown, expired, used, not an `app-package` upload, incomplete, busy, or whose bytes do not match the declared SHA-256 |
+| -32602 | `{ code: "invalid-package", detail, entry }` | The package is not a usable ZIP archive or breaks a [package rule](#app-packages); `entry` is the raw entry name or `null` |
 | -32602 | `{ code: "invalid-manifest", detail, field }` | Manifest is not JSON, too large, or breaks a field rule; `field` is a JSON pointer such as `/permissions/features/0` |
-| -32602 | `{ code: "invalid-bundle", detail, path }` | Symlink or special file, too many files, a file or the total too large, a bad path; `path` is the bundle path or `null` |
+| -32602 | `{ code: "invalid-bundle", detail, path }` | Symlink or special file, too many files, a file or the total too large, a bad path (also inside a package); `path` is the bundle path or `null` |
 | -32602 | `{ code: "level-unavailable" }` | Level 3 in `app.install` or `app.approve` (M1) |
 | -32602 | `{ code: "hash-mismatch", bundleHash }` | `app.approve` / `app.readBundle` with a hash other than the installed one; `bundleHash` is the installed hash |
 | -32602 | `{ code: "not-approved" }` | `app.session.open` for an app that is not approved for its installed hash |
@@ -629,7 +772,8 @@ Not wire surface; recorded here so the desktop and Intent OS sides agree.
 
 ### Storage (intentd)
 
-Informative. Installed files live under `<data dir>/apps/<appId>/<hash hex>/`; the
+Informative. Package uploads are staged like attachment uploads; the unpack scratch
+directory is a private temporary directory of the daemon. Installed files live under `<data dir>/apps/<appId>/<hash hex>/`; the
 previous hash directory is deleted after a successful replace. App records, approvals
 and `app.storage` rows are in intent-store tables keyed by `appId`. Session tokens are
 memory-only.
