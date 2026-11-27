@@ -1332,7 +1332,7 @@ contract lives in the intentd repo's AGENTS.md.
 
 ## Stateless orchestrator groundwork
 
-**Status:** on intentd `main` (merged 2026-11-25; leases, tenant and delivery leases 2026-11-26). This section
+**Status:** on intentd `main` (merged 2026-11-25 to 2026-11-27). This section
 describes the seams those PRs add and their known limits. The
 design that uses them is in
 [Owner work vs request writes](#owner-work-vs-request-writes-orchestrator-mode).
@@ -1351,6 +1351,8 @@ Nothing here runs more than one process per tenant yet. The desktop daemon
 | Lifecycle gates as leases | [intentd#3808](https://github.com/intent-hq/intentd/pull/3808) | `intent-store/src/lifecycle_leases.rs` |
 | Single-flight gates as leases | [intentd#3809](https://github.com/intent-hq/intentd/pull/3809) | `intent-store/src/lease_keeper.rs` (`guard_writes`), PR refresh, PR monitor and GitLab refresh code in `intent-services` |
 | Lease-guarded wake send | [intentd#3810](https://github.com/intent-hq/intentd/pull/3810) | `intent-services/src/agent_ops.rs`, `agent_subscriptions.rs` |
+| Fenced lifecycle work | [intentd#3835](https://github.com/intent-hq/intentd/pull/3835) | `intent-store/src/lifecycle_leases.rs`, retirement, archive and deletion paths in `intent-services` |
+| Tenant state | [intentd#3836](https://github.com/intent-hq/intentd/pull/3836) | `intent-store/src/tenant_state.rs`, `postgres/lease.rs`, `intentd-orchestrator/src/serve.rs` |
 | Settings and GitLab pair in the store | [intentd#3780](https://github.com/intent-hq/intentd/pull/3780) | `intent-services/src/settings_registry.rs`, `settings_store_follower.rs`, `intent-store/src/postgres/tenant_config.rs` |
 | Agent queues from the store | [intentd#3782](https://github.com/intent-hq/intentd/pull/3782) | `intent-store/src/agent_queue_merge.rs`, `agent_queue_repo.rs`, `intent-services/src/agent_ops.rs` |
 
@@ -1464,11 +1466,13 @@ not depend on which process owns the tenant.
       `"archive-fence"` and `"workspace-deletion"`, taken after the
       in-process lock. While the deletion lease is live, it refuses agent
       inserts and user messages from other processes in that workspace.
-      Limit: these leases do not fence their work. A fired fence is only
-      logged, and the work does not use `guard_writes`, so if renewal fails
-      past the 30 s TTL the deletion or retirement continues while another
-      process can take the key or admit producers. SQLite keeps the local
-      gates and takes no lifecycle lease.
+      The work is fenced (intentd#3835): its store writes run under
+      `guard_writes` and fail with `Error::LeaseLost` once the lease is
+      lost, and a retry takes the lease again. Limits: a crashed holder, or
+      an acquire that was granted and then cancelled, blocks the key until
+      the TTL; work outside the store (stopping runtimes, publishing events,
+      deleting folders) stops only at the next lease check. SQLite keeps
+      the local gates and takes no lifecycle lease.
    6. Single-flight work: `"pr-refresh"` (per workspace and root),
       `"pr-monitor-poll"` (per monitor; the row is re-read after taking the
       lease) and `"gitlab-credential-refresh"` (per host, plus a version
@@ -1504,6 +1508,27 @@ Limits:
 
 Limit: `postgres/lease.rs` still holds the tenant claim, the owner check
 (`ClaimSlot`) and the keeper bridge; it is not yet a thin adapter.
+
+### Tenant state
+
+1. `tenant_writer.state` is `open`, `closing` or `closed`
+   (`intent-store/src/tenant_state.rs`, intentd#3836). Every writer reads
+   it in the same statement as the writer lock it already takes, so the
+   check costs no extra query, whoever holds the tenant lease.
+2. `open`: writes run. `closing`: a write in flight when the state moved
+   commits (the move waits for its row lock); every later write fails with
+   `Error::TenantClosed`. `closed`: the tenant's work has stopped too.
+3. `Store::move_tenant_state` moves to `closing` from `open`, to `closed`
+   from `closing`, and back to `open` from any state. A move from another
+   state changes nothing and reports the state it found, so a tenant
+   reopened during a stop stays open.
+4. The orchestrator moves a tenant to `closing` before it stops its work,
+   to `closed` after, and to `open` when it starts it.
+5. SQLite: always open; a move is a no-op.
+
+Limit: the event bus logs `TenantClosed` refusals at error level during
+the window between `closing` and the fence; only `NotOwner` is treated as
+expected there.
 
 ### Delivery claims as leases
 
@@ -1801,9 +1826,9 @@ Notes:
    it to the bus after commit. Gate families adopt it one at a time; the bus
    batching writer stays for events that have no domain row.
 3. **A tenant state on the lock row closes request writes.** `tenant_writer`
-   gets a state (`open`, `closing`, `closed`). Every writer reads it under
-   the lock it already takes and refuses when the tenant is not `open`. No
-   extra query.
+   has a state (`open`, `closing`, `closed`; intentd#3836). Every writer
+   reads it under the lock it already takes and refuses when the tenant is
+   not `open`. No extra query. See [Tenant state](#tenant-state).
 
 ## Dependency-direction rules
 
