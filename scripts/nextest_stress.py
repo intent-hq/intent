@@ -30,11 +30,12 @@ prints a failed test's kept folder and daemon log, so the run names a record
 file in INTENTD_TEST_TEMPDIR_RECORD: every test temp folder (intentd's
 test_tempdir helpers, intentd-test-support's record_test_tempdir) adds a line
 to it. After the run, each killed iteration's folders are printed with the
-tails of their log files, and listed under "killed" in summary.json.
+tails of their log files (each test's first killed run in full, the rest in
+killed.txt), and listed under "killed" in summary.json.
 
 Output and a summary are kept under CACHE_DIR/stress/<id>/ (output.log,
-summary.txt, summary.json, tempdirs.tsv); the id directory is removed after
-seven days. The kept test folders are not: delete them when done.
+summary.txt, summary.json, tempdirs.tsv, killed.txt); the id directory is
+removed after seven days. The kept test folders are not: delete them when done.
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -169,9 +171,14 @@ TEMPDIR_RECORD_ENV = "INTENTD_TEST_TEMPDIR_RECORD"
 KILLED_LOG_TAIL_LINES = 200
 # Read at most this much of a log's end to find its tail.
 KILLED_LOG_TAIL_BYTES = 1024 * 1024
+# A longer log line (one huge JSON payload) is cut to this many characters.
+KILLED_LINE_CHARS = 4096
 KILLED_MAX_LOGS = 5
 KILLED_LOG_DEPTH = 4
 KILLED_SKIP_DIRS = {".git", ".repo-cache", "node_modules", "target"}
+# Where intentd's panic hook moves a failed test's folder (RETAINED_DIR_PREFIX):
+# a run killed by SIGABRT after a panic was reported that way first.
+RETAINED_DIR_PREFIX = "failed-"
 
 
 def killed_status(status: str) -> bool:
@@ -199,6 +206,14 @@ def read_tempdir_record(path: Path) -> dict[tuple[int, str, str], list[dict[str,
     return runs
 
 
+def _regular_file(path: Path) -> bool:
+    """Not a symlink, FIFO or socket: opening a FIFO named *.log would block the runner."""
+    try:
+        return stat.S_ISREG(os.lstat(path).st_mode)
+    except OSError:
+        return False
+
+
 def find_logs(folder: Path, depth: int = KILLED_LOG_DEPTH, limit: int = KILLED_MAX_LOGS) -> list[Path]:
     """The folder's log files: every daemon.log, then other *.log newest first, at most `limit`."""
     found: list[Path] = []
@@ -206,7 +221,7 @@ def find_logs(folder: Path, depth: int = KILLED_LOG_DEPTH, limit: int = KILLED_M
         level = len(Path(root).relative_to(folder).parts)
         dirs[:] = sorted(d for d in dirs if d not in KILLED_SKIP_DIRS) if level < depth else []
         found.extend(Path(root) / name for name in files
-                     if name.endswith(".log") and not (Path(root) / name).is_symlink())
+                     if name.endswith(".log") and _regular_file(Path(root) / name))
 
     def order(path: Path):
         try:
@@ -215,6 +230,12 @@ def find_logs(folder: Path, depth: int = KILLED_LOG_DEPTH, limit: int = KILLED_M
             mtime = 0.0
         return (path.name != "daemon.log", -mtime, str(path))
     return sorted(found, key=order)[:limit]
+
+
+def _cut(line: str) -> str:
+    if len(line) <= KILLED_LINE_CHARS:
+        return line
+    return f"{line[:KILLED_LINE_CHARS]}… ({len(line) - KILLED_LINE_CHARS} more characters)"
 
 
 def log_tail(path: Path, lines: int = KILLED_LOG_TAIL_LINES) -> str:
@@ -229,42 +250,59 @@ def log_tail(path: Path, lines: int = KILLED_LOG_TAIL_LINES) -> str:
     text = data.decode("utf-8", errors="replace").splitlines()
     if size > KILLED_LOG_TAIL_BYTES:
         text = text[1:]  # the first line read is cut
-    shown = text[-lines:]
+    shown = [_cut(line) for line in text[-lines:]]
     return "\n".join([f"--- {path.name} tail ({path}, last {len(shown)} lines) ---", *shown]) + "\n"
 
 
-def killed_report(label: str, tally: StressTally, record: Path) -> tuple[str, list[dict[str, object]]]:
-    """What to print for every killed iteration, and its summary.json entries."""
+def killed_report(label: str, tally: StressTally, record: Path,
+                  full_path: Path) -> tuple[str, str, list[dict[str, object]]]:
+    """(what to print, the full report for `full_path`, summary.json entries) for every killed run.
+
+    The printed report shows the log tails of each test's first killed run
+    only; later runs of the same test print their folders and point at
+    `full_path`, so a 200-iteration run with ten timeouts stays readable.
+    """
     recorded = read_tempdir_record(record)
-    report: list[str] = []
+    printed: list[str] = []
+    full: list[str] = []
     entries: list[dict[str, object]] = []
+    shown_tests: set[tuple[str, str]] = set()
     for key, status in sorted(tally.runs.items()):
         if not killed_status(status):
             continue
         iteration, binary, test = key
-        total = tally.total_iterations or "?"
-        name = f"{status} [{iteration}/{total}] {binary} {test}"
-        folders = recorded.get(key, [])
+        name = f"[{label}] {status} [{iteration}/{tally.total_iterations or '?'}] {binary} {test}"
+        with_tails = (binary, test) not in shown_tests
+        shown_tests.add((binary, test))
         entry: dict[str, object] = {"iteration": iteration, "binary": binary, "test": test, "status": status,
                                     "folders": []}
         entries.append(entry)
+        folders = recorded.get(key, [])
         if not folders:
-            report.append(f"[{label}] {name}: no test temp folder was recorded (the test makes none through "
-                          "test_tempdir / record_test_tempdir)\n")
-            continue
+            line = (f"{name}: no test temp folder was recorded (the test makes none through "
+                    "test_tempdir / record_test_tempdir)\n")
+            printed.append(line)
+            full.append(line)
         for folder in folders:
             path = Path(str(folder["path"]))
+            note = ""
             if not path.is_dir():
-                report.append(f"[{label}] {name}: temp folder {path} is gone\n")
-                entry["folders"].append({**folder, "exists": False, "logs": []})
-                continue
+                retained = path.with_name(RETAINED_DIR_PREFIX + path.name)
+                if not retained.is_dir():
+                    line = f"{name}: temp folder {path} is gone\n"
+                    printed.append(line)
+                    full.append(line)
+                    entry["folders"].append({**folder, "exists": False, "logs": []})
+                    continue
+                path, note = retained, " (moved there by the panic hook)"
             logs = find_logs(path)
-            entry["folders"].append({**folder, "exists": True, "logs": [str(log) for log in logs]})
-            report.append(f"[{label}] {name}: kept temp folder {path}\n")
-            report.extend(log_tail(log) for log in logs)
-            if not logs:
-                report.append(f"(no *.log in {path})\n")
-    return "".join(report), entries
+            entry["folders"].append({**folder, "kept": str(path), "exists": True, "logs": [str(log) for log in logs]})
+            line = f"{name}: kept temp folder {path}{note}\n"
+            tails = [log_tail(log) for log in logs] or [f"(no *.log in {path})\n"]
+            full.extend([line, *tails])
+            printed.extend([line, *tails] if with_tails else
+                           [line.rstrip("\n") + (f"; log tails in {full_path}\n" if logs else "\n")])
+    return "".join(printed), "".join(full), entries
 
 
 def summary_line(label: str, counts: dict[str, object], conditions: str, status: int | None = 0,
@@ -843,8 +881,10 @@ def run_stress(args, gate) -> int:
             if status == 0 and not counts["tests"]:
                 # The listing selected tests, yet no status line was recognised.
                 status = UNPARSED_EXIT
-            report, killed = killed_report(label, tally, tempdir_record)
-            if report:
+            killed_path = record_dir / "killed.txt"
+            report, full_report, killed = killed_report(label, tally, tempdir_record, killed_path)
+            if full_report:
+                killed_path.write_text(full_report, encoding="utf-8")
                 print(report, end="", flush=True)
             line = summary_line(label, counts, f"{load}, {stall.describe() if stall else 'STALL=0'}", status,
                                 host)
