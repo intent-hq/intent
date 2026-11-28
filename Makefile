@@ -737,8 +737,11 @@ build-intentd: ensure-intentd-submodule
 fmt: ensure-intentd-submodule ## cargo fmt --check
 	cd "$(INTENTD_DIR)" && cargo fmt --check
 
-clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
+# The second pass mirrors intentd CI's Clippy step: default-feature clippy never
+# compiles intentd tests behind repository-test-fixtures (intentd#3846).
+clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings, plus intentd tests with repository-test-fixtures
 	cd "$(INTENTD_DIR)" && $(COMPACT_CARGO) cargo clippy --workspace --all-targets --jobs $(BUILD_JOBS) -- -D warnings
+	cd "$(INTENTD_DIR)" && $(COMPACT_CARGO) cargo clippy -p intentd --tests --features repository-test-fixtures --jobs $(BUILD_JOBS) -- -D warnings
 
 # The local twin of intentd CI store-postgres's first Clippy step. The
 # workspace clippy builds intent-store without its `postgres` feature, so the
