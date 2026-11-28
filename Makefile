@@ -1193,7 +1193,7 @@ endif
 endif
 endif
 
-test-stress: ensure-intentd-submodule | check-transfer-fixture ## Repeat the Rust tests matching E='<filterset>' COUNT times (default 100) with retries off (FEATURES=<crate/feature> enables Cargo features; fails when E selects nothing), LOAD=1 adds CPU + disk load pinned to LOAD_CORES CPUs, STALL=1 freezes tests at random (STALL_MS, STALL_EVERY_MS); prints passes, failures and panic locations
+test-stress: ensure-intentd-submodule | check-transfer-fixture ## Repeat the Rust tests matching E='<filterset>' COUNT times (default 100) with retries off (FEATURES=<crate/feature> enables Cargo features; fails when E selects nothing), LOAD=1 adds CPU + disk load pinned to LOAD_CORES CPUs, STALL=1 freezes tests at random (STALL_MS, STALL_EVERY_MS); prints passes, failures and panic locations, and the kept temp folder and log tails of each test killed for running too long
 	@python3 scripts/check_watch_capacity.py --quiet
 	@cargo nextest --version >/dev/null 2>&1 || { \
 		echo "[test-stress] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \

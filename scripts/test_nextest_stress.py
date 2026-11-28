@@ -74,11 +74,15 @@ IGNORED = {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ig
 ONE_TEST = listing(one=MATCHED, other=UNMATCHED)
 
 
-def tally(text):
+def stress_tally(text):
     result = stress.StressTally()
     for line in text.splitlines(keepends=True):
         result.feed(line)
-    return result.counts()
+    return result
+
+
+def tally(text):
+    return stress_tally(text).counts()
 
 
 class TallyTests(unittest.TestCase):
@@ -609,9 +613,26 @@ elif sys.argv[2] == "run":
     time.sleep(float(os.environ.get("FAKE_CARGO_SLEEP", "0")))
     output = os.environ["FAKE_CARGO_OUTPUT"]
     if os.environ.get("FAKE_CARGO_TEST"):
-        # One "test process" below cargo, as nextest runs each test.
-        passed = subprocess.run([sys.executable, "-c", os.environ["FAKE_CARGO_TEST"]]).returncode == 0
-        output = output.replace("STATUS", "PASS" if passed else "FAIL")
+        # One "test process" below cargo, as nextest runs each test, killed
+        # after FAKE_CARGO_TEST_TIMEOUT seconds as nextest's slow-timeout does.
+        env = {**os.environ, "NEXTEST_STRESS_CURRENT": "0", "NEXTEST_BINARY_ID": "probe",
+               "NEXTEST_TEST_NAME": os.environ.get("FAKE_CARGO_TEST_NAME", "timing")}
+        test = subprocess.Popen([sys.executable, "-c", os.environ["FAKE_CARGO_TEST"]], env=env)
+        if os.environ.get("FAKE_CARGO_WAIT_FOR_RECORD"):
+            # Start the timeout once the test listed its folder, so a slow host
+            # never kills it first.
+            record = os.environ["INTENTD_TEST_TEMPDIR_RECORD"]
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline and test.poll() is None and not (
+                    os.path.exists(record) and os.path.getsize(record)):
+                time.sleep(0.02)
+        try:
+            status = "PASS" if test.wait(timeout=float(os.environ.get("FAKE_CARGO_TEST_TIMEOUT", "600"))) == 0 else "FAIL"
+        except subprocess.TimeoutExpired:
+            test.kill()
+            test.wait()
+            status = "TIMEOUT"
+        output = output.replace("STATUS", status)
     sys.stderr.write(output)
     sys.exit(int(os.environ.get("FAKE_CARGO_EXIT", "0")))
 """
@@ -857,6 +878,115 @@ class RunStressTests(unittest.TestCase):
                       "INVALID: no stall froze a test process", stdout)
         summary = json.loads((next((self.cache / "stress").iterdir()) / "summary.json").read_text())
         self.assertEqual((summary["exit_code"], summary["stalls"]), (stress.INVALID_EXIT, 0))
+
+    # A test that, like the E2B lifecycle test of intentd#3860, hangs until
+    # nextest kills it, after writing its folder to the record the way
+    # record_test_tempdir does (packages/intentd/crates/intentd-test-support/
+    # src/tempdir_record.rs, whose unit test pins the same line format).
+    HANGING_TEST = (
+        "import os, pathlib, time\n"
+        "folder = pathlib.Path(os.environ['FAKE_TEST_ROOT']) / 'itd-hang-x'\n"
+        "(folder / 'head').mkdir(parents=True)\n"
+        "(folder / '.git').mkdir()\n"
+        "(folder / 'daemon.log').write_text(''.join(f'daemon line {n}\\n' for n in range(1, 301)))\n"
+        "(folder / 'head' / 'head.log').write_text('head started\\nwaiting on git helper\\n')\n"
+        "(folder / '.git' / 'skipped.log').write_text('not a test log\\n')\n"
+        "fields = [os.environ[name] for name in ('NEXTEST_STRESS_CURRENT', 'NEXTEST_BINARY_ID', 'NEXTEST_TEST_NAME')]\n"
+        "with open(os.environ['INTENTD_TEST_TEMPDIR_RECORD'], 'a') as record:\n"
+        "    record.write('\\t'.join([*fields, str(os.getpid()), str(folder)]) + '\\n')\n"
+        "time.sleep(600)\n")
+
+    def test_a_timed_out_run_prints_its_kept_folder_and_log_tails(self):
+        kept = self.root / "kept"
+        kept.mkdir()
+        with mock.patch.dict(os.environ, {"FAKE_TEST_ROOT": str(kept), "FAKE_CARGO_TEST_TIMEOUT": "0.5",
+                                          "FAKE_CARGO_WAIT_FOR_RECORD": "1", "FAKE_CARGO_TEST_NAME": "hang"}):
+            status, stdout, _ = self.run_stress("        STATUS [   1.000s] [1/1] (1/1) probe hang\n",
+                                                test_code=self.HANGING_TEST, stress_count=1)
+        self.assertEqual(status, 1, stdout)
+        folder = kept / "itd-hang-x"
+        self.assertIn(f"[test-stress] TIMEOUT [1/1] probe hang: kept temp folder {folder}\n"
+                      f"--- daemon.log tail ({folder / 'daemon.log'}, last 200 lines) ---\n"
+                      "daemon line 101\n", stdout)
+        self.assertIn("daemon line 300\n", stdout)
+        self.assertNotIn("daemon line 100\n", stdout)
+        self.assertIn(f"--- head.log tail ({folder / 'head' / 'head.log'}, last 2 lines) ---\n"
+                      "head started\nwaiting on git helper\n", stdout)
+        self.assertNotIn("skipped.log", stdout)
+        self.assertIn("0 passed, 1 failed; failures: TIMEOUT ×1; 1 killed run kept 1 temp folder", stdout)
+        self.assertLess(stdout.index("kept temp folder"), stdout.index("] stress:"),
+                        "the evidence comes before the summary line")
+        record = next((self.cache / "stress").iterdir())
+        self.assertIn("daemon line 300\n", (record / "killed.txt").read_text())
+        summary = json.loads((record / "summary.json").read_text())
+        self.assertEqual(len(summary["killed"]), 1)
+        killed = summary["killed"][0]
+        self.assertEqual((killed["iteration"], killed["binary"], killed["test"], killed["status"]),
+                         (1, "probe", "hang", "TIMEOUT"))
+        self.assertEqual([(f["path"], f["kept"], f["exists"], f["logs"]) for f in killed["folders"]],
+                         [(str(folder), str(folder), True,
+                           [str(folder / "daemon.log"), str(folder / "head" / "head.log")])])
+
+    def killed(self, output, record_text):
+        record = self.root / "tempdirs.tsv"
+        record.write_text(record_text)
+        return stress.killed_report("test-stress", stress_tally(output), record, self.root / "killed.txt")
+
+    def test_only_the_first_killed_run_of_a_test_prints_its_log_tails(self):
+        first, second = self.root / "itd-1", self.root / "itd-2"
+        for folder in (first, second):
+            folder.mkdir()
+            (folder / "daemon.log").write_text(f"{folder.name} stuck\n")
+        output = ("     TIMEOUT [  9.000s] [1/3] (1/1) probe hang\n"
+                  "        PASS [  0.100s] [2/3] (1/1) probe hang\n"
+                  "     TIMEOUT [  9.000s] [3/3] (1/1) probe hang\n")
+        printed, full, killed = self.killed(output, f"0\tprobe\thang\t1\t{first}\n2\tprobe\thang\t3\t{second}\n")
+        self.assertEqual(printed, f"[test-stress] TIMEOUT [1/3] probe hang: kept temp folder {first}\n"
+                                  f"--- daemon.log tail ({first / 'daemon.log'}, last 1 lines) ---\nitd-1 stuck\n"
+                                  f"[test-stress] TIMEOUT [3/3] probe hang: kept temp folder {second}; "
+                                  f"log tails in {self.root / 'killed.txt'}\n")
+        self.assertIn("itd-2 stuck\n", full)
+        self.assertEqual([entry["iteration"] for entry in killed], [1, 3])
+
+    def test_a_folder_the_panic_hook_moved_is_found_and_odd_logs_are_safe(self):
+        # SIGABRT after a panic (a double panic, panic=abort): the hook ran
+        # first and renamed the folder to failed-<name>.
+        original = self.root / "itd-abort"
+        moved = self.root / "failed-itd-abort"
+        moved.mkdir()
+        (moved / "daemon.log").write_text("x" * (stress.KILLED_LINE_CHARS + 5) + "\n")
+        os.mkfifo(moved / "blocked.log")  # opening it would block the runner
+        printed, _, killed = self.killed("    SIGABRT [  0.100s] [1/1] (1/1) probe boom\n",
+                                         f"0\tprobe\tboom\t1\t{original}\n")
+        self.assertEqual(printed, f"[test-stress] SIGABRT [1/1] probe boom: kept temp folder {moved} "
+                                  "(moved there by the panic hook)\n"
+                                  f"--- daemon.log tail ({moved / 'daemon.log'}, last 1 lines) ---\n"
+                                  f"{'x' * stress.KILLED_LINE_CHARS}… (5 more characters)\n")
+        self.assertEqual(killed[0]["folders"][0]["logs"], [str(moved / "daemon.log")])
+
+    def test_only_killed_runs_are_reported_and_missing_folders_say_so(self):
+        gone = self.root / "itd-gone"
+        failed = self.root / "itd-failed"
+        failed.mkdir()
+        report, _, killed = self.killed(OUTPUT, f"1\tprobe\tflaky\t7\t{gone}\n"   # [2/3] TIMEOUT, folder deleted
+                                                f"0\tprobe\tflaky\t8\t{failed}\n"  # [1/3] FAIL: the panic hook reports it
+                                                "not\ta record line\n")
+        self.assertEqual(report, f"[test-stress] TIMEOUT [2/3] probe flaky: temp folder {gone} is gone\n")
+        self.assertEqual(killed, [{"iteration": 2, "binary": "probe", "test": "flaky", "status": "TIMEOUT",
+                                   "folders": [{"path": str(gone), "pid": 7, "exists": False, "logs": []}]}])
+        report, _, _ = self.killed(OUTPUT, "")
+        self.assertEqual(report, "[test-stress] TIMEOUT [2/3] probe flaky: no test temp folder was recorded "
+                                 "(the test makes none through test_tempdir / record_test_tempdir)\n")
+
+    def test_a_log_larger_than_the_read_window_drops_its_cut_first_line(self):
+        log = self.root / "daemon.log"
+        line = "x" * 99 + "\n"
+        log.write_text(line * (stress.KILLED_LOG_TAIL_BYTES // len(line) + 10) + "last\n")
+        tail = stress.log_tail(log, lines=3)
+        self.assertEqual(tail, f"--- daemon.log tail ({log}, last 3 lines) ---\n{line}{line}last\n")
+        whole = (stress.KILLED_LOG_TAIL_BYTES - len("last\n")) // len(line) + 1
+        self.assertEqual(len(stress.log_tail(log, lines=10**6).splitlines()) - 1, whole,
+                         "only whole lines from the window")
 
     def test_real_gate_provides_every_helper_stress_mode_uses(self):
         for name in vars(self.fake_gate()):
