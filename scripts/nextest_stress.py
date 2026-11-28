@@ -25,8 +25,16 @@ the FEATURES knob: a test behind a Cargo feature (the Postgres store tests are
 behind intent-store/postgres) compiles to an empty binary without it, and a
 stress run of nothing once "passed".
 
+A test nextest kills (TIMEOUT, or a signal) never runs the panic hook that
+prints a failed test's kept folder and daemon log, so the run names a record
+file in INTENTD_TEST_TEMPDIR_RECORD: every test temp folder (intentd's
+test_tempdir helpers, intentd-test-support's record_test_tempdir) adds a line
+to it. After the run, each killed iteration's folders are printed with the
+tails of their log files, and listed under "killed" in summary.json.
+
 Output and a summary are kept under CACHE_DIR/stress/<id>/ (output.log,
-summary.txt, summary.json); the id directory is removed after seven days.
+summary.txt, summary.json, tempdirs.tsv); the id directory is removed after
+seven days. The kept test folders are not: delete them when done.
 """
 
 from __future__ import annotations
@@ -154,6 +162,109 @@ class StressTally:
             # nextest's (iterations, failed iterations), or None if it printed no summary.
             "nextest_summary": list(self.nextest_summary) if self.nextest_summary else None,
         }
+
+
+TEMPDIR_RECORD_ENV = "INTENTD_TEST_TEMPDIR_RECORD"
+# The same tail the panic hook prints for a failed test's daemon.log.
+KILLED_LOG_TAIL_LINES = 200
+# Read at most this much of a log's end to find its tail.
+KILLED_LOG_TAIL_BYTES = 1024 * 1024
+KILLED_MAX_LOGS = 5
+KILLED_LOG_DEPTH = 4
+KILLED_SKIP_DIRS = {".git", ".repo-cache", "node_modules", "target"}
+
+
+def killed_status(status: str) -> bool:
+    """Statuses whose test process was killed, so no in-process hook reported its folder."""
+    return status in ("TIMEOUT", "ABORT") or status.startswith("SIG")
+
+
+def read_tempdir_record(path: Path) -> dict[tuple[int, str, str], list[dict[str, object]]]:
+    """(iteration, binary, test) -> the folders that run recorded, in creation order.
+
+    Lines are `stress index \\t binary id \\t test name \\t pid \\t path`
+    (intentd-test-support's tempdir_record); nextest's stress index counts
+    from 0, its status lines from 1.
+    """
+    runs: dict[tuple[int, str, str], list[dict[str, object]]] = {}
+    if not path.is_file():
+        return runs
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        fields = line.split("\t", 4)
+        if len(fields) != 5 or not fields[0].isdigit():
+            continue
+        index, binary, test, pid, folder = fields
+        runs.setdefault((int(index) + 1, binary, test), []).append(
+            {"path": folder, "pid": int(pid) if pid.isdigit() else None})
+    return runs
+
+
+def find_logs(folder: Path, depth: int = KILLED_LOG_DEPTH, limit: int = KILLED_MAX_LOGS) -> list[Path]:
+    """The folder's log files: every daemon.log, then other *.log newest first, at most `limit`."""
+    found: list[Path] = []
+    for root, dirs, files in os.walk(folder):
+        level = len(Path(root).relative_to(folder).parts)
+        dirs[:] = sorted(d for d in dirs if d not in KILLED_SKIP_DIRS) if level < depth else []
+        found.extend(Path(root) / name for name in files
+                     if name.endswith(".log") and not (Path(root) / name).is_symlink())
+
+    def order(path: Path):
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        return (path.name != "daemon.log", -mtime, str(path))
+    return sorted(found, key=order)[:limit]
+
+
+def log_tail(path: Path, lines: int = KILLED_LOG_TAIL_LINES) -> str:
+    """The section the report prints for one log: a header, then its last `lines` lines."""
+    try:
+        with open(path, "rb") as handle:
+            size = handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, size - KILLED_LOG_TAIL_BYTES))
+            data = handle.read()
+    except OSError as error:
+        return f"--- {path.name} ({path}) unreadable: {error} ---\n"
+    text = data.decode("utf-8", errors="replace").splitlines()
+    if size > KILLED_LOG_TAIL_BYTES:
+        text = text[1:]  # the first line read is cut
+    shown = text[-lines:]
+    return "\n".join([f"--- {path.name} tail ({path}, last {len(shown)} lines) ---", *shown]) + "\n"
+
+
+def killed_report(label: str, tally: StressTally, record: Path) -> tuple[str, list[dict[str, object]]]:
+    """What to print for every killed iteration, and its summary.json entries."""
+    recorded = read_tempdir_record(record)
+    report: list[str] = []
+    entries: list[dict[str, object]] = []
+    for key, status in sorted(tally.runs.items()):
+        if not killed_status(status):
+            continue
+        iteration, binary, test = key
+        total = tally.total_iterations or "?"
+        name = f"{status} [{iteration}/{total}] {binary} {test}"
+        folders = recorded.get(key, [])
+        entry: dict[str, object] = {"iteration": iteration, "binary": binary, "test": test, "status": status,
+                                    "folders": []}
+        entries.append(entry)
+        if not folders:
+            report.append(f"[{label}] {name}: no test temp folder was recorded (the test makes none through "
+                          "test_tempdir / record_test_tempdir)\n")
+            continue
+        for folder in folders:
+            path = Path(str(folder["path"]))
+            if not path.is_dir():
+                report.append(f"[{label}] {name}: temp folder {path} is gone\n")
+                entry["folders"].append({**folder, "exists": False, "logs": []})
+                continue
+            logs = find_logs(path)
+            entry["folders"].append({**folder, "exists": True, "logs": [str(log) for log in logs]})
+            report.append(f"[{label}] {name}: kept temp folder {path}\n")
+            report.extend(log_tail(log) for log in logs)
+            if not logs:
+                report.append(f"(no *.log in {path})\n")
+    return "".join(report), entries
 
 
 def summary_line(label: str, counts: dict[str, object], conditions: str, status: int | None = 0,
@@ -660,6 +771,7 @@ def run_stress(args, gate) -> int:
     record_dir.mkdir(parents=True)
     stall = (Stall(args.stall_ms or DEFAULT_STALL_MS, args.stall_every_ms or DEFAULT_STALL_EVERY_MS, record_dir)
              if args.stall == "1" else None)
+    tempdir_record = record_dir / "tempdirs.tsv"
     tally = StressTally()
     load_failures: list[str] = []
     status: int | None = None
@@ -708,11 +820,12 @@ def run_stress(args, gate) -> int:
             elif loaded:
                 print(f"[{label}] the load spans every CPU (LOAD_CORES={load_cores or len(allowed)}); "
                       "other workspaces on this host will slow down", flush=True)
+            run_env = {**env, TEMPDIR_RECORD_ENV: str(tempdir_record)}
             with open(record_dir / "output.log", "w", encoding="utf-8") as log, \
                     tempfile.TemporaryDirectory(prefix="load-", dir=stress_dir) as scratch, \
                     (stress_load(cpus, Path(scratch), record_dir / "load.err", cores) if loaded
                      else contextlib.nullcontext([])) as workers:
-                status = stream(command, intentd_dir, env, log, tally, stall.attach if stall else None, cores)
+                status = stream(command, intentd_dir, run_env, log, tally, stall.attach if stall else None, cores)
                 # A worker that died mid-run means the advertised load did not hold.
                 load_failures = exited_early(workers)
         except subprocess.CalledProcessError as error:
@@ -730,8 +843,15 @@ def run_stress(args, gate) -> int:
             if status == 0 and not counts["tests"]:
                 # The listing selected tests, yet no status line was recognised.
                 status = UNPARSED_EXIT
+            report, killed = killed_report(label, tally, tempdir_record)
+            if report:
+                print(report, end="", flush=True)
             line = summary_line(label, counts, f"{load}, {stall.describe() if stall else 'STALL=0'}", status,
                                 host)
+            if killed:
+                kept = sum(1 for entry in killed for folder in entry["folders"] if folder["exists"])
+                line += (f"; {len(killed)} killed run{'' if len(killed) == 1 else 's'} kept {kept} temp "
+                         f"folder{'' if kept == 1 else 's'} (listed above; delete them when done)")
             invalid = False
             if load_failures:
                 invalid = True
@@ -757,6 +877,7 @@ def run_stress(args, gate) -> int:
                 "load_failures": load_failures, "stall": stall is not None,
                 "stall_ms": stall.pause_ms if stall else 0, "stall_every_ms": stall.every_ms if stall else 0,
                 "stalls": stall.count() if stall else 0, "stall_failures": stall.failures if stall else [],
+                "killed": killed,
                 "exit_code": status, "test_timeout_multiplier": env.get(gate.TIMEOUT_MULTIPLIER_ENV),
             }, indent=2) + "\n", encoding="utf-8")
             print(line, flush=True)
