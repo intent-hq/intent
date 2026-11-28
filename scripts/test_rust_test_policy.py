@@ -584,13 +584,17 @@ if is_test:
                 result, calls = self.make('check', forwarded=forwarded)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 clippy = [c for c in calls if c['args'][:1] == ['clippy']]
-                self.assertEqual(len(clippy), 2, calls)
-                postgres = clippy[1]['args']
+                self.assertEqual(len(clippy), 3, calls)
+                fixtures = clippy[1]['args']
+                self.assertEqual(fixtures[:5], ['clippy', '-p', 'intentd', '--tests', '--features'], fixtures)
+                self.assertEqual(fixtures[5], 'repository-test-fixtures', fixtures)
+                self.assertEqual(fixtures[fixtures.index('--') + 1:], ['-D', 'warnings'])
+                postgres = clippy[2]['args']
                 self.assertEqual(postgres[:5], ['clippy', '-p', 'intent-store', '--features', 'postgres'], postgres)
                 self.assertIn('--all-targets', postgres)
                 self.assertNotIn('--workspace', postgres)
                 self.assertEqual(postgres[postgres.index('--') + 1:], ['-D', 'warnings'])
-                self.assertEqual(Path(clippy[1]['cwd']).resolve(), self.component.resolve())
+                self.assertEqual(Path(clippy[2]['cwd']).resolve(), self.component.resolve())
         result, calls = self.make('clippy-postgres')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual([c['args'][:3] for c in calls if c['args'][:1] == ['clippy']],
@@ -604,7 +608,7 @@ if is_test:
                                               override='0', extra=(goals[1], '-j4'))
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assert_policy(calls, inherited='0')
-                    for command, count in (('fmt', 1), ('clippy', 2), ('test', 1)):
+                    for command, count in (('fmt', 1), ('clippy', 3), ('test', 1)):
                         self.assertEqual(sum(c['args'][0] == command for c in calls), count, calls)
 
 
