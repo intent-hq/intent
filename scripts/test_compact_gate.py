@@ -352,8 +352,9 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
                 result, calls = self.run_make("check", *([] if mode is None else [f"COMPACT={mode}"]),
                                                env={"RUSTFLAGS": "--cfg caller -C debuginfo=2"})
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                # clippy, then clippy-postgres (intent-store under --features postgres).
-                self.assertEqual([call["args"][0] for call in calls], ["clippy", "clippy", "test"])
+                # clippy (workspace, then intentd with repository-test-fixtures),
+                # then clippy-postgres (intent-store under --features postgres).
+                self.assertEqual([call["args"][0] for call in calls], ["clippy", "clippy", "clippy", "test"])
                 # Compact is the default; only an explicit COMPACT=0 opts out.
                 compact = mode != "0"
                 for call in calls:
@@ -389,7 +390,7 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
 
     def test_gate_preserves_check_dependency_and_skip_semantics(self):
         for parallel in ([], ["-j2"]):
-            for goals, checks in ((["check", "gate"], 2), (["-o", "check", "gate"], 0)):
+            for goals, checks in ((["check", "gate"], 3), (["-o", "check", "gate"], 0)):
                 with self.subTest(parallel=parallel, goals=goals):
                     result, calls = self.run_make("-n", *goals, *parallel)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
